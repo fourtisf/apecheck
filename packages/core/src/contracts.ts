@@ -10,12 +10,19 @@ export const QUEUES = {
   prices: 'prices',
   webhooks: 'webhooks',
   rechecks: 'rechecks',
+  asks: 'asks',
 } as const;
 
 /** queue "checks", job name "check", jobId = checkId (dedupes double submits) */
 export interface CheckJob { checkId: string }
 /** queue "bot-replies" (M2) */
 export interface BotReplyJob { mentionId: string }
+/** queue "asks" (M3): the API enqueues a follow-up question and waits for the worker's answer (job return value). */
+export interface AskJob { checkId: string; question: string; userId: string | null; askerHandle: string | null; via: 'web' | 'bot' }
+export interface AskJobResult { askId: string }
+/** queue "rechecks" (M3): change detection for watched targets; Max watchers get an automatic re-check */
+export interface RecheckJob { targetId: string }
+
 /** queue "webhooks" (M4) */
 export interface WebhookJob { webhookId: string; event: 'check.completed' | 'watch.changed'; checkId: string }
 
@@ -71,5 +78,11 @@ export function nextUtcMidnight(d = new Date()): Date {
 
 /** Cookie holding the signed anonymous session id. */
 export const SID_COOKIE = 'ac_sid';
-/** Cookie holding the signed-in user session (M3). */
+/** Cookie holding the signed-in user session (M3): signed, value = session id; the session lives in Redis. */
 export const SESSION_COOKIE = 'ac_session';
+export const sessionKey = (sessionId: string) => `session:${sessionId}`;
+/** Sign-in nonces (single use, 10 min): value = JSON {chain, address, message} */
+export const authNonceKey = (nonce: string) => `auth:nonce:${nonce}`;
+/** X OAuth 2.0 PKCE state (10 min): value = JSON {userId, verifier} */
+export const xOauthStateKey = (state: string) => `auth:x:${state}`;
+export const SESSION_DAYS = 30;

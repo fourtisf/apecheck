@@ -104,9 +104,14 @@ model Target {
   priceUpdatedAt DateTime?
   lastCheckedAt  DateTime? // added: finishedAt of the newest finished check
 
+  // added (M3): what the change detector last saw (site text / contract code / mint state / X profile hash)
+  fingerprint   String?
+  fingerprintAt DateTime?
+
   checks     Check[]
   watchers   Watch[]
   pricePoints PricePoint[]
+  notifications Notification[]
 
   @@index([ca])
   @@index([domain])
@@ -267,6 +272,9 @@ model User {
   tier       Tier     @default(FREE)
   tierCheckedAt DateTime?
   createdAt  DateTime @default(now())
+  // added (M3): $APECHECK held across the user's linked wallets at tierCheckedAt (null = never read / token not live)
+  holding    Decimal? @db.Decimal(38, 9)
+  lastSeenAt DateTime?
 
   checks     Check[]
   watches    Watch[]
@@ -274,6 +282,8 @@ model User {
   webhooks   Webhook[]
   notes      Note[]
   noteVotes  NoteVote[]
+  asks       Ask[]
+  notifications Notification[]
 }
 
 model Watch {
@@ -282,8 +292,12 @@ model Watch {
   targetId  String
   target    Target   @relation(fields: [targetId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+  // added (M3): last change alert sent / last automatic re-check started for this watch
+  lastAlertAt   DateTime?
+  lastRecheckAt DateTime?
 
   @@id([userId, targetId])
+  @@index([targetId])
 }
 
 model Ask {
@@ -293,8 +307,13 @@ model Ask {
   question    String
   answer      String
   askerHandle String?
+  askerId     String?  // added (M3): signed-in asker on the site (rate limits)
+  asker       User?    @relation(fields: [askerId], references: [id], onDelete: SetNull)
   via         Via
   createdAt   DateTime @default(now())
+
+  @@index([checkId, createdAt])
+  @@index([askerId, createdAt])
 }
 
 model Note {
@@ -372,4 +391,23 @@ model BotMention {
   @@index([conversationId])
   @@index([checkId])
   @@index([replyTweetId])
+}
+
+/// added (M3): re-check alerts for watchers (Pro) and automatic re-checks (Max)
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetId  String
+  target    Target    @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  /// the re-check this points to, when one ran
+  checkId   String?
+  /// "changed" (site/contract/profile changed) | "rechecked" (an automatic re-check finished)
+  kind      String
+  text      String
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
 }

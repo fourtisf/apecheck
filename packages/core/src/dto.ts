@@ -228,6 +228,8 @@ export interface CheckReportDTO extends CheckSummaryDTO {
   finishedAt: string | null;
   error: string | null;
   isPrivate: boolean;
+  /** M3: the signed-in viewer watches this target */
+  watching?: boolean;
   /** /card/<id>.png on the web origin */
   cardUrl: string | null;
   reportUrl: string;
@@ -314,7 +316,17 @@ export interface BotStatsDTO {
   accounts: number;
 }
 
-export interface UserDTO { id: string; evmAddress: string | null; solAddress: string | null; xHandle: string | null; tier: TierS }
+export interface UserDTO {
+  id: string;
+  evmAddress: string | null;
+  solAddress: string | null;
+  xHandle: string | null;
+  tier: TierS;
+  /** M3: $APECHECK held across linked wallets (null = not read / token not live) */
+  holding?: number | null;
+  /** M3: holders (holding > 0, or a tier override) may write community notes */
+  holder?: boolean;
+}
 
 export interface MeDTO {
   credits: number;
@@ -327,7 +339,55 @@ export interface MeDTO {
   proMinHold: number | null;
   maxMinHold: number | null;
   user: UserDTO | null;
+  /** M3: daily check limits per tier (from .env) for the tier cards */
+  proChecksPerDay?: number;
+  maxChecksPerDay?: number;
+  /** M3: $APECHECK quote for the header (null while the token isn't live or no price) */
+  token?: { usd: number; ch24: number | null } | null;
+  /** M3: "Link your X" is offered (X_OAUTH2_CLIENT_ID set) */
+  xLinkAvailable?: boolean;
+  /** M3: unread re-check alerts */
+  notificationsUnread?: number;
 }
+
+/* ---------- M3: wallet sign-in (SIWE / SIWS), watchlist, notifications, asks, notes ---------- */
+
+export type WalletChain = 'evm' | 'sol';
+
+/** GET /v1/auth/nonce?chain=evm|sol&address=<addr> */
+export interface AuthNonceResponse {
+  nonce: string;
+  /** the exact EIP-4361 (EVM) / Sign-In With Solana message the wallet must sign */
+  message: string;
+  expiresAt: string;
+}
+/** POST /v1/auth/verify -> MeDTO (sets the session cookie; links the wallet when already signed in) */
+export interface AuthVerifyBody { chain: WalletChain; address: string; message: string; signature: string }
+
+/** POST /v1/checks/:id/asks */
+export interface AskBody { question: string }
+/** POST /v1/checks/:id/notes */
+export interface NoteBody { text: string }
+/** POST /v1/notes/:id/helpful (toggles the viewer's vote) */
+export interface HelpfulResponse { helpful: number; mine: boolean }
+/** POST|DELETE /v1/watch/:targetId */
+export interface WatchResponse { watching: boolean }
+/** GET /v1/watchlist — latest check of every watched target, newest first */
+export interface WatchlistResponse { items: CheckSummaryDTO[]; targetIds: string[] }
+
+export interface NotificationDTO {
+  id: string;
+  /** "changed" | "rechecked" */
+  kind: string;
+  text: string;
+  targetId: string;
+  /** shortId of the check to open (the re-check, else the latest check) */
+  checkId: string | null;
+  createdAt: string;
+  read: boolean;
+}
+/** GET /v1/notifications ; POST /v1/notifications/read {ids?} -> { unread } */
+export interface NotificationsResponse { items: NotificationDTO[]; unread: number }
 
 export interface CreateCheckBody { target: string; recheck?: boolean; private?: boolean }
 export interface CreateCheckResponse {

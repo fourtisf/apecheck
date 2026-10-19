@@ -91,6 +91,22 @@ export const EnvZ = z.object({
   MAX_MIN_HOLD: int(2500000),
   PRO_CHECKS_PER_DAY: int(30),
   MAX_CHECKS_PER_DAY: int(200),
+
+  /** M3: share the session/sid cookies with the web origin (e.g. ".apecheck.io") so server-rendered pages see the viewer */
+  COOKIE_DOMAIN: optStr(),
+  /**
+   * M3: tier overrides for team/test wallets before (or besides) token holding: "address:pro,address:max".
+   * Applied on sign-in; never lowers a tier computed from holdings.
+   */
+  TIER_OVERRIDES: list(),
+  /** M3: follow-up questions per signed-in user per hour */
+  ASKS_PER_HOUR: int(20),
+  /** M3: community notes per user per day */
+  NOTES_PER_DAY: int(10),
+  /** M3: how often watched targets are fingerprinted for changes */
+  WATCH_RECHECK_HOURS: int(6),
+  /** M3: automatic re-checks (Max watchlists) per user per day */
+  MAX_AUTO_RECHECKS_PER_DAY: int(20),
 });
 
 export type Env = z.infer<typeof EnvZ>;
