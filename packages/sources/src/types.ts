@@ -373,6 +373,8 @@ export interface WhaleFlowFacts {
   devHoldPct: number;
   holders: number | null;
   lp?: { status: 'burned' | 'locked' | 'unlocked'; lockedDays?: number | null } | null;
+  /** M4: wallet clusters (groups funded from one source), when WhaleFlow provides them */
+  clusters?: { label: string; wallets: number; pct: number; fundedFrom: string | null }[] | null;
 }
 export interface FourtisSource {
   configured: boolean;

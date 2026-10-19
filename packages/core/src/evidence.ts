@@ -101,6 +101,9 @@ export interface CheckEvidence {
 
   post?: { id: string; author: string; authorId?: string | null; text: string; createdAt?: string | null } | null;
 
+  /** M4: WhaleFlow wallet clusters (served to Pro/Max viewers only) */
+  clusters?: { label: string; wallets: number; pct: number; fundedFrom: string | null }[] | null;
+
   /** step count estimate for progress ("Step 3 of 12") */
   stepsExpected?: number;
   /** which AI implementation ran: real model or the heuristic stub */

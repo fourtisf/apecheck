@@ -107,6 +107,13 @@ export const EnvZ = z.object({
   WATCH_RECHECK_HOURS: int(6),
   /** M3: automatic re-checks (Max watchlists) per user per day */
   MAX_AUTO_RECHECKS_PER_DAY: int(20),
+
+  /** M4: API keys per Max user, requests per key per minute, webhooks per user */
+  API_KEYS_PER_USER: int(5),
+  API_KEY_RATE_PER_MIN: int(60),
+  WEBHOOKS_PER_USER: int(5),
+  /** M4: the MCP server (Streamable HTTP) is served by the API at /mcp; mcp.apecheck.io proxies to it */
+  MCP_ENABLED: bool(true),
 });
 
 export type Env = z.infer<typeof EnvZ>;

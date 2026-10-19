@@ -23,8 +23,12 @@ export interface AskJobResult { askId: string }
 /** queue "rechecks" (M3): change detection for watched targets; Max watchers get an automatic re-check */
 export interface RecheckJob { targetId: string }
 
-/** queue "webhooks" (M4) */
-export interface WebhookJob { webhookId: string; event: 'check.completed' | 'watch.changed'; checkId: string }
+/** queue "webhooks" (M4): one job per WebhookDelivery row (jobId = deliveryId); the worker signs and POSTs it */
+export interface WebhookJob { deliveryId: string }
+/** Webhook signature header (Stripe-style): "t=<unix seconds>,v1=<hex HMAC-SHA256(secret, `${t}.${rawBody}`)>" */
+export const WEBHOOK_SIGNATURE_HEADER = 'ApeCheck-Signature';
+/** API keys: "ak_live_" + 32 random base62 chars; stored as sha256 hex; prefix = first 12 chars shown in the UI */
+export const API_KEY_PREFIX = 'ak_live_';
 
 /** BullMQ priorities: lower number = earlier. Pro/Max users get the priority queue. */
 export const PRIORITY = { max: 1, pro: 2, free: 5, bot: 5, recheck: 8 } as const;

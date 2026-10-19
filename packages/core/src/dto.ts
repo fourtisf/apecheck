@@ -86,6 +86,11 @@ export interface CoinFactsDTO {
   deployerAddress?: string | null;
   /** "3 earlier tokens, 2 dead" — deployerLine() */
   deployerText: string | null;
+  /**
+   * M4: Pro/Max "deep holder clusters" from WhaleFlow (null for other viewers, or when WhaleFlow has no clusters
+   * feed for this coin). Each cluster is a group of wallets funded from the same source.
+   */
+  clusters?: { label: string; wallets: number; pct: number; fundedFrom: string | null }[] | null;
 }
 
 /** CheckReportDTO.coin: the coin verdict as on the /api page (`coin: { verdict, score }`) plus the coin facts. */
@@ -409,3 +414,58 @@ export type SseEvent =
   | { event: 'step'; data: StepDTO & { progress: number } }
   | { event: 'status'; data: { status: CheckStatusS; progress: number } }
   | { event: 'done'; data: CheckReportDTO };
+
+/* ---------- M4: API keys, webhooks, MCP ---------- */
+
+/** GET /v1/keys items (never the secret) */
+export interface ApiKeyDTO { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null }
+/** POST /v1/keys {name?} -> the full key, shown once */
+export interface CreateApiKeyResponse extends ApiKeyDTO { key: string }
+
+export type WebhookEvent = 'check.completed' | 'watch.changed';
+export interface WebhookDTO {
+  id: string;
+  url: string;
+  events: WebhookEvent[];
+  createdAt: string;
+  lastDeliveryAt: string | null;
+  lastStatus: number | null;
+  failCount: number;
+  disabled: boolean;
+}
+/** POST /v1/webhooks {url, events} -> the signing secret, shown once */
+export interface CreateWebhookResponse extends WebhookDTO { secret: string }
+export interface WebhookDeliveryDTO {
+  id: string;
+  event: string;
+  status: 'pending' | 'ok' | 'failed';
+  attempts: number;
+  responseCode: number | null;
+  error: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+  /** shortId of the check, when the event is about one */
+  checkId: string | null;
+}
+
+/**
+ * Body of every webhook POST (HANDOFF §9). Signed with HMAC-SHA256 in the
+ * "ApeCheck-Signature: t=<unix seconds>,v1=<hex hmac of `${t}.${rawBody}`>" header.
+ */
+export interface WebhookPayload {
+  id: string;
+  event: WebhookEvent | 'ping';
+  created: string;
+  check?: {
+    id: string;
+    target: string;
+    narrative: number | null;
+    coin: number | null;
+    total: number | null;
+    verdict: string | null;
+    summary: string | null;
+    report_url: string;
+  };
+  /** watch.changed */
+  target?: { id: string; name: string; change: string };
+}

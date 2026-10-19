@@ -348,9 +348,12 @@ model ApiKey {
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   prefix     String    // first chars, shown in UI
   hash       String    @unique
+  name       String    @default("API key") // added (M4): label shown in the key list
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
   revokedAt  DateTime?
+
+  @@index([userId])
 }
 
 model Webhook {
@@ -361,6 +364,34 @@ model Webhook {
   secret    String
   events    String[] // check.completed, watch.changed
   createdAt DateTime @default(now())
+  // added (M4): delivery health; disabled after repeated failures (re-enable from the API page)
+  failCount      Int       @default(0)
+  lastDeliveryAt DateTime?
+  lastStatus     Int?
+  disabledAt     DateTime?
+
+  deliveries WebhookDelivery[]
+
+  @@index([userId])
+}
+
+/// added (M4): one row per webhook event sent (or being retried)
+model WebhookDelivery {
+  id           String    @id @default(cuid())
+  webhookId    String
+  webhook      Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event        String    // check.completed | watch.changed | ping
+  checkId      String?
+  targetId     String?
+  /// pending | ok | failed
+  status       String    @default("pending")
+  attempts     Int       @default(0)
+  responseCode Int?
+  error        String?
+  createdAt    DateTime  @default(now())
+  deliveredAt  DateTime?
+
+  @@index([webhookId, createdAt])
 }
 
 model BotMention {
