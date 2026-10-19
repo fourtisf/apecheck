@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
-import type { CheckSummaryDTO, FeedResponse } from '@apecheck/core';
-import { botStats, feed, report, type CallOpts } from '@/lib/api';
+import { botStats, feed, report } from '@/lib/api';
 import { orNull, serverCall } from '@/lib/server-api';
-import { BotView, type BotViewProps } from '@/components/pages/BotView';
+import { BotView } from '@/components/pages/BotView';
+import { pickBotExample } from '@/components/pages/botExample';
 
 export const metadata: Metadata = {
   title: 'X bot',
@@ -21,21 +21,13 @@ function botHandle(): string {
   return HANDLE_RE.test(h) ? h : 'ApeCheckBot';
 }
 
-/** The most recent finished post check, a bot one when there is one, with the post text the check read. */
-async function exampleThread(recent: FeedResponse | null, call: CallOpts): Promise<BotViewProps['example']> {
-  if (!recent) return null; // API down or limiting us: don't stack three more slow calls
-  let item: CheckSummaryDTO | undefined = recent.items.find(i => i.kind === 'post');
-  // a short list already holds every bot reply, so only look further back when it is full
-  if (!item && recent.items.length >= RECENT) item = (await orNull(feed({ type: 'post', via: 'bot', limit: 1 }, call)))?.items[0];
-  if (!item) item = (await orNull(feed({ type: 'post', limit: 1 }, call)))?.items[0];
-  if (!item) return null;
-  const full = await orNull(report(item.id, call));
-  return { item: full ?? item, post: full?.post ?? null };
-}
-
 export default async function BotPage() {
   const call = serverCall();
   const [stats, recent] = await Promise.all([orNull(botStats(call)), orNull(feed({ via: 'bot', limit: RECENT }, call))]);
-  const example = await exampleThread(recent, call);
+  // a real thread only from a reply the bot posted; otherwise a labelled illustration, or none (see botExample.ts)
+  const example = await pickBotExample(recent, {
+    postChecks: limit => orNull(feed({ type: 'post', limit }, call)),
+    report: id => orNull(report(id, call)),
+  });
   return <BotView handle={botHandle()} stats={stats} recent={recent} example={example} />;
 }

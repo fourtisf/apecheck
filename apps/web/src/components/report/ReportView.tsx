@@ -13,9 +13,9 @@ import { RunTab } from './RunTab';
 import { Side } from './Side';
 import { useCheckEvents } from './useCheckEvents';
 import { Verdict } from './Verdict';
-import { isRunning, runSeconds, withStep } from './util';
+import { isRunning, noVerdict, runSeconds, withStep } from './util';
 
-type TabKey = 'run' | 'claims' | 'coin' | 'people' | 'asks' | 'notes';
+export type TabKey = 'run' | 'claims' | 'coin' | 'people' | 'asks' | 'notes';
 const TABS: [TabKey, string][] = [
   ['run', 'Agent run'],
   ['claims', 'Claims'],
@@ -24,6 +24,12 @@ const TABS: [TabKey, string][] = [
   ['asks', 'Asks'],
   ['notes', 'Notes'],
 ];
+
+/**
+ * The tab a report opens on: the Agent run while the check runs, and also when it stopped without a verdict
+ * (only the run log shows what happened then); otherwise the Claims.
+ */
+export const initialTab = (r: Pick<CheckReportDTO, 'status' | 'narScore'>): TabKey => (isRunning(r) || noVerdict(r) ? 'run' : 'claims');
 
 const parseTime = (iso: string | null) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -40,7 +46,7 @@ export function ReportView({ initial }: { initial: CheckReportDTO }) {
   const [just, setJust] = useState(false);
   const [gone, setGone] = useState(false);
   const running = isRunning(r);
-  const [tab, setTab] = useState<TabKey>(running ? 'run' : 'claims');
+  const [tab, setTab] = useState<TabKey>(() => initialTab(initial));
   // local clock estimate of the run's start, for the ticking timer
   const [startAt, setStartAt] = useState<number | null>(() => parseTime(initial.startedAt));
 

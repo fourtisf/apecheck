@@ -5,6 +5,7 @@ import { detect } from '@apecheck/core';
 import { createCheck, isApiError, NETWORK_ERROR } from '@/lib/api';
 import { reportPath } from '@/lib/env';
 import { AccessModal } from './AccessModal';
+import { useFeedState } from './FeedState';
 import { useLive } from './Live';
 import { useMe } from './Me';
 import { useModal } from './Modal';
@@ -56,6 +57,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const { open: openModal } = useModal();
   const { me, refresh, setCredits } = useMe();
   const { trackMine } = useLive();
+  const feedState = useFeedState();
   const [feedSearch, setFeedSearch] = useState<FeedSearchRequest | null>(null);
 
   const meRef = useRef(me);
@@ -119,10 +121,15 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
 
   const requestFeedSearch = useCallback(
     (q: string) => {
-      if (pathname === '/') setFeedSearch(s => ({ q, n: (s?.n ?? 0) + 1 }));
-      else router.push(`/?q=${encodeURIComponent(q)}`);
+      if (pathname === '/') {
+        setFeedSearch(s => ({ q, n: (s?.n ?? 0) + 1 }));
+        return;
+      }
+      // the feed restores its saved list when it mounts: leave the search there (Latest tab, scroll to the list)
+      feedState.search(q);
+      router.push(`/?q=${encodeURIComponent(q)}`);
     },
-    [pathname, router],
+    [pathname, router, feedState],
   );
 
   const api = useMemo<ActionsApi>(

@@ -4,8 +4,8 @@ import { CHAINS, CHAIN_ORDER, COIN_BANDS, type CoinsResponse } from '@apecheck/c
 import { coins } from '@/lib/api';
 import { SearchIcon } from '../icons';
 import { CoinTable } from './CoinTable';
-import { COINS_LIMIT, Q_MAX, coinQuery, type CoinFilters, type CoinTab } from './params';
-import { useApiQuery, useSyncUrl } from './useApiQuery';
+import { COINS_LIMIT, Q_MAX, coinQuery, parseCoinFilters, sameCoinFilters, type CoinFilters, type CoinTab } from './params';
+import { useApiQuery, useSyncUrl, useUrlSearchParams } from './useApiQuery';
 
 const TABS: [CoinTab, string][] = [['all', 'All'], ...COIN_BANDS.map(b => [b.key, b.name] as [CoinTab, string])];
 const SEARCH_DEBOUNCE_MS = 250;
@@ -14,8 +14,11 @@ const fetchCoins = (f: CoinFilters, signal: AbortSignal) => coins({ tab: f.tab, 
 
 /** viewCoins() + renderCoinRows(): coin-only table, filtered by coin verdict, chain and a search (all in the URL). */
 export function CoinsView({ initial, initialFilters }: { initial: CoinsResponse | null; initialFilters: CoinFilters }) {
-  const [f, setF] = useState<CoinFilters>(initialFilters);
-  const [qInput, setQInput] = useState(initialFilters.q);
+  // start from the address bar, not the props: after Back they can describe an older URL (see useUrlSearchParams)
+  const url = useUrlSearchParams();
+  const [start] = useState(() => parseCoinFilters(url));
+  const [f, setF] = useState<CoinFilters>(start);
+  const [qInput, setQInput] = useState(start.q);
 
   useEffect(() => {
     const t = window.setTimeout(() => setF(prev => (prev.q === qInput.trim() ? prev : { ...prev, q: qInput.trim() })), SEARCH_DEBOUNCE_MS);
@@ -24,7 +27,8 @@ export function CoinsView({ initial, initialFilters }: { initial: CoinsResponse 
 
   useSyncUrl(`/coins${coinQuery(f)}`);
 
-  const { data, failed, retry } = useApiQuery(f, fetchCoins, initial, initialFilters);
+  // the server's rows only fit the filters they were rendered for; otherwise ask for the right ones before showing any
+  const { data, failed, retry } = useApiQuery(f, fetchCoins, sameCoinFilters(start, initialFilters) ? initial : null, initialFilters);
   const items = data?.items ?? [];
   const filtered = f.tab !== 'all' || f.chain !== 'any' || f.q !== '';
 

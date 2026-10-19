@@ -4,7 +4,7 @@ import { REPORT_DISCLAIMER, coinBand, fmtDur, narBand, type CheckReportDTO } fro
 import { cssVars } from '../css';
 import { Age } from '../Now';
 import { Ring } from '../Ring';
-import { isRunning, runSeconds } from './util';
+import { isRunning, noVerdict, runSeconds } from './util';
 
 /** ", requested by @x via @ApeCheckBot" and friends, as the prototype's v-meta line says it. */
 function requestedBy(r: CheckReportDTO): string {
@@ -138,7 +138,7 @@ function Finished({ r, just }: { r: CheckReportDTO; just: boolean }) {
   const b = narBand(nar);
   const t = narBand(total);
   const coinText =
-    r.hasCoin && r.coinScore == null ? "The coin couldn't be scored this time" : `No coin linked to this ${r.kind}`;
+    (r.hasCoin && r.coinScore == null) || r.kind === 'coin' ? "The coin couldn't be scored this time" : `No coin linked to this ${r.kind}`;
   return (
     <>
       <div className={`rv-ring n-${t.key}`}>
@@ -173,7 +173,7 @@ function Finished({ r, just }: { r: CheckReportDTO; just: boolean }) {
 export function Verdict({ report: r, just }: { report: CheckReportDTO; just: boolean }) {
   let body;
   if (isRunning(r)) body = <Running r={r} />;
-  else if (r.status === 'failed' || r.narScore == null) body = <Failed r={r} />;
+  else if (noVerdict(r)) body = <Failed r={r} />;
   else body = <Finished r={r} just={just} />;
   return (
     <section className="rv panel" id="rv" aria-live="polite">

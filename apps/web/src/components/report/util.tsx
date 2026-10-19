@@ -4,6 +4,12 @@ import type { CheckReportDTO, Signal, StepDTO } from '@apecheck/core';
 /** A check still in the queue or in the browser: the report shows the "Testing now" state. */
 export const isRunning = (r: Pick<CheckReportDTO, 'status'>) => r.status === 'queued' || r.status === 'running';
 
+/**
+ * A run that ended without a verdict (it failed, or finished with no narrative score): the verdict panel says
+ * "The check stopped before a verdict", so the tabs must not read as if the agent finished its work either.
+ */
+export const noVerdict = (r: Pick<CheckReportDTO, 'status' | 'narScore'>) => !isRunning(r) && (r.status === 'failed' || r.narScore == null);
+
 /** Only plain http(s) links from scanned projects become hrefs; anything else (javascript:, data:, …) is dropped. */
 export function safeHttpUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;

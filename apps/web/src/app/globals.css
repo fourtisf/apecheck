@@ -577,6 +577,28 @@ footer{border-top:1px solid var(--line);padding:30px 0 48px}
 /* Agent run tab: real screenshots replace the prototype's drawn site (HANDOFF §3).
    contain, not cover: the whole 1280x800 viewport stays visible at every width (cover cut the nav off on phones). */
 .cam-shot{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:top}
+/* Once the camera stacks above the log (single column), size it to the screenshots' 1280x800 viewport, so a
+   phone shows the whole frame without a dark band under it and a tablet without bands beside it. */
+@media (max-width:1000px){
+  .cam-view{height:auto;aspect-ratio:16/10}
+}
 
 /* Insight cards with nothing to show yet. */
 .scard .s-empty{margin:0;font-size:13.5px;color:var(--dim)}
+
+/* Header search between 1001 and 1240px: the prototype's .hsearch keeps its automatic min-width (its input's
+   intrinsic ~261px), so brand + nav + search + buttons need ~1134px and the right edge ("Connect wallet") is clipped
+   at iPad-landscape widths. Let it shrink, and drop the "/" hint when it's narrow so the input keeps the room. */
+.hsearch{min-width:0}
+@media (max-width:1100px){
+  .hsearch kbd{display:none}
+}
+
+/* Segmented controls (/deployers chains, /coins verdicts) are wider than a phone: scroll them like .tabs-pill and
+   .rtabs instead of widening the page. */
+.seg{overflow-x:auto;scrollbar-width:none;max-width:100%}
+.seg::-webkit-scrollbar{display:none}
+.seg button{flex:none}
+
+/* /bot: a thread built from a check that ran on the site is an illustration, captioned as one (never a fake X reply). */
+.thread-cap{margin:0;padding:10px 20px 12px;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--dim)}

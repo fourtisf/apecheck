@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { REP, cap, coinBand, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { cssVars } from '../css';
-import { Dot, Facts, Unknown, type FactRow } from './util';
+import { Dot, Facts, Unknown, noVerdict, type FactRow } from './util';
 
 /** scoreBlock(): the coin score with its band and the 5-step meter. */
 function ScoreBlock({ n }: { n: number }) {
@@ -102,6 +102,7 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
     ) : (
       <Unknown />
     );
+  const addr = d?.address ?? f.deployerAddress ?? null;
   return [
     [
       'Deployer',
@@ -114,10 +115,18 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
             {d.fundedFrom ? `, funded from ${d.fundedFrom}` : ''}
           </small>
         </>
+      ) : addr ? (
+        // the wallet is known (e.g. the contract creator) but not its earlier launches: no record is made up
+        <>
+          <span className="mono" title={addr}>
+            {short(addr)}
+          </span>
+          <small>Launch history unavailable</small>
+        </>
       ) : (
         <Unknown />
       ),
-      'DevRadar',
+      d ? 'DevRadar' : addr ? 'On-chain' : 'DevRadar',
     ],
     ['Earlier launches', f.deployerText ? cap(f.deployerText) : <Unknown />, 'DevRadar'],
     ['Bundled at launch', bundled, 'BundleScan'],
@@ -164,6 +173,22 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
 
 /** tabCoin(): coin score, who holds the supply, and the on-chain facts with their sources. */
 export function CoinTab({ report: r }: { report: CheckReportDTO }) {
+  if (!r.hasCoin && noVerdict(r)) {
+    // the run stopped before it got to the coin: neither "no coin linked" nor "couldn't be read" is known
+    return (
+      <div className="empty">
+        <p>The check stopped before the coin was looked at, so there is no coin score. The Agent run tab shows how far it got; re-check to try again.</p>
+      </div>
+    );
+  }
+  if (!r.hasCoin && r.kind === 'coin') {
+    // a pasted contract whose chain couldn't be established (RPCs and DexScreener unreachable, or no code anywhere)
+    return (
+      <div className="empty">
+        <p>The contract couldn&apos;t be read on a supported chain during this check, so there is no coin score. The Agent run tab shows what was tried.</p>
+      </div>
+    );
+  }
   if (!r.hasCoin) {
     return (
       <div className="empty">

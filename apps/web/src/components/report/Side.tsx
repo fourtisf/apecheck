@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { REP, fmtAge, fmtPct, fmtUsd, short, type CheckReportDTO, type DeployerDTO } from '@apecheck/core';
 import { VCard } from '../VCard';
 import { SinceChart } from './SinceChart';
-import { isRunning } from './util';
+import { isRunning, noVerdict } from './util';
 
 function PriceCard({ r }: { r: CheckReportDTO }) {
   if (isRunning(r)) {
@@ -11,6 +11,27 @@ function PriceCard({ r }: { r: CheckReportDTO }) {
         <h3>Price since check</h3>
         <p className="sub" style={{ margin: 0 }}>
           Tracking starts when the verdict lands, so you can see later whether it held up.
+        </p>
+      </div>
+    );
+  }
+  if (noVerdict(r) && (r.market?.since ?? r.since) == null) {
+    // tracking starts when a verdict lands: a run that stopped before one has nothing to track (and no "no coin linked")
+    return (
+      <div className="scard">
+        <h3>Price since check</h3>
+        <p className="sub" style={{ margin: 0 }}>
+          The check stopped before a verdict, so there is no price to track.
+        </p>
+      </div>
+    );
+  }
+  if (!r.hasCoin && r.kind === 'coin') {
+    return (
+      <div className="scard">
+        <h3>Price since check</h3>
+        <p className="sub" style={{ margin: 0 }}>
+          The contract couldn&apos;t be read during this check, so there is no price to track yet.
         </p>
       </div>
     );
@@ -40,7 +61,10 @@ function PriceCard({ r }: { r: CheckReportDTO }) {
         <h3>Price since check</h3>
         {sub ? <p className="sc-sub" style={{ marginTop: 0 }}>{sub}</p> : null}
         <p className="sub" style={{ margin: 0 }}>
-          No price since the check yet. Tracking started when the verdict landed, so check back to see whether it held up.
+          {m?.priceAtCheck == null
+            ? // nothing to compare against: never promise a chart that can't come
+              "There was no price for this coin when it was checked, so there's no change since the check to show."
+            : 'No price since the check yet. Tracking started when the verdict landed, so check back to see whether it held up.'}
         </p>
       </div>
     );
@@ -96,13 +120,31 @@ function DeployerCard({ d }: { d: DeployerDTO }) {
   );
 }
 
+/** The deployer wallet is known but not its launch history (no DevRadar): the address, and no made-up record. */
+function DeployerAddressCard({ address }: { address: string }) {
+  return (
+    <div className="scard">
+      <h3>Deployer</h3>
+      <p style={{ margin: '0 0 6px' }}>
+        <span className="mono" style={{ fontSize: 13 }} title={address}>
+          {short(address)}
+        </span>
+      </p>
+      <p className="sub" style={{ margin: 0 }}>
+        Launch history unavailable.
+      </p>
+    </div>
+  );
+}
+
 /** repSide(): price since the check, the deployer's record and the share card. */
 export function Side({ report: r }: { report: CheckReportDTO }) {
   const d = r.coin?.deployer ?? null;
+  const addr = d ? null : (r.coin?.deployerAddress ?? null);
   return (
     <aside className="rep-side">
       <PriceCard r={r} />
-      {d ? <DeployerCard d={d} /> : null}
+      {d ? <DeployerCard d={d} /> : addr ? <DeployerAddressCard address={addr} /> : null}
       {r.status === 'done' && r.narScore != null ? (
         <div className="scard">
           <h3>Share card</h3>

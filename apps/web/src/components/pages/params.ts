@@ -37,6 +37,8 @@ export function parseCoinFilters(sp: SearchParams | URLSearchParams): CoinFilter
   };
 }
 
+export const sameCoinFilters = (a: CoinFilters, b: CoinFilters) => a.tab === b.tab && a.chain === b.chain && a.q === b.q;
+
 export function coinQuery(f: CoinFilters): string {
   const p = new URLSearchParams();
   if (f.tab !== 'all') p.set('tab', f.tab);
@@ -74,6 +76,9 @@ export function parseDeployerFilters(sp: SearchParams | URLSearchParams): Deploy
     focus: ADDRESS_RE.test(focus) ? focus : null,
   };
 }
+
+export const sameDeployerList = (a: Pick<DeployerFilters, 'chain' | 'sort'>, b: Pick<DeployerFilters, 'chain' | 'sort'>) =>
+  a.chain === b.chain && a.sort === b.sort;
 
 export function deployerQuery(f: DeployerFilters): string {
   const p = new URLSearchParams();

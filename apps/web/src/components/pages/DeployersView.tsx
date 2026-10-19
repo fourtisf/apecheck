@@ -7,8 +7,8 @@ import { reportPath } from '@/lib/env';
 import { Avatar } from '../Avatar';
 import { CoinBadge } from '../Badges';
 import { ChainTag } from '../ChainTag';
-import { DEPLOYERS_LIMIT, deployerQuery, sameAddress, type DeployerFilters, type DeployerSort } from './params';
-import { useApiQuery, useSyncUrl } from './useApiQuery';
+import { DEPLOYERS_LIMIT, deployerQuery, parseDeployerFilters, sameAddress, sameDeployerList, type DeployerFilters, type DeployerSort } from './params';
+import { useApiQuery, useSyncUrl, useUrlSearchParams } from './useApiQuery';
 
 const CHAIN_SEG: [ChainKey | 'all', string][] = [
   ['all', 'All chains'],
@@ -103,22 +103,27 @@ function DeployerRow({ d, i, open, focus, onToggle }: { d: DeployerRowDTO; i: nu
  * ?focus=<address> opens that row, scrolls to it and flashes it (links from "Builders worth watching").
  */
 export function DeployersView({ initial, initialFilters }: { initial: DeployersResponse | null; initialFilters: DeployerFilters }) {
-  const [chain, setChain] = useState(initialFilters.chain);
-  const [sort, setSort] = useState(initialFilters.sort);
+  // start from the address bar, not the props: after Back they can describe an older URL (see useUrlSearchParams)
+  const url = useUrlSearchParams();
+  const [start] = useState(() => parseDeployerFilters(url));
+  // the server's rows only fit the chain and sort they were rendered for
+  const startData = sameDeployerList(start, initialFilters) ? initial : null;
+  const [chain, setChain] = useState(start.chain);
+  const [sort, setSort] = useState(start.sort);
   // a ?focus= row that is already in the server render opens (and starts its highlight) before hydration
   const [open, setOpen] = useState<string | null>(() => {
-    const row = focusRow(initial, initialFilters.focus);
+    const row = focusRow(startData, start.focus);
     return row ? rowKey(row) : null;
   });
   const [flash, setFlash] = useState<string | null>(open);
-  const [pendingFocus, setPendingFocus] = useState(initialFilters.focus);
+  const [pendingFocus, setPendingFocus] = useState(start.focus);
   const timers = useRef<number[]>([]);
   useEffect(() => () => timers.current.forEach(t => window.clearTimeout(t)), []);
 
   const { data, failed, retry } = useApiQuery<ListParams, DeployersResponse>(
     { chain, sort },
     fetchDeployers,
-    initial,
+    startData,
     { chain: initialFilters.chain, sort: initialFilters.sort },
   );
   const items = data?.items ?? [];

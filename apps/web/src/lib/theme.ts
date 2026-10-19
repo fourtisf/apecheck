@@ -10,6 +10,27 @@ export const THEME_COLOR: Record<Theme, string> = { light: '#FFFFFF', dark: '#0D
  */
 export const THEME_SCRIPT = `(function(){var t='light';try{t=localStorage.getItem('${THEME_KEY}')||'light'}catch(e){}if(t!=='dark')t='light';document.documentElement.setAttribute('data-theme',t);var m=document.querySelector('meta[name=theme-color]');if(m)m.setAttribute('content',t==='dark'?'${THEME_COLOR.dark}':'${THEME_COLOR.light}')})();`;
 
+/** The visitor's saved choice ('light' when there is none, or storage is blocked). */
+export function savedTheme(): Theme {
+  try {
+    return localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+/**
+ * Put the saved theme on <html> if it isn't there yet, without writing anything back. The head script does this
+ * before paint on server-rendered pages, but a page React builds in the browser (Next's client-rendered error
+ * shell for notFound() under /c/[id]) never runs that script and comes up with the layout's static "light".
+ * The root layout then persists across client navigation, so without this the wrong theme would stick.
+ */
+export function applySavedTheme(): Theme {
+  const t = savedTheme();
+  if (currentTheme() !== t) setTheme(t, false);
+  return t;
+}
+
 export function currentTheme(): Theme {
   if (typeof document === 'undefined') return 'light';
   return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';

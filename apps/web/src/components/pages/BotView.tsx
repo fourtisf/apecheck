@@ -1,11 +1,12 @@
-import { BOT_DISCLAIMER, CHAINS, COIN_LABEL, NAR_LABEL, coinBand, fmtDur, narBand, type BotStatsDTO, type CheckReportDTO, type CheckSummaryDTO, type FeedResponse } from '@apecheck/core';
+import type { ReactNode } from 'react';
+import { BOT_DISCLAIMER, COIN_LABEL, NAR_LABEL, coinBand, fmtDur, narBand, type BotStatsDTO, type CheckReportDTO, type FeedResponse } from '@apecheck/core';
 import { Logo } from '../icons';
 import { Age } from '../Now';
 import { VCard } from '../VCard';
 import { VerdictTable } from '../VerdictTable';
+import { ranWhere, type BotExample, type ExamplePost } from './botExample';
 
-/** The X post behind the example thread, when the check could read it. */
-export type ExamplePost = NonNullable<CheckReportDTO['post']>;
+export type { BotExample, ExamplePost } from './botExample';
 
 export interface BotViewProps {
   /** bot handle without "@" */
@@ -14,8 +15,8 @@ export interface BotViewProps {
   stats: BotStatsDTO | null;
   /** GET /v1/feed?via=bot, newest first; null when the API didn't answer */
   recent: FeedResponse | null;
-  /** the most recent finished post check (a bot one when there is one); no thread without it */
-  example: { item: CheckSummaryDTO; post: ExamplePost | null } | null;
+  /** pickBotExample(): a reply the bot really posted, a labelled illustration, or null (no thread) */
+  example: BotExample | null;
 }
 
 const int = (n: number) => n.toLocaleString('en-US');
@@ -38,84 +39,148 @@ function Stats({ stats }: { stats: BotStatsDTO | null }) {
   );
 }
 
-/** What the project's post says: the real text when the check read it, else the prototype's generic launch line. */
-function postText(it: CheckSummaryDTO, post: ExamplePost | null): string {
-  const text = post?.text.trim();
-  if (text) return text;
-  return it.chain && CHAINS[it.chain]
-    ? `${it.title} is live on ${CHAINS[it.chain].name} mainnet today. Contract and app in bio.`
-    : `${it.title} is live today. App and docs in bio.`;
+const MENTION_RE = /(@[A-Za-z0-9_]{1,15})/g;
+
+/** Post text with @handles in the mention colour, as X shows them. Plain text, never HTML. */
+function PostText({ text }: { text: string }) {
+  const parts = text.split(MENTION_RE);
+  return (
+    <p className="p-text">
+      {parts.map((part, i) =>
+        i % 2 ? (
+          <span key={i} className="tagx">
+            {part}
+          </span>
+        ) : (
+          part
+        ),
+      )}
+    </p>
+  );
 }
 
-/** The example thread: the project's post, someone tagging the bot under it, and the bot's reply with the card. */
-function Thread({ handle, item: it, post }: { handle: string; item: CheckSummaryDTO; post: ExamplePost | null }) {
-  const nar = it.narScore!;
-  const coin = it.hasCoin && it.coinScore != null ? it.coinScore : null;
-  const author = post?.author || it.handle;
-  const initial = (it.title.match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase();
+const letter = (s: string) => (s.match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase();
+
+/** One post of the thread; `time` is left out when there is no real time to show. */
+function Post({ avatar, name, handle, time, children }: { avatar: ReactNode; name: string; handle?: string; time?: string | null; children: ReactNode }) {
   return (
-    <div className="thread">
-      <div className="post">
-        <div className="pav" style={{ background: `hsl(${it.hue} 72% var(--av-l))`, color: `hsl(${it.hue} 58% var(--av-d))` }}>
-          {initial}
+    <div className="post">
+      {avatar}
+      <div>
+        <div className="p-meta">
+          <b>{name}</b>
+          {handle ? <span>@{handle}</span> : null}
+          {time ? <Age ts={time} /> : null}
         </div>
-        <div>
-          <div className="p-meta">
-            <b>{it.title}</b>
-            {author ? <span>@{author}</span> : null}
-            {post?.createdAt ? <Age ts={post.createdAt} /> : null}
-          </div>
-          <p className="p-text">{postText(it, post)}</p>
-        </div>
-      </div>
-      {it.by ? (
-        <div className="post">
-          <div className="pav" style={{ background: 'var(--panel2)', color: 'var(--mute)' }}>
-            {it.by[0].toUpperCase()}
-          </div>
-          <div>
-            <div className="p-meta">
-              <b>{it.by}</b>
-              <span>@{it.by}</span>
-              <Age ts={it.createdAt} />
-            </div>
-            <p className="p-text">
-              <span className="tagx">@{handle}</span> real or larp?
-            </p>
-          </div>
-        </div>
-      ) : null}
-      <div className="post">
-        <div className="pav" style={{ background: 'var(--panel)', border: '1px solid var(--line2)' }}>
-          <Logo />
-        </div>
-        <div>
-          <div className="p-meta">
-            <b>ApeCheck</b>
-            <span>@{handle}</span>
-            <Age ts={it.checkedAt ?? it.createdAt} />
-          </div>
-          <span className="p-auto">Automated account</span>
-          <p className="p-text">
-            {NAR_LABEL[narBand(nar).key]} ({nar}/100){it.summary ? `: ${it.summary}` : ''}
-            {coin != null ? (
-              <>
-                <br />
-                Coin: {COIN_LABEL[coinBand(coin).key]} ({coin}/100)
-              </>
-            ) : null}
-            <br />
-            <br />
-            {coin != null ? 'Checks the claims and the coin, not the team. DYOR.' : BOT_DISCLAIMER}
-          </p>
-          <VCard item={it} />
-        </div>
+        {children}
       </div>
     </div>
   );
 }
 
-/** viewBot(): how the bot works, an example thread from a real check, and the bot's recent replies. */
+/** The project's post, with the text the check read (never words the project didn't write). */
+function ProjectPost({ item: it, post, time }: { item: CheckReportDTO; post: ExamplePost; time: boolean }) {
+  return (
+    <Post
+      avatar={
+        <div className="pav" style={{ background: `hsl(${it.hue} 72% var(--av-l))`, color: `hsl(${it.hue} 58% var(--av-d))` }}>
+          {letter(it.title)}
+        </div>
+      }
+      name={it.title}
+      handle={post.author || it.handle || undefined}
+      time={time ? post.createdAt : null}
+    >
+      <PostText text={post.text.trim()} />
+    </Post>
+  );
+}
+
+/** The bot's answer: verdict line, coin line, disclaimer and the share card. */
+function BotAnswer({ handle, item: it, repliedAt }: { handle: string; item: CheckReportDTO; repliedAt: string | null }) {
+  const nar = it.narScore!;
+  const coin = it.hasCoin && it.coinScore != null ? it.coinScore : null;
+  return (
+    <Post
+      avatar={
+        <div className="pav" style={{ background: 'var(--panel)', border: '1px solid var(--line2)' }}>
+          <Logo />
+        </div>
+      }
+      name="ApeCheck"
+      handle={handle}
+      time={repliedAt}
+    >
+      {/* X's automated label belongs to a reply that is on X */}
+      {repliedAt ? <span className="p-auto">Automated account</span> : null}
+      <p className="p-text">
+        {NAR_LABEL[narBand(nar).key]} ({nar}/100){it.summary ? `: ${it.summary}` : ''}
+        {coin != null ? (
+          <>
+            <br />
+            Coin: {COIN_LABEL[coinBand(coin).key]} ({coin}/100)
+          </>
+        ) : null}
+        <br />
+        <br />
+        {coin != null ? 'Checks the claims and the coin, not the team. DYOR.' : BOT_DISCLAIMER}
+      </p>
+      <VCard item={it} />
+    </Post>
+  );
+}
+
+/**
+ * The example thread (the prototype's .thread: the project's post, someone tagging the bot, the bot's reply).
+ * - reply: a thread that happened on X: the post the check read (if any), the mention as written by its author,
+ *   and the reply with its real time and X's automated label.
+ * - example: an illustration made from a check that ran on the site, captioned as one: the project's real post
+ *   without a time, "You" tagging the bot (no real account is quoted), and the answer without a time or label.
+ */
+function Thread({ handle, example: ex }: { handle: string; example: BotExample }) {
+  if (ex.mode === 'reply') {
+    const m = ex.reply.mention;
+    return (
+      <div className="thread">
+        {ex.post ? <ProjectPost item={ex.item} post={ex.post} time /> : null}
+        <Post
+          avatar={
+            <div className="pav" style={{ background: 'var(--panel2)', color: 'var(--mute)' }}>
+              {letter(m.author)}
+            </div>
+          }
+          name={m.author}
+          handle={m.author}
+          time={m.createdAt}
+        >
+          <PostText text={m.text} />
+        </Post>
+        <BotAnswer handle={handle} item={ex.item} repliedAt={ex.reply.repliedAt} />
+      </div>
+    );
+  }
+  return (
+    <div className="thread thread-ex">
+      <p className="thread-cap">Example: how the bot would answer this post. The check ran {ranWhere(ex.item)}; nothing was posted on X.</p>
+      <ProjectPost item={ex.item} post={ex.post} time={false} />
+      <Post
+        avatar={
+          <div className="pav" style={{ background: 'var(--panel2)', color: 'var(--mute)' }}>
+            Y
+          </div>
+        }
+        name="You"
+      >
+        <p className="p-text">
+          <span className="tagx">@{handle}</span> real or larp?
+        </p>
+      </Post>
+      <BotAnswer handle={handle} item={ex.item} repliedAt={null} />
+    </div>
+  );
+}
+
+/** viewBot(): how the bot works, an example thread (a real reply, or a labelled illustration), and the bot's recent replies. */
 export function BotView({ handle, stats, recent, example }: BotViewProps) {
   return (
     <section className="wrap page">
@@ -151,7 +216,7 @@ export function BotView({ handle, stats, recent, example }: BotViewProps) {
             answers when someone tags it, so it never shows up uninvited.
           </p>
         </div>
-        {example && example.item.narScore != null ? <Thread handle={handle} item={example.item} post={example.post} /> : null}
+        {example && example.item.narScore != null ? <Thread handle={handle} example={example} /> : null}
       </div>
       <div className="sec2">
         <h2>Recent bot replies</h2>

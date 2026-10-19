@@ -1,10 +1,12 @@
 'use client';
+import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { CHAINS, CHAIN_ORDER, COIN_BANDS, NAR_BANDS, type ChainKey, type CoinKey, type FeedResponse, type NarKey } from '@apecheck/core';
+import { CHAINS, CHAIN_ORDER, COIN_BANDS, NAR_BANDS, type FeedResponse } from '@apecheck/core';
 import { feed, isAbortError, type FeedParams, type FeedTab, type FeedType } from '@/lib/api';
 import { GridIcon, ListIcon, SearchIcon } from '../icons';
 import { useLive } from '../Live';
 import { useFeedSearchRequest } from '../Actions';
+import { FEED_Q_MAX, NO_FILTERS, feedKey, feedParams, restoreFeed, serverFeedKey, startRows, urlQuery, useFeedState, type FeedFilters, type FeedLayout } from '../FeedState';
 import { useToast } from '../Toast';
 import { VerdictCard } from '../VerdictCard';
 import { VerdictTable } from '../VerdictTable';
@@ -33,14 +35,7 @@ const SEARCH_DEBOUNCE_MS = 250;
 /** a verdict that just landed keeps its .fresh highlight class this long (the animation itself is 4 s) */
 const FRESH_MS = 6000;
 
-interface Filters {
-  q: string;
-  type: FeedType;
-  nar: NarKey | 'any';
-  coin: CoinKey | 'any';
-  chain: ChainKey | 'any';
-}
-const NO_FILTERS: Filters = { q: '', type: 'all', nar: 'any', coin: 'any', chain: 'any' };
+type Filters = FeedFilters;
 
 /** A one-off instruction from the page: switch tab ("Most checked today → All") and scroll to the list. */
 export interface VerdictsCommand {
@@ -60,49 +55,52 @@ const dedupe = (items: FeedResponse['items']) => {
  * The Verdicts list: tabs, list/grid toggle, filters, table or cards, cursor paging, empty states.
  * The first page comes from the server render; every change after that asks GET /v1/feed.
  * When a live check finishes the list reloads and the new verdicts flash (.fresh).
+ * Tab, layout, filters and rows outlive the page (useFeedState), so leaving for a report and coming back shows the
+ * same list, as in the prototype.
  */
 export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse | null; initialQ: string; command: VerdictsCommand | null }) {
   const watch = useWatchlist();
   const { onFinished } = useLive();
   const toast = useToast();
   const searchReq = useFeedSearchRequest();
+  const store = useFeedState();
+  const searchParams = useSearchParams();
 
-  const [tab, setTab] = useState<FeedTab>('latest');
-  const [view, setView] = useState<'list' | 'grid'>('list');
-  const [qInput, setQInput] = useState(initialQ);
-  const [f, setF] = useState<Filters>({ ...NO_FILTERS, q: initialQ });
-  const [data, setData] = useState<FeedResponse | null>(initial);
-  const [failed, setFailed] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
+  // the list as the visitor left it, or the address bar's ?q= (read from the URL itself: after Back the server props
+  // can belong to an older URL, see useUrlSearchParams in pages/useApiQuery.ts)
+  const [start] = useState(() => restoreFeed(store.get(), urlQuery(searchParams)));
+  const [tab, setTab] = useState<FeedTab>(start.tab);
+  const [view, setView] = useState<FeedLayout>(start.view);
+  const [qInput, setQInput] = useState(start.f.q);
+  const [f, setF] = useState<Filters>(start.f);
 
   // the Watchlist tab asks for the watched ids (newest first); other tabs ignore them
   const watchKey = tab === 'watch' ? watch.ids.slice(0, WATCH_MAX_IDS).join(',') : '';
-  const params = useMemo<FeedParams>(
-    () => ({
-      tab,
-      type: f.type,
-      nar: f.nar,
-      coin: f.coin,
-      chain: f.chain,
-      q: f.q.trim() || undefined,
-      ids: tab === 'watch' ? (watchKey ? watchKey.split(',') : []) : undefined,
-    }),
-    [tab, f, watchKey],
-  );
-  const key = JSON.stringify(params);
+  const params = useMemo<FeedParams>(() => feedParams(tab, f, watchKey ? watchKey.split(',') : []), [tab, f, watchKey]);
+  const key = feedKey(params);
+
+  // rows to start with: the server's page when it was rendered for these params, else the rows of the last visit
+  const [boot] = useState(() => startRows(key, serverFeedKey(initialQ), initial, start.rows));
+  const [data, setData] = useState<FeedResponse | null>(boot.res);
+  const [failed, setFailed] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
 
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const dataRef = useRef(data);
   dataRef.current = data;
-  const loadedKey = useRef<string | null>(initial ? key : null);
+  /** the params `data` was loaded for (null: nothing loaded yet) */
+  const loadedKey = useRef<string | null>(boot.key);
   const seq = useRef(0);
   const abort = useRef<AbortController | null>(null);
   const freshTimer = useRef<number | undefined>(undefined);
 
-  /** replace: new filters → first page. refresh: same filters, keep as many rows as are shown, flash new ones. */
-  const load = useCallback(async (mode: 'replace' | 'refresh') => {
+  /**
+   * replace: new filters → first page. refresh: same filters, keep as many rows as are shown, flash new ones.
+   * sync: a refresh that doesn't flash (the saved rows of the last visit brought up to date).
+   */
+  const load = useCallback(async (mode: 'replace' | 'refresh' | 'sync') => {
     const p = paramsRef.current;
     const k = JSON.stringify(p);
     if (p.tab === 'watch' && !p.ids?.length) {
@@ -118,7 +116,7 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
     abort.current = ac;
     const my = ++seq.current;
     const shown = dataRef.current?.items.length ?? 0;
-    const limit = mode === 'refresh' ? Math.min(MAX_LIMIT, Math.max(PAGE, shown)) : PAGE;
+    const limit = mode === 'replace' ? PAGE : Math.min(MAX_LIMIT, Math.max(PAGE, shown));
     try {
       const res = await feed({ ...p, limit }, { signal: ac.signal });
       if (my !== seq.current) return;
@@ -151,8 +149,18 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
     void load('replace');
   }, [key, tab, watch.ready, load]);
 
+  // the saved rows of the last visit are on screen: bring them up to date
+  useEffect(() => {
+    if (boot.refresh) void load('sync');
+  }, [boot, load]);
+
   // a live check finished: reload what's shown and flash the new verdicts
   useEffect(() => onFinished(() => void load('refresh')), [onFinished, load]);
+
+  // keep the list for the next visit (tab, layout, filters and the rows with the params they were loaded for)
+  useEffect(() => {
+    store.save({ tab, view, f, rows: data && loadedKey.current ? { key: loadedKey.current, res: data } : null });
+  }, [store, tab, view, f, data]);
 
   useEffect(
     () => () => {
@@ -170,13 +178,14 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
 
   // arrived from the header search on another page (/?q=...): show the list
   useEffect(() => {
-    if (initialQ) scrollToList(false);
-  }, [initialQ]);
+    if (start.scrollToList) scrollToList(false);
+  }, [start]);
 
-  // once the filter moves away from ?q=..., drop it from the address bar
+  // once the filter moves away from the address bar's ?q=..., drop it from the address bar
   useEffect(() => {
-    if (initialQ && f.q !== initialQ && window.location.search) window.history.replaceState(null, '', '/');
-  }, [f.q, initialQ]);
+    const urlQ = new URLSearchParams(window.location.search).get('q');
+    if (urlQ != null && urlQ.trim().slice(0, FEED_Q_MAX) !== f.q.trim()) window.history.replaceState(null, '', '/');
+  }, [f.q]);
 
   // header search on this page: filter the feed by the text and scroll to it
   const handledSearch = useRef(searchReq?.n ?? 0);

@@ -1,14 +1,18 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 /*
- * Every process reads the repo-root .env (HANDOFF §12). Next only looks for .env files next to this config,
- * so load the root one here. Variables already set in the environment win, which lets a dev run point the
+ * Every process reads the repo-root .env (HANDOFF §12), or the file named by APECHECK_ENV_FILE (absolute, or
+ * relative to the repo root), like loadEnv() in @apecheck/core/node. Next only looks for .env files next to this
+ * config, so load it here. Variables already set in the environment win, which lets a dev run point the
  * web at another API (NEXT_PUBLIC_API_URL=... next dev). NODE_ENV is left to the Next CLI.
  * dotenv is resolved through @apecheck/core, which depends on it, so the web app needs no extra dependency.
  */
-const rootEnv = fileURLToPath(new URL('../../.env', import.meta.url));
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+const chosenEnv = (process.env.APECHECK_ENV_FILE || '').trim();
+const rootEnv = chosenEnv ? path.resolve(repoRoot, chosenEnv) : path.join(repoRoot, '.env');
 if (fs.existsSync(rootEnv)) {
   const dotenv = createRequire(new URL('../../packages/core/package.json', import.meta.url))('dotenv');
   const parsed = dotenv.parse(fs.readFileSync(rootEnv));

@@ -1,0 +1,30 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@/*": [
+        "../src/*"
+      ],
+      "playwright": [
+        "../../worker/node_modules/playwright"
+      ],
+      "playwright-core": [
+        "../../../node_modules/.pnpm/node_modules/playwright-core"
+      ]
+    }
+  },
+  "include": [
+    "../next-env.d.ts",
+    "../src/**/*.ts",
+    "../src/**/*.tsx",
+    "./**/*.ts",
+    "./**/*.tsx",
+    "../vitest.config.ts",
+    "../vitest.e2e.config.ts"
+  ]
+}

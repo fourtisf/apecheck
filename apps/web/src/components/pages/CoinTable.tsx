@@ -62,7 +62,21 @@ export function CoinRow({ item: it }: { item: CoinRowDTO }) {
       <span className="td c-mint" style={{ fontSize: '13.5px' }}>
         {f.authorities ? <Dotted sig={f.sig.authorities}>{f.authorities}</Dotted> : nil}
       </span>
-      <span className="td">{f.deployerRecord ? <span className={`rep-b r-${f.deployerRecord}`}>{REP[f.deployerRecord]}</span> : nil}</span>
+      <span className="td">
+        {f.deployerRecord ? (
+          <span className={`rep-b r-${f.deployerRecord}`}>{REP[f.deployerRecord]}</span>
+        ) : f.deployerAddress ? (
+          // wallet known, launch history not: show the address, never a made-up record
+          <span title={f.deployerAddress} style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+            <span className="mono" style={{ fontSize: 13 }}>
+              {short(f.deployerAddress)}
+            </span>
+            <small style={{ fontSize: 12, lineHeight: 1.3, color: 'var(--mute)' }}>Launch history unavailable</small>
+          </span>
+        ) : (
+          nil
+        )}
+      </span>
       <span className="td num">{it.mc ? fmtUsd(it.mc) : nil}</span>
       <span className="td num c-since">
         <Spark data={it.spark} />

@@ -16,7 +16,8 @@ export interface VerdictItemProps {
 
 /** Coin cell shared by the row and the grid card. */
 export function CoinCell({ item }: { item: CheckSummaryDTO }) {
-  if (!item.hasCoin) return <span className="mm-nil">No coin linked</span>;
+  // a pasted contract that couldn't be read still is a coin: "—", never "No coin linked"
+  if (!item.hasCoin) return <span className="mm-nil">{item.kind === 'coin' ? '—' : 'No coin linked'}</span>;
   if (item.coinScore == null) return <span className="mm-nil">—</span>;
   return <MiniMeter score={item.coinScore} kind="coin" label="Coin" />;
 }

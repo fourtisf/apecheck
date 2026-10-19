@@ -1,5 +1,6 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isAbortError } from '@/lib/api';
 
 export interface ApiQuery<T> {
@@ -51,6 +52,19 @@ export function useApiQuery<P, T>(params: P, fetcher: (p: P, signal: AbortSignal
   }, []);
 
   return { data, failed, retry };
+}
+
+/**
+ * The search params of the URL the browser is actually on: what a filtered view must start from.
+ * The server props can be older than the URL. useSyncUrl changes the address bar with replaceState, which keeps the
+ * router's cached render (made for the filters the page was loaded with); Back/Forward restore that render, so its
+ * props say "defaults" while the URL still carries the filters the visitor left with. Starting from the props
+ * would reset the view and then rewrite the URL back to the unfiltered path.
+ */
+export function useUrlSearchParams(): URLSearchParams {
+  const sp = useSearchParams();
+  const qs = sp?.toString() ?? '';
+  return useMemo(() => new URLSearchParams(qs), [qs]);
 }
 
 /** Keep the address bar in step with the page's filters (shareable links) without a navigation or a server round trip. */
