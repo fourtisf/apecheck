@@ -202,6 +202,11 @@ export interface CheckReportDTO extends CheckSummaryDTO {
   /** /card/<id>.png on the web origin */
   cardUrl: string | null;
   reportUrl: string;
+  /**
+   * The X post a post check read (Check.evidence.post), for the /bot page's example thread.
+   * Absent or null for other kinds, or when the post couldn't be fetched.
+   */
+  post?: { author: string; text: string; createdAt: string | null } | null;
 }
 
 export interface LiveCheckDTO {
@@ -249,6 +254,16 @@ export interface DeployerRowDTO extends DeployerDTO {
   coins: { id: string; ticker: string | null; name: string; hue: number; coinScore: number | null; coinBand: CoinKey | null }[];
 }
 export interface DeployersResponse { items: DeployerRowDTO[] }
+
+/** GET /v1/bot/stats — the numbers on the /bot page */
+export interface BotStatsDTO {
+  /** bot replies posted since 00:00 UTC */
+  repliesToday: number;
+  /** median seconds from the mention to the finished check (the reply), today; null when none */
+  medianReplySeconds: number | null;
+  /** distinct X accounts that have ever tagged the bot */
+  accounts: number;
+}
 
 export interface UserDTO { id: string; evmAddress: string | null; solAddress: string | null; xHandle: string | null; tier: TierS }
 
