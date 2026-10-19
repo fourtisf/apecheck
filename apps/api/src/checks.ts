@@ -101,6 +101,10 @@ export interface CreateResult {
 const JOB_RETENTION = {
   removeOnComplete: { count: 2000, age: 24 * 3600 },
   removeOnFail: { count: 5000, age: 7 * 24 * 3600 },
+  // the worker throws only when the database fails while it claims the check (runCheck catches everything
+  // after that), so a retry never re-runs stages; the last failure marks the check FAILED (worker.ts)
+  attempts: 3,
+  backoff: { type: 'exponential' as const, delay: 5000 },
 };
 
 export async function createCheck(deps: AppDeps, input: CreateInput, subject: CreditSubject, log?: FastifyBaseLogger): Promise<CreateResult> {

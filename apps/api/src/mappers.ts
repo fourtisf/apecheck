@@ -15,12 +15,16 @@ import {
   chainFromDb,
   claimStatusFromDb,
   clamp,
+  coinBand as coinBandOf,
+  coinVerdictEnum,
   deployerLine,
   fmtAge,
   fmtCount,
   hueOf,
   kindFromDb,
   lpLabel,
+  narBand as narBandOf,
+  narVerdictEnum,
   recordFromDb,
   sigFromDb,
   sincePct,
@@ -37,11 +41,13 @@ import {
   type CoinFactsDTO,
   type CoinKey,
   type CoinRowDTO,
+  type CoinVerdictS,
   type DeployerDTO,
   type Env,
   type LiveCheckDTO,
   type MarketDTO,
   type NarKey,
+  type NarVerdictS,
   type NoteDTO,
   type PeopleDTO,
   type Signal,
@@ -61,14 +67,16 @@ export const reportInclude = {
   target: true,
   coinFacts: { include: { deployer: true } },
   steps: { orderBy: { idx: 'asc' } },
-  // Claim has no position column; cuids sort in insertion order within the worker's write
-  claims: { orderBy: { id: 'asc' } },
+  // Claim.idx is the position the worker wrote (0..n-1); id breaks ties for rows from before the column existed
+  claims: { orderBy: [{ idx: 'asc' }, { id: 'asc' }] },
   asks: { orderBy: { createdAt: 'desc' } },
   notes: {
     where: { hidden: false },
     orderBy: [{ helpful: 'desc' }, { createdAt: 'desc' }],
     include: { author: { select: { xHandle: true, evmAddress: true, solAddress: true } } },
   },
+  // the X mention a bot check answers (M2), for CheckReportDTO.botReply
+  mention: { select: { authorHandle: true, text: true, createdAt: true, replyTweetId: true, repliedAt: true } },
 } satisfies Prisma.CheckInclude;
 
 export type CheckSummaryRow = Prisma.CheckGetPayload<{ include: typeof summaryInclude }>;
@@ -254,6 +262,8 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
   const priceAtCheck = num(c.priceAtCheck);
   const series = ctx.series?.get(c.id) ?? null;
   const dep = c.coinFacts?.deployer ?? null;
+  const depAddress = c.coinFacts?.deployerAddress ?? null;
+  const depChain = chainFromDb(t.chain);
   return {
     id: c.shortId,
     targetId: t.id,
@@ -285,7 +295,11 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
     mine: !!ctx.viewer.sid && c.requesterSid === ctx.viewer.sid,
     createdAt: c.createdAt.toISOString(),
     checkedAt: iso(c.finishedAt),
-    deployer: dep ? { address: dep.address, chain: chainFromDb(dep.chain)!, record: recordFromDb(dep.record) } : null,
+    deployer: dep
+      ? { address: dep.address, chain: chainFromDb(dep.chain)!, record: recordFromDb(dep.record) }
+      : depAddress && depChain
+        ? { address: depAddress, chain: depChain, record: null }
+        : null,
   };
 }
 
@@ -310,6 +324,7 @@ function toCoinFacts(f: NonNullable<CheckSummaryRow['coinFacts']>): CoinFactsDTO
     liquidityUsd: num(f.liquidityUsd),
     pairCreatedAt: iso(f.pairCreatedAt),
     deployer: dep ? toDeployerDTO(dep) : null,
+    deployerAddress: dep?.address ?? f.deployerAddress ?? null,
     deployerText: dep
       ? deployerLine({ record: recordFromDb(dep.record), launched: dep.launched, dead: dep.dead, fundedFrom: dep.fundedFrom })
       : null,
@@ -338,6 +353,7 @@ function toClaim(c: CheckReportRow['claims'][number]): ClaimDTO {
     sourceLabel: CLAIM_SOURCE_LABEL[source] ?? cap(c.source.replace(/_/g, ' ')),
     kind: c.kind,
     status,
+    result: status,
     label: CLAIM_LABEL[status],
     signal: CLAIM_SIGNAL[status],
     evidence: c.evidence,
@@ -395,6 +411,7 @@ export function toReport(c: CheckReportRow, ctx: MapCtx): CheckReportDTO {
   const stepsExpected = stepsExpectedOf(summary.kind, ev, c.steps.length, finished);
   const series = ctx.series?.get(c.id) ?? null;
   const appUrl = trimSlash(ctx.env.APP_URL);
+  const reportUrl = `${appUrl}/c/${c.shortId}`;
   const links = ev.links ?? {};
 
   const asksList: AskDTO[] = c.asks.map(a => ({
@@ -432,7 +449,9 @@ export function toReport(c: CheckReportRow, ctx: MapCtx): CheckReportDTO {
     steps: c.steps.map(s => toStep(s, ctx.env)),
     stepsExpected,
     progress: progressOf(c.status, ctx.progress?.get(c.id), c.steps.length, stepsExpected),
-    coin: c.coinFacts ? toCoinFacts(c.coinFacts) : null,
+    narrative: narrativeOf(c.narScore, c.narBand),
+    // the /api page's `coin: { verdict, score }`; the facts the report's Coin tab reads sit next to them
+    coin: c.coinFacts ? { verdict: coinVerdictOf(c.coinScore, c.coinBand), score: c.coinScore, ...toCoinFacts(c.coinFacts) } : null,
     market: toMarket(c, ev, summary, series),
     people: toPeople(c, ev),
     asksList,
@@ -446,11 +465,52 @@ export function toReport(c: CheckReportRow, ctx: MapCtx): CheckReportDTO {
     durationMs: c.durationMs,
     startedAt: iso(c.startedAt),
     finishedAt: iso(c.finishedAt),
-    error: c.error,
+    // only the plain sentence: rows from before the worker stopped appending "(<exception text>)" must not leak it
+    error: c.error ? c.error.replace(/\s*\([\s\S]*$/, '').slice(0, 200) : null,
     isPrivate: c.isPrivate,
     cardUrl: summary.status === 'done' ? `${appUrl}/card/${c.shortId}.png` : null,
-    reportUrl: `${appUrl}/c/${c.shortId}`,
+    reportUrl,
+    report_url: reportUrl,
+    post: postOf(ev),
+    // only once the bot's reply is really on X; absent otherwise (see the DTO)
+    ...botReplyOf(c),
   };
+}
+
+/** CheckReportDTO.botReply: a bot check's mention and the time its reply was posted; nothing until it was posted. */
+export function botReplyOf(c: Pick<CheckReportRow, 'via' | 'mention'>): Pick<CheckReportDTO, 'botReply'> {
+  const m = c.mention;
+  if (c.via !== 'BOT' || !m || !m.replyTweetId || !m.repliedAt) return {};
+  return {
+    botReply: {
+      mention: { author: m.authorHandle.replace(/^@+/, ''), text: m.text, createdAt: m.createdAt.toISOString() },
+      repliedAt: m.repliedAt.toISOString(),
+    },
+  };
+}
+
+/**
+ * The /api page's `narrative: { verdict: "PARTLY_REAL", score }`. The verdict comes from the stored band
+ * (the score's band for a row saved without one); null until there is a narrative score.
+ */
+export function narrativeOf(score: number | null, band: string | null): CheckReportDTO['narrative'] {
+  if (score == null || !Number.isFinite(score)) return null;
+  const key = narKey(band) ?? narBandOf(Math.max(0, score)).key;
+  return { verdict: narVerdictEnum(key) as NarVerdictS, score };
+}
+
+/** The /api page's `coin.verdict` ("SKETCHY") from the stored band, else the score's band; null without either. */
+export function coinVerdictOf(score: number | null, band: string | null): CoinVerdictS | null {
+  const key = coinKeyOf(band) ?? (score != null && Number.isFinite(score) ? coinBandOf(Math.max(0, score)).key : null);
+  return key ? (coinVerdictEnum(key) as CoinVerdictS) : null;
+}
+
+/** Check.evidence.post → the post the check read (author handle, text, time); null when there is none. */
+export function postOf(ev: CheckEvidence): CheckReportDTO['post'] {
+  const p = ev.post;
+  if (!p || typeof p !== 'object' || typeof p.text !== 'string') return null;
+  const createdAt = typeof p.createdAt === 'string' && Number.isFinite(Date.parse(p.createdAt)) ? new Date(p.createdAt).toISOString() : null;
+  return { author: typeof p.author === 'string' ? p.author.replace(/^@+/, '') : '', text: p.text, createdAt };
 }
 
 function pickEvidence(ev: CheckEvidence): CheckReportDTO['evidence'] {
@@ -474,6 +534,7 @@ export function toCoinRow(c: CheckSummaryRow, ctx: MapCtx): CoinRowDTO {
       devHoldPct: facts.devHoldPct,
       lpLabel: facts.lpLabel,
       authorities: facts.authorities,
+      deployerAddress: facts.deployerAddress ?? null,
       deployerRecord: f.deployer ? recordFromDb(f.deployer.record) : null,
     },
   };

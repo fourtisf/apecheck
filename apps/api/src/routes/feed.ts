@@ -2,12 +2,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CoinsResponse, FeedResponse, LiveResponse } from '@apecheck/core';
-import type { Prisma } from '@apecheck/db';
+import type { Prisma, PrismaClient } from '@apecheck/db';
 import type { AppDeps } from '../context';
 import { activeCheckWhere, readProgress } from '../checks';
 import { ApiError } from '../errors';
-import { SHORT_ID_RE, decodeCursor, encodeCursor } from '../ids';
-import { loadSeries, summaryInclude, toCoinRow, toLive, toSummary } from '../mappers';
+import { SNAPSHOT_MAX, loadSnapshot, querySig, saveSnapshot } from '../feed-snapshot';
+import { SHORT_ID_RE, decodeCursor, encodeCursor, encodeSnapCursor } from '../ids';
+import { loadSeries, summaryInclude, toCoinRow, toLive, toSummary, type CheckSummaryRow } from '../mappers';
 import { ChainFilterZ, CoinBandZ, NarZ, chainDbOf, opt, searchTerm, viewerOf } from './util';
 
 const FeedQueryZ = z.object({
@@ -44,6 +45,7 @@ function searchWhere(term: string, fields: ('name' | 'ticker' | 'domain' | 'hand
     OR: [
       ...fields.map(f => ({ target: { [f]: like } }) as Prisma.CheckWhereInput),
       { coinFacts: { is: { deployer: { is: { address: like } } } } },
+      { coinFacts: { is: { deployerAddress: like } } },
     ],
   };
 }
@@ -57,11 +59,24 @@ const FEED_ORDER: Record<string, Prisma.CheckOrderByWithRelationInput[]> = {
   vol: [{ target: { lastVol5m: { sort: 'desc', nulls: 'last' } } }, { finishedAt: 'desc' }, { id: 'desc' }],
 };
 
+/** The feed row of each target (its latest public verdict, if it still matches `where`), in the given order. */
+async function rowsOfTargets(prisma: PrismaClient, where: Prisma.CheckWhereInput, targetIds: string[]): Promise<CheckSummaryRow[]> {
+  if (!targetIds.length) return [];
+  const rows = await prisma.check.findMany({
+    where: { AND: [where, { targetId: { in: targetIds } }] },
+    include: summaryInclude,
+    orderBy: [{ finishedAt: 'desc' }, { id: 'desc' }],
+  });
+  const byTarget = new Map<string, CheckSummaryRow>();
+  for (const r of rows) if (!byTarget.has(r.targetId)) byTarget.set(r.targetId, r);
+  return targetIds.flatMap(id => byTarget.get(id) ?? []);
+}
+
 export function registerFeedRoutes(app: FastifyInstance, deps: AppDeps) {
   app.get('/v1/feed', async (request): Promise<FeedResponse> => {
     const q = FeedQueryZ.parse(request.query ?? {});
-    const offset = decodeCursor(q.cursor);
-    if (offset == null) throw new ApiError(400, 'bad_request', 'Invalid cursor');
+    const cursor = decodeCursor(q.cursor);
+    if (!cursor) throw new ApiError(400, 'bad_request', 'Invalid cursor');
 
     const and: Prisma.CheckWhereInput[] = [FEED_BASE];
     const ids = (q.ids ?? '').split(',').map(s => s.trim()).filter(s => SHORT_ID_RE.test(s)).slice(0, IDS_MAX);
@@ -81,14 +96,53 @@ export function registerFeedRoutes(app: FastifyInstance, deps: AppDeps) {
     if (term) and.push(searchWhere(term, ['name', 'ticker', 'domain', 'handle', 'ca']));
 
     const where: Prisma.CheckWhereInput = { AND: and };
-    const [total, rows] = await Promise.all([
-      deps.prisma.check.count({ where }),
-      deps.prisma.check.findMany({ where, include: summaryInclude, orderBy: FEED_ORDER[q.tab], skip: offset, take: q.limit }),
-    ]);
-    const series = await loadSeries(deps.prisma, rows);
+    const orderBy = FEED_ORDER[q.tab];
+    const { prisma, redis } = deps;
+    // a snapshot cursor only reads a snapshot of the same query (same tab and filters)
+    const sig = querySig({
+      tab: q.tab, type: q.type, nar: q.nar, coin: q.coin, chain, term: term ?? null,
+      ids: q.ids != null || q.tab === 'watch' ? ids : null, via: q.via ?? null,
+    });
+
+    /** the live order from `offset` (old cursors, an expired snapshot, rows past the snapshot) */
+    const livePage = async (offset: number, total: Promise<number>) => {
+      const rows = await prisma.check.findMany({ where, include: summaryInclude, orderBy, skip: offset, take: q.limit });
+      const next = offset + rows.length;
+      return { rows, nextCursor: next < (await total) && rows.length ? encodeCursor(next) : null };
+    };
+    /** after the last snapshot row: the live order goes on when the snapshot was cut at SNAPSHOT_MAX */
+    const pastSnapshot = async (len: number, total: Promise<number>) => (len >= SNAPSHOT_MAX && (await total) > len ? encodeCursor(len) : null);
+
+    const page = async (total: Promise<number>): Promise<{ rows: CheckSummaryRow[]; nextCursor: string | null }> => {
+      if (cursor.snap) {
+        const order = await loadSnapshot(redis, cursor.snap, sig).catch(err => {
+          request.log.warn({ err }, 'feed snapshot unreadable; paging the live order');
+          return null;
+        });
+        if (!order) return livePage(cursor.offset, total);
+        const end = cursor.offset + q.limit;
+        const rows = await rowsOfTargets(prisma, where, order.slice(cursor.offset, end));
+        return { rows, nextCursor: end < order.length ? encodeSnapCursor(cursor.snap, end) : await pastSnapshot(order.length, total) };
+      }
+      if (cursor.offset > 0) return livePage(cursor.offset, total);
+
+      // first page: freeze the order it is cut from, so "Load more" continues that order even when rows move
+      const head = await prisma.check.findMany({ where, select: { targetId: true }, orderBy, take: SNAPSHOT_MAX });
+      const order = [...new Set(head.map(r => r.targetId))];
+      const rows = await rowsOfTargets(prisma, where, order.slice(0, q.limit));
+      if (order.length <= q.limit) return { rows, nextCursor: await pastSnapshot(order.length, total) };
+      const token = await saveSnapshot(redis, sig, order).catch(err => {
+        request.log.warn({ err }, 'feed snapshot not stored; the next page reads the live order');
+        return null;
+      });
+      return { rows, nextCursor: token ? encodeSnapCursor(token, q.limit) : encodeCursor(q.limit) };
+    };
+
+    const totalP = prisma.check.count({ where });
+    const [total, { rows, nextCursor }] = await Promise.all([totalP, page(totalP)]);
+    const series = await loadSeries(prisma, rows);
     const ctx = { env: deps.env, viewer: viewerOf(request), series };
-    const next = offset + rows.length;
-    return { items: rows.map(r => toSummary(r, ctx)), total, nextCursor: next < total && rows.length ? encodeCursor(next) : null };
+    return { items: rows.map(r => toSummary(r, ctx)), total, nextCursor };
   });
 
   app.get('/v1/live', async (request): Promise<LiveResponse> => {

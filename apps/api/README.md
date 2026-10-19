@@ -18,12 +18,28 @@ jobs; `apps/worker` consumes queue `checks` and publishes progress on `check:{id
 
 ## Environment
 
-Read from the repo-root `.env` by `loadEnv()` (`packages/core/src/env.ts` has every default).
+Read from the repo-root `.env` by `loadEnv()` (`packages/core/src/env.ts` has every default; `APECHECK_ENV_FILE=<path>`
+selects another file, e.g. a staging config).
+
+### Report notes
+
+- The report carries the shape documented on the web's /api page (HANDOFF §9) next to the fields the web reads:
+  `narrative: { verdict, score }` (`"PARTLY_REAL"`-style enum, null until there is a narrative score),
+  `coin: { verdict, score, …facts }` (`"SKETCHY"`-style enum next to the `CoinFactsDTO` facts; null without coin facts),
+  `claims[].result` (= `status`, e.g. `"not_seen"`) and `report_url` (= `reportUrl`). The camelCase fields
+  (`narScore`/`narBand`, `coinScore`/`coinBand`, `claims[].status`, `reportUrl`) stay; the web uses them.
+- Claims come in `Claim.idx` order (the order the worker extracted them).
+- `post` is `Check.evidence.post` (`{ author, text, createdAt }`) for post checks whose post could be read, else `null`.
+- `botReply` (`{ mention: { author, text, createdAt }, repliedAt }`) is present only for a bot check (`via: 'bot'`) whose
+  `BotMention` has `replyTweetId` and `repliedAt`, i.e. the reply is on X; the /bot page shows a real thread only from it.
+- `coin.deployer` is the Deployer row (known launch history only); `coin.deployerAddress` is the wallet whenever it is known.
+  The summary's `deployer` is `{ address, chain, record }` with `record: null` when the history is unknown. Feed / coins
+  search also matches `CoinFacts.deployerAddress`.
 
 | Variable | Used for |
 |---|---|
 | `API_HOST`, `API_PORT` | listen address (default `127.0.0.1:4000`, behind Nginx) |
-| `APP_URL`, `CORS_ORIGINS` | CORS allow-list (`CORS_ORIGINS` ∪ `APP_URL`, credentials on); `cardUrl` / `reportUrl` in reports |
+| `APP_URL`, `CORS_ORIGINS` | CORS allow-list (`CORS_ORIGINS` ∪ `APP_URL`, exact match, credentials on; outside production any `http://localhost:<port>` / `http://127.0.0.1:<port>` origin is accepted too, for local dev servers); `cardUrl` / `reportUrl` in reports |
 | `SESSION_SECRET` | signs the anonymous session cookie `ac_sid` |
 | `DATABASE_URL`, `REDIS_URL` | Postgres (Prisma) and Redis (credits, rate limits, BullMQ, pub/sub) |
 | `SCREENSHOT_DIR` | screenshots served at `/shots/*` |
@@ -44,14 +60,14 @@ All errors are `{ error, code }` (`ApiErrorBody`). Codes: `bad_target`, `bad_req
 | GET | `/health` | `{ ok: true }` (not rate limited) |
 | GET | `/v1/me` | `MeDTO`: credits left for this cookie + IP, `max`, `resetsAt` (next 00:00 UTC), tier, token info |
 | POST | `/v1/checks` | body `{ target, recheck? }` → `CreateCheckResponse`. **201** for a new check, **200** when an existing one is returned (running check, or `cached: true` for a finished one younger than `CACHE_HOURS`). 400 `bad_target`, 402 `no_credits`, 403 `max_required` for `private: true` |
-| GET | `/v1/checks/:id` | `CheckReportDTO` by short id. Private checks only for the cookie that started them |
+| GET | `/v1/checks/:id` | `CheckReportDTO` by short id, including the /api page's `narrative`, `coin.verdict`/`coin.score`, `claims[].result`, `report_url` (see Report notes). Private checks only for the cookie that started them |
 | GET | `/v1/checks/:id/events` | SSE, see below |
 | GET | `/v1/feed` | `FeedResponse`. `tab=latest\|checked\|real\|least\|vol\|watch`, `type=all\|coin\|post\|site`, `nar=<band>\|any`, `coin=<band>\|any`, `chain=<key>\|any`, `q`, `cursor`, `limit` (1–100, default 25), `ids=<shortId,…>`, `via=bot\|web\|api` |
 | GET | `/v1/live` | `LiveResponse`: up to 8 queued/running public checks, newest first |
 | GET | `/v1/coins` | `CoinsResponse`. `tab=all\|clean\|ok\|sketchy\|rigged`, `chain`, `q`, `limit` (1–500, default 200) |
 | GET | `/v1/deployers` | `DeployersResponse`. `chain=all\|<key>`, `sort=real\|dead\|launched`, `limit` (1–500, default 200) |
-| GET | `/v1/insights` | `InsightsDTO`: header stats, since-check by verdict, most checked today, builders worth watching |
-| GET | `/v1/bot/stats` | `BotStatsDTO`: replies today, median reply seconds, distinct accounts |
+| GET | `/v1/insights` | `InsightsDTO`: header stats (`checked` = finished checks all time, `today` = finished since 00:00 UTC, so never more than `checked`), since-check by verdict (latest public coin verdicts finished in the last 30 days), most checked today, builders worth watching |
+| GET | `/v1/bot/stats` | `BotStatsDTO`: replies today, median reply seconds (from `BotMention.repliedAt` when the bot stored it, else the check's `finishedAt`), distinct accounts |
 | POST | `/v1/checks/:id/asks` | 403 `pro_required` (M3) |
 | POST | `/v1/checks/:id/notes`, `/v1/notes/:id/helpful` | 403 `holders_only` (M3) |
 | POST | `/v1/watch/:targetId` | 401 `sign_in_required` (M3) |
@@ -63,7 +79,12 @@ All errors are `{ error, code }` (`ApiErrorBody`). Codes: `bad_target`, `bad_req
 - `ids=` is the watchlist: each id selects its target, and the row shown is that target's latest verdict, so a
   watched project keeps showing after a re-check. `tab=watch` without ids is empty.
 - `q` drops a leading `$`/`@` and matches name, ticker, domain, handle, CA and the coin's deployer address.
-- `cursor` is opaque (base64 offset); `total` is the full match count.
+- `cursor` is opaque; `total` is the full (live) match count. The first page stores the order it was cut from
+  (the first 500 target ids, Redis `feed:snap:<token>`, 30 min, shared by viewers who load the same order;
+  `src/feed-snapshot.ts`) and `nextCursor` points into it, so "Load more" continues that order even when rows move
+  between pages ("Most checked" counts and "5m volume" change constantly, a re-check replaces a target's row). Each
+  row shows the target's current latest verdict. Past those 500 rows, after the snapshot expires, or with a cursor
+  from other filters, the feed pages the live order by offset (old `o:<offset>` cursors still work).
 
 ### Same target (dedupe and cache)
 
@@ -83,6 +104,13 @@ Headers `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `X-Accel-B
 - `done` — the final `CheckReportDTO`; the server then closes the stream. **Clients must call `EventSource.close()` on `done`**, otherwise the browser reconnects
 
 `: ping` every 15 s. One Redis subscriber connection per process fans out to all open streams.
+
+### Timestamps in raw SQL
+
+Every `DateTime` column is `timestamp(3)` without time zone holding UTC. Prisma binds a JS `Date` in `$queryRaw` as
+`timestamptz`, and Postgres then compares in the session `TimeZone` (on a server whose Postgres runs in the OS zone,
+that shifts the comparison by the zone's offset). Raw queries therefore bind ISO text and cast:
+`${date.toISOString()}::timestamp` (`loadSeries`, `sinceByBand`). The ORM is not affected.
 
 ## Credits (`src/credits.ts`)
 

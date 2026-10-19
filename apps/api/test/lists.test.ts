@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  TUNING,
   progressKey,
   type BotStatsDTO,
   type CoinsResponse,
@@ -8,7 +9,8 @@ import {
   type InsightsDTO,
   type LiveResponse,
 } from '@apecheck/core';
-import { Client, makeHarness, resetState, seedCheck, seedCoinFacts, seedDeployer, seedTarget, type Harness } from './helpers';
+import { SNAPSHOT_MAX } from '../src/feed-snapshot';
+import { Client, dbUrlInTimeZone, makeHarness, resetState, seedCheck, seedCoinFacts, seedDeployer, seedTarget, type Harness } from './helpers';
 
 let h: Harness;
 beforeAll(async () => {
@@ -150,6 +152,26 @@ describe('GET /v1/feed', () => {
     expect((await feed('?q=nothing-like-this')).total).toBe(0);
   });
 
+  it('finds and shows a deployer wallet whose launch history is unknown (no Deployer row)', async () => {
+    const creator = '0x5555555555555555555555555555555555555555';
+    const t = await seedTarget(h.prisma, { kind: 'COIN', chain: 'BASE', ca: '0x6666666666666666666666666666666666666666', ticker: 'NOHI', name: '$NOHI', key: 'ca:base:0x6666666666666666666666666666666666666666' });
+    const c = await seedCheck(h.prisma, { targetId: t.id, shortId: 'nohi001', totalScore: 40, narScore: 40, narBand: 'partly', coinScore: 40, coinBand: 'sketchy', finishedAt: ago(min(50)) });
+    await seedCoinFacts(h.prisma, c.id, { deployerAddress: creator, sigDeployer: 'WARN' });
+    try {
+      const hit = await feed('?q=0x55555');
+      expect(order(hit)).toEqual(['nohi001']);
+      expect(hit.items[0].deployer).toEqual({ address: creator, chain: 'base', record: null });
+      const coins = (await viewer.get('/v1/coins?q=0x55555')).json<CoinsResponse>();
+      expect(coins.items[0].facts).toMatchObject({ deployerAddress: creator, deployerRecord: null, sig: { deployer: 'warn' } });
+      // no Deployer row: the deployers page and its counts stay made-up free
+      const deps = (await viewer.get('/v1/deployers')).json<DeployersResponse>();
+      expect(deps.items.map(d => d.address)).not.toContain(creator);
+    } finally {
+      await h.prisma.check.delete({ where: { id: c.id } });
+      await h.prisma.target.delete({ where: { id: t.id } });
+    }
+  });
+
   it('limits to watched ids (following re-checks) and to bot checks', async () => {
     expect(order(await feed(`?tab=watch&ids=${ids.B},${ids.D}`))).toEqual(['bbbb001', 'dddd001']);
     // an id from an older check of the same target still finds the target's latest verdict
@@ -196,6 +218,129 @@ describe('GET /v1/feed', () => {
   });
 });
 
+describe('GET /v1/feed paging while the order changes', () => {
+  /** six coins p1..p6, ranked p1 first on every tab (most checks, most 5m volume, best total, newest) */
+  async function seedSix() {
+    await resetState(h);
+    const out: { targetId: string; checkId: string; shortId: string }[] = [];
+    for (let i = 1; i <= 6; i++) {
+      const t = await seedTarget(h.prisma, {
+        kind: 'COIN', chain: 'SOL', ca: `PageMint${i}`, ticker: `PG${i}`, name: `$PG${i}`, key: `ca:sol:PageMint${i}`,
+        checkCount: 70 - i * 10, lastVol5m: String(7000 - i * 1000),
+      });
+      const c = await seedCheck(h.prisma, {
+        targetId: t.id, shortId: `pg0000${i}`, totalScore: 100 - i * 10, narScore: 100 - i * 10, narBand: 'likely', coinScore: 70, coinBand: 'ok',
+        finishedAt: ago(min(i)),
+      });
+      out.push({ targetId: t.id, checkId: c.id, shortId: c.shortId });
+    }
+    return out;
+  }
+  const page = async (qs: string) => {
+    const res = await new Client(h.app).get(`/v1/feed${qs}`);
+    expect(res.statusCode).toBe(200);
+    return res.json<FeedResponse>();
+  };
+  const expectEachOnce = (seen: string[], all: string[]) => {
+    expect(new Set(seen).size).toBe(seen.length);
+    expect([...seen].sort()).toEqual([...all].sort());
+  };
+
+  it('"Most checked": a row that jumps up after page 1 is still on page 2, nothing repeats', async () => {
+    const p = await seedSix();
+    const p1 = await page('?tab=checked&limit=3');
+    expect(order(p1)).toEqual(['pg00001', 'pg00002', 'pg00003']);
+    // p5 gets a burst of requests (to the top), p1 falls to the bottom
+    await h.prisma.target.update({ where: { id: p[4].targetId }, data: { checkCount: 100 } });
+    await h.prisma.target.update({ where: { id: p[0].targetId }, data: { checkCount: 1 } });
+    const p2 = await page(`?tab=checked&limit=3&cursor=${p1.nextCursor}`);
+    expect(order(p2)).toEqual(['pg00004', 'pg00005', 'pg00006']);
+    expect(p2.nextCursor).toBeNull();
+    expect(p2.total).toBe(6);
+    // the order is frozen, the rows are not
+    expect(p2.items[1].checks).toBe(100);
+    expectEachOnce([...order(p1), ...order(p2)], p.map(x => x.shortId));
+  });
+
+  it('"5m volume": rows reordered by a price tick between pages are neither skipped nor repeated', async () => {
+    const p = await seedSix();
+    const p1 = await page('?tab=vol&limit=2');
+    expect(order(p1)).toEqual(['pg00001', 'pg00002']);
+    await h.prisma.target.update({ where: { id: p[5].targetId }, data: { lastVol5m: '99000' } });
+    await h.prisma.target.update({ where: { id: p[1].targetId }, data: { lastVol5m: '1' } });
+    const p2 = await page(`?tab=vol&limit=2&cursor=${p1.nextCursor}`);
+    await h.prisma.target.update({ where: { id: p[3].targetId }, data: { lastVol5m: null } });
+    const p3 = await page(`?tab=vol&limit=2&cursor=${p2.nextCursor}`);
+    expect([order(p2), order(p3)]).toEqual([['pg00003', 'pg00004'], ['pg00005', 'pg00006']]);
+    expect(p3.nextCursor).toBeNull();
+    expectEachOnce([...order(p1), ...order(p2), ...order(p3)], p.map(x => x.shortId));
+  });
+
+  it('"Most real": a re-check on page 1 does not shift a row out of page 2; a re-checked row shows its new verdict', async () => {
+    const p = await seedSix();
+    const p1 = await page('?tab=real&limit=3');
+    expect(order(p1)).toEqual(['pg00001', 'pg00002', 'pg00003']);
+    // p2 (shown) is re-checked and drops to the bottom; p5 (not shown yet) is re-checked too
+    const recheck = async (i: number, shortId: string, totalScore: number) => {
+      await h.prisma.check.update({ where: { id: p[i].checkId }, data: { isLatest: false } });
+      await seedCheck(h.prisma, { targetId: p[i].targetId, shortId, totalScore, narScore: totalScore, narBand: 'larp', finishedAt: new Date() });
+    };
+    await recheck(1, 'pg00002b', 5);
+    await recheck(4, 'pg00005b', 95);
+    const p2 = await page(`?tab=real&limit=3&cursor=${p1.nextCursor}`);
+    expect(order(p2)).toEqual(['pg00004', 'pg00005b', 'pg00006']);
+    expect(p2.items[1]).toMatchObject({ total: 95, narBand: 'larp' });
+  });
+
+  it('falls back to the live order when the snapshot expired or belongs to other filters, and still reads old offset cursors', async () => {
+    await seedSix();
+    const p1 = await page('?tab=latest&limit=4');
+    for (const key of await h.redis.keys('feed:snap:*')) await h.redis.del(key);
+    expect(order(await page(`?tab=latest&limit=4&cursor=${p1.nextCursor}`))).toEqual(['pg00005', 'pg00006']);
+
+    const p1b = await page('?tab=latest&limit=4');
+    // same cursor, other filters: the live order of that query from the same position
+    expect(order(await page(`?tab=least&limit=4&cursor=${p1b.nextCursor}`))).toEqual(['pg00002', 'pg00001']);
+
+    const offset = Buffer.from('o:3').toString('base64url');
+    const old = await page(`?tab=latest&limit=2&cursor=${offset}`);
+    expect(order(old)).toEqual(['pg00004', 'pg00005']);
+    expect(old.nextCursor).toEqual(expect.any(String));
+    expect(order(await page(`?tab=latest&limit=2&cursor=${old.nextCursor}`))).toEqual(['pg00006']);
+  });
+
+  it(`pages the live order after the first ${SNAPSHOT_MAX} rows of a snapshot`, async () => {
+    await resetState(h);
+    const n = SNAPSHOT_MAX + 3;
+    const targets = await h.prisma.target.createManyAndReturn({
+      data: Array.from({ length: n }, (_, i) => ({ kind: 'SITE' as const, name: `bulk${i}.xyz`, domain: `bulk${i}.xyz`, key: `site:bulk${i}.xyz`, checkCount: 1 })),
+      select: { id: true, key: true },
+    });
+    const base = Date.now() - 3600_000;
+    await h.prisma.check.createMany({
+      data: targets.map((t, i) => ({
+        shortId: `bulk${String(i).padStart(4, '0')}`, targetId: t.id, targetRaw: t.key, status: 'DONE' as const, via: 'WEB' as const,
+        isLatest: true, totalScore: 50, createdAt: new Date(base), startedAt: new Date(base), finishedAt: new Date(base + i * 1000),
+      })),
+    });
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const r: FeedResponse = await page(`?limit=100${cursor ? `&cursor=${cursor}` : ''}`);
+      expect(r.total).toBe(n);
+      seen.push(...order(r));
+      cursor = r.nextCursor;
+      pages++;
+    } while (cursor && pages < 10);
+    expect(pages).toBe(6);
+    expect(seen).toHaveLength(n);
+    expect(new Set(seen).size).toBe(n);
+    expect(seen[0]).toBe(`bulk${String(n - 1).padStart(4, '0')}`);
+    expect(seen[n - 1]).toBe('bulk0000');
+  });
+});
+
 describe('GET /v1/coins', () => {
   beforeAll(seedFeed);
 
@@ -205,7 +350,7 @@ describe('GET /v1/coins', () => {
     expect(all.total).toBe(3);
     expect(all.items[0].facts).toEqual({
       sig: { deployer: 'ok', bundle: 'ok', holders: 'ok', lp: 'ok', authorities: 'ok' },
-      bundlePct: 2.5, top10Pct: 18, devHoldPct: 1.2, lpLabel: 'Burned', authorities: 'Renounced', deployerRecord: 'builder',
+      bundlePct: 2.5, top10Pct: 18, devHoldPct: 1.2, lpLabel: 'Burned', authorities: 'Renounced', deployerAddress: D1_ADDR, deployerRecord: 'builder',
     });
     expect(all.items[2].facts).toMatchObject({ sig: { deployer: 'fail' }, lpLabel: 'Unlocked', deployerRecord: 'mixed' });
     expect(order((await viewer.get('/v1/coins?tab=sketchy')).json<CoinsResponse>())).toEqual(['cccc001']);
@@ -251,8 +396,11 @@ describe('GET /v1/insights', () => {
     const r = (await viewer.get('/v1/insights')).json<InsightsDTO>();
     // DONE: A, E, B, B2, B3, C, D, private, old
     expect(r.stats.checked).toBe(9);
-    // created today: A, E, B, B2, B3, C, running
-    expect(r.stats.today).toBe(7);
+    // DONE and finished today: A, E, B, B2, B3, C, D (created yesterday), private (minutes ago, so in the first
+    // hour of a UTC day some of them finished yesterday). Not the running check started today.
+    const finishedMinAgo = [10, 45, 20, 39, 59, 5, 30, 30];
+    expect(r.stats.today).toBe(finishedMinAgo.filter(m => Date.now() - min(m) >= startOfToday().getTime()).length);
+    expect(r.stats.today).toBeLessThanOrEqual(r.stats.checked);
     expect(r.stats.larpSince).toBe(-60);
     expect(r.sinceByVerdict).toEqual([
       { key: 'real', name: 'Real', n: 1, avg: 50 },
@@ -271,6 +419,58 @@ describe('GET /v1/insights', () => {
       { address: D1_ADDR, chain: 'sol', record: 'builder', checked: 1, real: 1 },
       { address: D2_ADDR, chain: 'base', record: 'mixed', checked: 2, real: 0 },
     ]);
+  });
+});
+
+describe('GET /v1/insights stats', () => {
+  it('counts "today" from the same finished checks as "checked", so it never exceeds it', async () => {
+    await resetState(h);
+    const t = await seedTarget(h.prisma);
+    const t2 = await seedTarget(h.prisma);
+    // finished today
+    await seedCheck(h.prisma, { targetId: t.id, shortId: 'tday001', isLatest: false, createdAt: today(min(12)), finishedAt: today(min(10)) });
+    // requested yesterday, finished today
+    await seedCheck(h.prisma, { targetId: t.id, shortId: 'tday002', createdAt: yesterday(), finishedAt: today(min(5)) });
+    // finished yesterday: all time only
+    await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday003', createdAt: yesterday(), finishedAt: yesterday() });
+    // private and finished today: counted like any finished check, in both numbers
+    await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday004', isPrivate: true, isLatest: false, createdAt: today(min(4)), finishedAt: today(min(3)) });
+    // started today but no verdict: in neither number
+    await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday005', status: 'RUNNING', createdAt: today(min(2)) });
+    await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday006', status: 'QUEUED', startedAt: null, createdAt: today(min(1)) });
+    await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday007', status: 'FAILED', isLatest: false, createdAt: today(min(3)), finishedAt: today(min(2)) });
+
+    const r = (await new Client(h.app).get('/v1/insights')).json<InsightsDTO>();
+    expect(r.stats).toMatchObject({ checked: 4, today: 3 });
+  });
+});
+
+describe('GET /v1/insights on a Postgres session that is not on UTC', () => {
+  // timestamps are stored as UTC wall-clock time (timestamp without time zone); a server whose Postgres runs in
+  // its OS zone must not move the 30-day "Since check, by verdict" window by that zone's offset
+  it.each(['Asia/Tokyo', 'America/New_York'])('keeps the 30-day window in UTC (%s)', async tz => {
+    const hz = await makeHarness({ DATABASE_URL: dbUrlInTimeZone(tz) });
+    try {
+      await resetState(hz);
+      expect((await hz.prisma.$queryRaw<{ TimeZone: string }[]>`SHOW TimeZone`)[0].TimeZone).toBe(tz);
+      const edge = Date.now() - TUNING.sinceWindowDays * 86400_000;
+      const coin = async (n: number, narBand: string, finishedAt: Date) => {
+        const t = await seedTarget(hz.prisma, {
+          kind: 'COIN', chain: 'SOL', ca: `TzMint${n}`, ticker: `TZ${n}`, name: `$TZ${n}`, key: `ca:sol:TzMint${n}`, lastPrice: '2',
+        });
+        await seedCheck(hz.prisma, {
+          targetId: t.id, shortId: `tzon00${n}`, narScore: 50, narBand, totalScore: 50, priceAtCheck: '1',
+          createdAt: new Date(finishedAt.getTime() - 60_000), finishedAt,
+        });
+      };
+      // 2 h inside and 2 h outside the window: a shift of more than 2 h (Tokyo +9, New York -4) would swap them
+      await coin(1, 'partly', new Date(edge + 2 * 3600_000));
+      await coin(2, 'larp', new Date(edge - 2 * 3600_000));
+      const r = (await new Client(hz.app).get('/v1/insights')).json<InsightsDTO>();
+      expect(r.sinceByVerdict).toEqual([{ key: 'partly', name: 'Partly real', n: 1, avg: 100 }]);
+    } finally {
+      await hz.close();
+    }
   });
 });
 
@@ -343,5 +543,24 @@ describe('GET /v1/bot/stats', () => {
     await mention(5, 'a4', 'IGNORED', today(min(5)), null);
     const r = (await new Client(h.app).get('/v1/bot/stats')).json<BotStatsDTO>();
     expect(r).toEqual({ repliesToday: 3, medianReplySeconds: 180, accounts: 4 });
+  });
+
+  it('prefers the stored reply time (repliedAt) when the bot recorded one', async () => {
+    await resetState(h);
+    const t = await seedTarget(h.prisma);
+    const createdAt = today(min(30));
+    const check = await seedCheck(h.prisma, { targetId: t.id, shortId: 'botr001', via: 'BOT', isLatest: false, createdAt, finishedAt: new Date(createdAt.getTime() + 100_000) });
+    await h.prisma.botMention.create({
+      data: { tweetId: 'twr1', authorId: 'r1', authorHandle: 'r1', text: '@ApeCheckBot?', status: 'REPLIED', createdAt, checkId: check.id, repliedAt: new Date(createdAt.getTime() + 130_000) },
+    });
+    // mentioned yesterday, answered today: counts as a reply today
+    const y = yesterday();
+    await h.prisma.botMention.create({
+      data: { tweetId: 'twr2', authorId: 'r2', authorHandle: 'r2', text: '@ApeCheckBot?', status: 'REPLIED', createdAt: y, repliedAt: new Date(Math.max(Date.now() - 1000, y.getTime() + 1000)) },
+    });
+    const r = (await new Client(h.app).get('/v1/bot/stats')).json<BotStatsDTO>();
+    expect(r.repliesToday).toBe(2);
+    expect(r.accounts).toBe(2);
+    expect(r.medianReplySeconds).toBeGreaterThanOrEqual(130);
   });
 });

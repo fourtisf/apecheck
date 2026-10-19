@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { hueOf, progressKey, type CheckEvidence, type CheckReportDTO } from '@apecheck/core';
 import { Client, APP_URL, makeHarness, resetState, seedCheck, seedTarget, type Harness } from './helpers';
-import { renamedText, shotUrl, titleOf } from '../src/mappers';
+import { coinVerdictOf, narrativeOf, renamedText, shotUrl, titleOf } from '../src/mappers';
 
 let h: Harness;
 beforeAll(async () => {
@@ -99,18 +99,20 @@ async function seedFullCoinCheck() {
       { checkId: check.id, idx: 2, tMs: 9100, status: 'INFO', text: 'Opening orbitswap.xyz in a clean browser', url: 'https://orbitswap.xyz', caption: 'Loading page', screenshot: `${check.id}/2.jpg` },
     ],
   });
+  // written in reverse: the report orders claims by Claim.idx, not by insertion
   await h.prisma.claim.createMany({
     data: [
-      { checkId: check.id, text: 'Live on Solana mainnet', source: 'site_hero', kind: 'mainnet', status: 'SEEN_WORKING', evidence: 'App opened (step 2)', stepIdx: 2 },
-      { checkId: check.id, text: 'Fair launch, no team bundle', source: 'x_bio', kind: 'fair_launch', status: 'CHECKS_OUT', evidence: '3% bundled', stepIdx: null },
-      { checkId: check.id, text: 'AI agent trades for you', source: 'docs', kind: 'ai_agent', status: 'NOT_SEEN', evidence: 'Coming soon', stepIdx: 1 },
-      { checkId: check.id, text: 'Open-source code', source: 'footer', kind: 'open_source', status: 'CONTRADICTED', evidence: 'No repo', stepIdx: null },
+      { checkId: check.id, idx: 3, text: 'Open-source code', source: 'footer', kind: 'open_source', status: 'CONTRADICTED', evidence: 'No repo', stepIdx: null },
+      { checkId: check.id, idx: 2, text: 'AI agent trades for you', source: 'docs', kind: 'ai_agent', status: 'NOT_SEEN', evidence: 'Coming soon', stepIdx: 1 },
+      { checkId: check.id, idx: 1, text: 'Fair launch, no team bundle', source: 'x_bio', kind: 'fair_launch', status: 'CHECKS_OUT', evidence: '3% bundled', stepIdx: null },
+      { checkId: check.id, idx: 0, text: 'Live on Solana mainnet', source: 'site_hero', kind: 'mainnet', status: 'SEEN_WORKING', evidence: 'App opened (step 2)', stepIdx: 2 },
     ],
   });
   await h.prisma.coinFacts.create({
     data: {
       checkId: check.id,
       deployerId: deployer.id,
+      deployerAddress: DEP,
       sigDeployer: 'WARN',
       sigBundle: 'OK',
       sigHolders: 'WARN',
@@ -195,10 +197,10 @@ describe('GET /v1/checks/:id', () => {
       areas: { Product: 75, Claims: 62, People: 50 },
       coinSummary: 'Holders are somewhat concentrated.',
       claims: [
-        { text: 'Live on Solana mainnet', source: 'site_hero', sourceLabel: 'From the site hero', kind: 'mainnet', status: 'seen_working', label: 'Seen working', signal: 'ok', evidence: 'App opened (step 2)', stepIdx: 2 },
-        { text: 'Fair launch, no team bundle', source: 'x_bio', sourceLabel: 'From the X bio', kind: 'fair_launch', status: 'checks_out', label: 'Checks out', signal: 'ok', evidence: '3% bundled', stepIdx: null },
-        { text: 'AI agent trades for you', source: 'docs', sourceLabel: 'From the docs', kind: 'ai_agent', status: 'not_seen', label: 'Not seen', signal: 'warn', evidence: 'Coming soon', stepIdx: 1 },
-        { text: 'Open-source code', source: 'footer', sourceLabel: 'From the site footer', kind: 'open_source', status: 'contradicted', label: 'Contradicted', signal: 'fail', evidence: 'No repo', stepIdx: null },
+        { text: 'Live on Solana mainnet', source: 'site_hero', sourceLabel: 'From the site hero', kind: 'mainnet', status: 'seen_working', result: 'seen_working', label: 'Seen working', signal: 'ok', evidence: 'App opened (step 2)', stepIdx: 2 },
+        { text: 'Fair launch, no team bundle', source: 'x_bio', sourceLabel: 'From the X bio', kind: 'fair_launch', status: 'checks_out', result: 'checks_out', label: 'Checks out', signal: 'ok', evidence: '3% bundled', stepIdx: null },
+        { text: 'AI agent trades for you', source: 'docs', sourceLabel: 'From the docs', kind: 'ai_agent', status: 'not_seen', result: 'not_seen', label: 'Not seen', signal: 'warn', evidence: 'Coming soon', stepIdx: 1 },
+        { text: 'Open-source code', source: 'footer', sourceLabel: 'From the site footer', kind: 'open_source', status: 'contradicted', result: 'contradicted', label: 'Contradicted', signal: 'fail', evidence: 'No repo', stepIdx: null },
       ],
       steps: [
         { idx: 0, t: 0, status: 'info', text: 'Contract on Solana: 7xKXt…gAsU', source: null, url: null, caption: null, screenshot: null },
@@ -207,7 +209,10 @@ describe('GET /v1/checks/:id', () => {
       ],
       stepsExpected: 3,
       progress: 1,
+      narrative: { verdict: 'LIKELY_REAL', score: 66 },
       coin: {
+        verdict: 'SKETCHY',
+        score: 55,
         sig: { deployer: 'warn', bundle: 'ok', holders: 'warn', lp: 'warn', authorities: 'ok' },
         bundlePct: 3.2,
         bundleWallets: 5,
@@ -229,6 +234,7 @@ describe('GET /v1/checks/:id', () => {
           fundedFrom: 'Binance hot wallet',
           firstSeen: '2025-02-01T00:00:00.000Z',
         },
+        deployerAddress: DEP,
         deployerText: '6 earlier tokens, 2 dead',
       },
       market: {
@@ -280,8 +286,86 @@ describe('GET /v1/checks/:id', () => {
       isPrivate: false,
       cardUrl: `${APP_URL}/card/full001.png`,
       reportUrl: `${APP_URL}/c/full001`,
+      report_url: `${APP_URL}/c/full001`,
+      post: null,
     };
     expect(r).toEqual(expected);
+  });
+
+  it('returns the report shape documented on the /api page (HANDOFF §9)', async () => {
+    // the /api example: narrative PARTLY_REAL 48, coin SKETCHY 44, total 46, one claim not_seen, report_url
+    const t = await seedTarget(h.prisma, { kind: 'SITE', chain: 'BASE', domain: 'orbitswap.xyz', name: 'orbitswap.xyz', key: 'site:orbitswap.xyz' });
+    const c = await seedCheck(h.prisma, {
+      targetId: t.id, shortId: 'apidoc1', status: 'DONE', isLatest: true, narScore: 48, narBand: 'partly', coinScore: 44, coinBand: 'sketchy',
+      totalScore: 46, summary: "The app loads but the main flow stops at 'Coming soon'.", finishedAt: new Date(),
+    });
+    await h.prisma.claim.create({ data: { checkId: c.id, idx: 0, text: 'Live on Base mainnet', source: 'site_hero', kind: 'mainnet', status: 'NOT_SEEN', evidence: 'Coming soon' } });
+    await h.prisma.coinFacts.create({ data: { checkId: c.id, sigDeployer: 'WARN', sigBundle: 'WARN', sigHolders: 'WARN', sigLp: 'WARN', sigAuthorities: 'OK' } });
+
+    const r = (await new Client(h.app).get('/v1/checks/apidoc1')).json<CheckReportDTO>();
+    // read the way a client written from the /api example reads it
+    const documented = {
+      id: r.id,
+      narrative: { verdict: r.narrative!.verdict, score: r.narrative!.score },
+      coin: { verdict: r.coin!.verdict, score: r.coin!.score },
+      total: r.total,
+      summary: r.summary,
+      claims: r.claims.map(x => ({ text: x.text, result: x.result })),
+      report_url: r.report_url,
+    };
+    expect(documented).toEqual({
+      id: 'apidoc1',
+      narrative: { verdict: 'PARTLY_REAL', score: 48 },
+      coin: { verdict: 'SKETCHY', score: 44 },
+      total: 46,
+      summary: "The app loads but the main flow stops at 'Coming soon'.",
+      claims: [{ text: 'Live on Base mainnet', result: 'not_seen' }],
+      report_url: `${APP_URL}/c/apidoc1`,
+    });
+    // the web's fields stay: the facts sit next to the verdict, the camelCase keys are still there
+    expect(r.coin).toMatchObject({ sig: { deployer: 'warn', authorities: 'ok' }, lpLabel: 'Unknown', deployer: null });
+    expect(r).toMatchObject({ narScore: 48, narBand: 'partly', coinScore: 44, coinBand: 'sketchy', reportUrl: r.report_url });
+    expect(r.claims[0].status).toBe('not_seen');
+  });
+
+  it('names every narrative and coin band with the /api verdict enum', async () => {
+    const nar: [number, string | null, string][] = [
+      [90, 'real', 'REAL'], [70, 'likely', 'LIKELY_REAL'], [48, 'partly', 'PARTLY_REAL'], [25, 'llarp', 'LIKELY_LARP'], [5, 'larp', 'LARP'],
+      // a row saved without a band: the score's band
+      [65, null, 'LIKELY_REAL'],
+    ];
+    for (const [score, band, verdict] of nar) expect(narrativeOf(score, band)).toEqual({ verdict, score });
+    expect(narrativeOf(null, 'partly')).toBeNull();
+
+    const coin: [number | null, string | null, string | null][] = [
+      [90, 'clean', 'CLEAN'], [70, 'ok', 'OK'], [44, 'sketchy', 'SKETCHY'], [10, 'rigged', 'RIGGED'], [40, null, 'SKETCHY'], [null, null, null],
+    ];
+    for (const [score, band, verdict] of coin) expect(coinVerdictOf(score, band)).toBe(verdict);
+  });
+
+  it('shows a known deployer wallet without launch history as an address with no record', async () => {
+    const t = await seedTarget(h.prisma, { kind: 'COIN', chain: 'BASE', ca: '0x' + 'ab'.repeat(20), ticker: 'NOHIST', name: '$NOHIST', key: `ca:base:0x${'ab'.repeat(20)}` });
+    const c = await seedCheck(h.prisma, { targetId: t.id, shortId: 'nohist1', status: 'DONE', isLatest: true, narScore: 40, coinScore: 50, totalScore: 45, narBand: 'partly', coinBand: 'sketchy', finishedAt: new Date() });
+    const creator = '0x' + 'cd'.repeat(20);
+    await h.prisma.coinFacts.create({
+      data: { checkId: c.id, deployerAddress: creator, sigDeployer: 'WARN', sigBundle: 'WARN', sigHolders: 'WARN', sigLp: 'WARN', sigAuthorities: 'OK', authorities: 'Mint renounced' },
+    });
+    const r = (await new Client(h.app).get('/v1/checks/nohist1')).json<CheckReportDTO>();
+    expect(r.deployer).toEqual({ address: creator, chain: 'base', record: null });
+    expect(r.coin).toMatchObject({ deployer: null, deployerAddress: creator, deployerText: null });
+    expect(await h.prisma.deployer.count()).toBe(0);
+  });
+
+  it('carries the X post a post check read (evidence.post)', async () => {
+    const t = await seedTarget(h.prisma, { kind: 'POST', handle: 'kairolabs', name: '@kairolabs', key: 'post:1849' });
+    const evidence: CheckEvidence = { post: { id: '1849', author: 'kairolabs', authorId: '42', text: 'Kairo v2 is live. Try it.', createdAt: '2026-10-18T10:00:00.000Z' } };
+    await seedCheck(h.prisma, { targetId: t.id, shortId: 'post001', status: 'DONE', isLatest: true, narScore: 50, totalScore: 50, narBand: 'partly', evidence: evidence as object, finishedAt: new Date() });
+    const r = (await new Client(h.app).get('/v1/checks/post001')).json<CheckReportDTO>();
+    expect(r.post).toEqual({ author: 'kairolabs', text: 'Kairo v2 is live. Try it.', createdAt: '2026-10-18T10:00:00.000Z' });
+
+    const t2 = await seedTarget(h.prisma, { kind: 'POST', handle: 'other', name: '@other', key: 'post:1850' });
+    await seedCheck(h.prisma, { targetId: t2.id, shortId: 'post002', status: 'DONE', isLatest: true, narScore: 50, totalScore: 50, narBand: 'partly', evidence: { post: null }, finishedAt: new Date() });
+    expect((await new Client(h.app).get('/v1/checks/post002')).json<CheckReportDTO>().post).toBeNull();
   });
 
   it('marks the requester\'s own check as mine and hides private checks from everyone else', async () => {
@@ -317,7 +401,9 @@ describe('GET /v1/checks/:id', () => {
       stepsExpected: 9,
       cardUrl: null,
       reportUrl: `${APP_URL}/c/run0001`,
+      report_url: `${APP_URL}/c/run0001`,
       hasCoin: false,
+      narrative: null,
       coin: null,
       market: null,
       checkedAt: null,

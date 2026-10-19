@@ -125,6 +125,33 @@ describe('CORS', () => {
     const res = await h.app.inject({ method: 'GET', url: '/v1/me', headers: { origin: 'https://evil.example' } });
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
+
+  it('outside production also accepts any local dev origin', async () => {
+    for (const origin of ['http://localhost:3123', 'http://127.0.0.1:4555', 'http://localhost']) {
+      const res = await h.app.inject({ method: 'GET', url: '/v1/me', headers: { origin } });
+      expect(res.headers['access-control-allow-origin']).toBe(origin);
+    }
+    for (const origin of ['https://localhost:3123', 'http://localhost.evil.example', 'http://127.0.0.1.evil.example:80', 'http://10.0.0.1:3000']) {
+      const res = await h.app.inject({ method: 'GET', url: '/v1/me', headers: { origin } });
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    }
+  });
+
+  it('in production only CORS_ORIGINS and APP_URL match, exactly', async () => {
+    const prod = await makeHarness({ NODE_ENV: 'production' });
+    try {
+      for (const origin of ['http://localhost:3123', 'http://127.0.0.1:3000']) {
+        const res = await prod.app.inject({ method: 'GET', url: '/v1/me', headers: { origin } });
+        expect(res.headers['access-control-allow-origin']).toBeUndefined();
+      }
+      for (const origin of [APP_URL, 'http://localhost:3000']) {
+        const res = await prod.app.inject({ method: 'GET', url: '/v1/me', headers: { origin } });
+        expect(res.headers['access-control-allow-origin']).toBe(origin);
+      }
+    } finally {
+      await prod.close();
+    }
+  });
 });
 
 describe('/shots', () => {

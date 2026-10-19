@@ -49,7 +49,8 @@ export async function makeHarness(envOverrides: Record<string, string> = {}): Pr
   const shotsDir = path.join(tmpRoot, 'shots');
   fs.mkdirSync(shotsDir);
   const env = testEnv({ SCREENSHOT_DIR: shotsDir, ...envOverrides });
-  const prisma = new PrismaClient({ datasourceUrl: TEST_DB_URL });
+  // TEST_DB_URL unless a test overrides DATABASE_URL (e.g. to run the session in another TimeZone)
+  const prisma = new PrismaClient({ datasourceUrl: env.DATABASE_URL });
   const redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: 2 });
   const queueConn = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
   const queue = new Queue<CheckJob>(QUEUES.checks, { connection: queueConn });
@@ -78,6 +79,13 @@ export async function makeHarness(envOverrides: Record<string, string> = {}): Pr
       fs.rmSync(tmpRoot, { recursive: true, force: true });
     },
   };
+}
+
+/** TEST_DB_URL with the Postgres session TimeZone set (what a server whose Postgres isn't on UTC gets). */
+export function dbUrlInTimeZone(tz: string): string {
+  const u = new URL(TEST_DB_URL);
+  u.searchParams.set('options', `-c TimeZone=${tz}`);
+  return u.toString();
 }
 
 const TABLES = [

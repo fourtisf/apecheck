@@ -95,7 +95,9 @@ async function sinceByBand(prisma: PrismaClient, opts: { since?: Date; bands?: s
     Prisma.sql`t."lastPrice" IS NOT NULL`,
     Prisma.sql`c."narBand" IS NOT NULL`,
   ];
-  if (opts.since) conds.push(Prisma.sql`c."finishedAt" >= ${opts.since}`);
+  // "finishedAt" is a timestamp without time zone holding UTC. A bound Date arrives as timestamptz and Postgres
+  // would compare in the session TimeZone (shifting the window by its UTC offset), so bind ISO text and cast.
+  if (opts.since) conds.push(Prisma.sql`c."finishedAt" >= ${opts.since.toISOString()}::timestamp`);
   if (opts.bands?.length) conds.push(Prisma.sql`c."narBand" IN (${Prisma.join(opts.bands)})`);
   return prisma.$queryRaw<BandAvg[]>`
     SELECT c."narBand" AS band, COUNT(*)::int AS n,
@@ -121,8 +123,9 @@ export function registerInsightRoutes(app: FastifyInstance, deps: AppDeps) {
     const windowStart = new Date(now.getTime() - TUNING.sinceWindowDays * 86400_000);
 
     const [checked, todayCount, larp, byBand, deployers] = await Promise.all([
+      // the two hero numbers count the same thing (finished checks), so "today" is a subset of "checked"
       prisma.check.count({ where: { status: 'DONE' } }),
-      prisma.check.count({ where: { createdAt: { gte: today } } }),
+      prisma.check.count({ where: { status: 'DONE', finishedAt: { gte: today } } }),
       sinceByBand(prisma, { bands: ['llarp', 'larp'] }),
       sinceByBand(prisma, { since: windowStart }),
       deployerRows(prisma, null),
@@ -151,14 +154,18 @@ export function registerInsightRoutes(app: FastifyInstance, deps: AppDeps) {
     const today = startOfUtcDay();
     const [replied, accounts] = await Promise.all([
       prisma.botMention.findMany({
-        where: { status: 'REPLIED', createdAt: { gte: today } },
-        select: { createdAt: true, check: { select: { finishedAt: true } } },
+        // a reply posted today (repliedAt, M2), or one recorded without a time whose mention came in today
+        where: { status: 'REPLIED', OR: [{ repliedAt: { gte: today } }, { repliedAt: null, createdAt: { gte: today } }] },
+        select: { createdAt: true, repliedAt: true, check: { select: { finishedAt: true } } },
       }),
       prisma.botMention.groupBy({ by: ['authorId'] }).then(g => g.length),
     ]);
-    // reply time isn't stored; the check finishing is when the reply goes out
+    // the reply's own time when the bot stored it (M2); else the check finishing, which is when the reply goes out
     const secs = replied
-      .map(m => (m.check?.finishedAt ? (m.check.finishedAt.getTime() - m.createdAt.getTime()) / 1000 : null))
+      .map(m => {
+        const at = m.repliedAt ?? m.check?.finishedAt ?? null;
+        return at ? (at.getTime() - m.createdAt.getTime()) / 1000 : null;
+      })
       .filter((s): s is number => s != null && s >= 0)
       .sort((a, b) => a - b);
     let median: number | null = null;
