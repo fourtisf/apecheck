@@ -203,6 +203,9 @@ model Claim {
   status   ClaimStatus
   evidence String
   stepIdx  Int?        // the CheckStep the evidence relies on
+  idx      Int         @default(0) // added: position in the report (the worker writes 0..n-1; the API sorts by it)
+
+  @@index([checkId, idx])
 }
 
 model CoinFacts {
@@ -210,6 +213,7 @@ model CoinFacts {
   check          Check    @relation(fields: [checkId], references: [id], onDelete: Cascade)
   deployerId     String?
   deployer       Deployer? @relation(fields: [deployerId], references: [id])
+  deployerAddress String? // added: the deployer wallet whenever it is known, even without launch history (no Deployer row then)
   sigDeployer    Signal
   sigBundle      Signal
   sigHolders     Signal
@@ -351,6 +355,7 @@ model BotMention {
   checkId        String?       @unique
   check          Check?        @relation(fields: [checkId], references: [id])
   replyTweetId   String?
+  repliedAt      DateTime?     // added: when the bot's reply was posted (M2); /v1/bot/stats prefers it
   createdAt      DateTime      @default(now())
 
   @@index([authorId, createdAt])

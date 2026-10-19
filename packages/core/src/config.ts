@@ -55,6 +55,10 @@ export const TUNING = {
   gitThinCommits: 10,
   /** GitHub: a repo with no push for this many days counts as stale. */
   gitStaleDays: 120,
+  /** GitHub: a share of commits strictly above this inside CONFIG.gitBurstHours of the anchor counts as a launch burst. */
+  gitBurstShare: 0.5,
+  /** GitHub: no burst is flagged with fewer commits than this. */
+  gitBurstMinCommits: 3,
   /** X: followers below this with a young account adds to the warn case. */
   acctLowFollowers: 500,
   /** Docs: fewer pages than this counts as thin docs (warn). */
@@ -67,4 +71,8 @@ export const TUNING = {
   sinceWindowDays: 30,
   /** Bot: ignore accounts younger than this. */
   botMinAccountAgeDays: 7,
+  /** Screenshots and saved share cards of checks finished longer ago than this are deleted (HANDOFF §12.6)... */
+  shotsKeepDays: 30,
+  /** ...except for checks in the top this-many of the feed's Most checked, Most real and Least real lists. */
+  shotsKeepTop: 50,
 } as const;

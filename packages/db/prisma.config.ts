@@ -1,5 +1,5 @@
 /**
- * Prisma CLI config. Loads the repo-root .env (one .env for the whole monorepo),
+ * Prisma CLI config. Loads the repo-root .env (one .env for the whole monorepo, or APECHECK_ENV_FILE),
  * so `pnpm --filter @apecheck/db prisma migrate deploy` works from any cwd.
  */
 import fs from 'node:fs';
@@ -18,7 +18,10 @@ function repoRoot(start: string): string {
 }
 
 const root = repoRoot(process.cwd());
-const envFile = path.join(root, '.env');
+// same file the app processes read (loadEnv in @apecheck/core/node): APECHECK_ENV_FILE, else <root>/.env.
+// Variables already set win, so `DATABASE_URL=... prisma migrate deploy` (test setups) targets that database.
+const chosen = process.env.APECHECK_ENV_FILE?.trim();
+const envFile = chosen ? path.resolve(root, chosen) : path.join(root, '.env');
 if (fs.existsSync(envFile)) config({ path: envFile, quiet: true } as Parameters<typeof config>[0]);
 
 export default defineConfig({

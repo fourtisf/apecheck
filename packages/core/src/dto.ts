@@ -14,6 +14,9 @@ export type CheckStatusS = 'queued' | 'running' | 'done' | 'failed';
 export type StepStatusS = 'info' | 'ok' | 'warn' | 'fail';
 export type ViaS = 'web' | 'bot' | 'api';
 export type TierS = 'free' | 'pro' | 'max';
+/** Verdict enums of the public API, as on the /api page (labels.ts narVerdictEnum / coinVerdictEnum). */
+export type NarVerdictS = 'REAL' | 'LIKELY_REAL' | 'PARTLY_REAL' | 'LIKELY_LARP' | 'LARP';
+export type CoinVerdictS = 'CLEAN' | 'OK' | 'SKETCHY' | 'RIGGED';
 
 export interface StepDTO {
   idx: number;
@@ -38,6 +41,8 @@ export interface ClaimDTO {
   sourceLabel: string;
   kind: ClaimKind | string;
   status: ClaimStatus;
+  /** same value as `status`: the key the /api page documents (`claims[].result`) */
+  result: ClaimStatus;
   /** "Seen working" | "Not seen" | "Contradicted" | "Checks out" */
   label: string;
   /** pill colour */
@@ -72,9 +77,23 @@ export interface CoinFactsDTO {
   holders: number | null;
   liquidityUsd: number | null;
   pairCreatedAt: string | null;
+  /** the deployer's record; null while its launch history is unknown (no DevRadar), even when the address is known */
   deployer: DeployerDTO | null;
+  /**
+   * The deployer wallet whenever it is known (Etherscan creator, Tron origin address, DevRadar), also when its
+   * launch history isn't: then `deployer` is null and the UI shows the address with "Launch history unavailable".
+   */
+  deployerAddress?: string | null;
   /** "3 earlier tokens, 2 dead" — deployerLine() */
   deployerText: string | null;
+}
+
+/** CheckReportDTO.coin: the coin verdict as on the /api page (`coin: { verdict, score }`) plus the coin facts. */
+export interface ReportCoinDTO extends CoinFactsDTO {
+  /** "SKETCHY"; null when the coin couldn't be scored */
+  verdict: CoinVerdictS | null;
+  /** same as CheckSummaryDTO.coinScore */
+  score: number | null;
 }
 
 export interface MarketDTO {
@@ -173,7 +192,8 @@ export interface CheckSummaryDTO {
   mine: boolean;
   createdAt: string;
   checkedAt: string | null;
-  deployer: { address: string; chain: ChainKey; record: DeployerRecord } | null;
+  /** the coin's deployer wallet; `record` is null when its launch history is unknown */
+  deployer: { address: string; chain: ChainKey; record: DeployerRecord | null } | null;
 }
 
 export interface CheckReportDTO extends CheckSummaryDTO {
@@ -188,7 +208,16 @@ export interface CheckReportDTO extends CheckSummaryDTO {
   stepsExpected: number;
   /** 0–1 while running */
   progress: number;
-  coin: CoinFactsDTO | null;
+  /**
+   * The narrative verdict as on the /api page: `{ verdict: "PARTLY_REAL", score: 48 }`
+   * (same values as narBand / narScore). null until the check has a narrative score.
+   */
+  narrative: { verdict: NarVerdictS; score: number } | null;
+  /**
+   * The coin verdict as on the /api page (`verdict: "SKETCHY"`, `score`) together with the coin facts.
+   * null when the check has no coin facts (no coin, or the coin couldn't be read).
+   */
+  coin: ReportCoinDTO | null;
   market: MarketDTO | null;
   people: PeopleDTO;
   asksList: AskDTO[];
@@ -202,11 +231,20 @@ export interface CheckReportDTO extends CheckSummaryDTO {
   /** /card/<id>.png on the web origin */
   cardUrl: string | null;
   reportUrl: string;
+  /** same as reportUrl: the key the /api page documents */
+  report_url: string;
   /**
    * The X post a post check read (Check.evidence.post), for the /bot page's example thread.
    * Absent or null for other kinds, or when the post couldn't be fetched.
    */
   post?: { author: string; text: string; createdAt: string | null } | null;
+  /**
+   * The bot's reply on X, for a check the bot ran (via 'bot') once that reply was actually posted: the mention that
+   * asked for it as it was posted (BotMention author handle, text, time) and when the reply went out. Absent until
+   * then (and for every check that didn't come from the bot), so the /bot page never shows a reply that wasn't posted
+   * or words someone didn't write.
+   */
+  botReply?: { mention: { author: string; text: string; createdAt: string }; repliedAt: string } | null;
 }
 
 export interface LiveCheckDTO {
@@ -233,6 +271,10 @@ export interface FeedResponse { items: CheckSummaryDTO[]; total: number; nextCur
 export interface LiveResponse { items: LiveCheckDTO[] }
 
 export interface InsightsDTO {
+  /**
+   * checked: finished checks, all time. today: finished checks since 00:00 UTC (a subset of `checked`, so never more).
+   * larpSince: average since-check % of the latest public LIKELY LARP / LARP coin verdicts.
+   */
   stats: { checked: number; today: number; larpSince: number | null };
   sinceByVerdict: { key: NarKey; name: string; n: number; avg: number }[];
   mostChecked: (CheckSummaryDTO & { checksToday: number })[];
@@ -240,7 +282,7 @@ export interface InsightsDTO {
 }
 
 export interface CoinRowDTO extends CheckSummaryDTO {
-  facts: Pick<CoinFactsDTO, 'sig' | 'bundlePct' | 'top10Pct' | 'devHoldPct' | 'lpLabel' | 'authorities'> & {
+  facts: Pick<CoinFactsDTO, 'sig' | 'bundlePct' | 'top10Pct' | 'devHoldPct' | 'lpLabel' | 'authorities' | 'deployerAddress'> & {
     deployerRecord: DeployerRecord | null;
   };
 }

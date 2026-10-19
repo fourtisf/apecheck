@@ -44,6 +44,14 @@ export const EnvZ = z.object({
    * private/loopback addresses (local fixture sites for the e2e test). Ignored when NODE_ENV=production.
    */
   SSRF_ALLOW_HOSTS: list(),
+  /**
+   * The isolated browser host (deploy/browser, DEPLOY.md §6): ws://127.0.0.1:9223/<BROWSER_WS_PATH>. When set,
+   * worker-checks never starts Chromium itself but connects there. Required when NODE_ENV=production; empty in
+   * dev/test, where Chromium runs in-process.
+   */
+  BROWSER_WS_ENDPOINT: optStr(),
+  /** with a remote browser: the fixed port of worker-checks' SSRF guard proxy, the only port the browser user may reach (0 = any, tests) */
+  BROWSER_GUARD_PORT: int(9224),
 
   X_API_KEY: optStr(),
   X_API_SECRET: optStr(),
