@@ -18,7 +18,8 @@ import type { ChainKey, Env } from '@apecheck/core';
 export interface HttpRequest {
   method?: 'GET' | 'POST' | 'HEAD';
   headers?: Record<string, string>;
-  body?: string;
+  /** a string (JSON, form) or raw bytes (multipart uploads); ignored for GET/HEAD */
+  body?: string | Buffer;
   /** default 10 000 */
   timeoutMs?: number;
   /** stop reading after this many bytes (default 2 MB) */
@@ -243,6 +244,20 @@ export interface XPost {
   replyToId: string | null;
   quotedId: string | null;
   author?: XUser | null;
+  /**
+   * mentions() only: [start, end) of the part the author typed, as JS string indices into `text`. For a reply,
+   * X puts the auto-added @mentions of the thread before `start`; a mention the author typed is at or after it.
+   * null when X sent no range.
+   */
+  displayTextRange?: [number, number] | null;
+  /** mentions() only: the author of the post this one replies to (in_reply_to_user_id) */
+  inReplyToUserId?: string | null;
+  /**
+   * mentions() only: the post this one replies to, taken from the same response (includes.tweets, with its
+   * author). null when it is not a reply, or X didn't include the parent (deleted, protected, no access):
+   * then use `replyToId` + getPost().
+   */
+  repliedTo?: XPost | null;
 }
 export interface XSource {
   /** reads need X_BEARER_TOKEN */
@@ -256,9 +271,20 @@ export interface XSource {
   getUserById(id: string): Promise<XUser | null>;
   /** Handle-rename history needs a third-party source: stub, always null for now (HANDOFF §4 Stage D). */
   renameCount(handle: string): Promise<number | null>;
-  /** M2: mentions of the bot since since_id (GET /2/users/:id/mentions) */
+  /**
+   * M2: mentions of the bot newer than `sinceId` (GET /2/users/:id/mentions, OAuth 1.0a owned read; Bearer when
+   * only X_BEARER_TOKEN is set), oldest first, each with `author` (incl. createdAt), `displayTextRange`,
+   * `inReplyToUserId` and `repliedTo`. `newestId` is the next since_id; it is null when nothing new arrived OR
+   * the walk was cut short (rate limit / error on a later page): keep the old since_id then — the posts that did
+   * arrive are still returned, and re-reading them is harmless because BotMention is unique on the tweet id.
+   * Never throws; reasons go to lastError. A stub (no keys / no bot user id) returns { posts: [], newestId: null }.
+   */
   mentions?(sinceId: string | null): Promise<{ posts: XPost[]; newestId: string | null }>;
-  /** M2: reply with optional media; returns the new post id */
+  /**
+   * M2: reply to `inReplyToId` (POST /2/tweets, OAuth 1.0a) with the PNG attached when given (v2 chunked media
+   * upload; if the upload fails the text is posted alone). Returns the new post id, or null (not configured,
+   * duplicate content, rate limit, 4xx/5xx — the reason is in lastError). Never throws.
+   */
   reply?(inReplyToId: string, text: string, mediaPng?: Buffer | null): Promise<string | null>;
 }
 

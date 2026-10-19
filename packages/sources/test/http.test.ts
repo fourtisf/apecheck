@@ -46,6 +46,12 @@ function handler(req: http.IncomingMessage, res: http.ServerResponse) {
       req.on('end', () => res.end(`${req.method} ${body} auth=${req.headers.authorization ?? '-'}`));
       return;
     }
+    case '/bytes': {
+      const parts: Buffer[] = [];
+      req.on('data', (d: Buffer) => parts.push(d));
+      req.on('end', () => res.end(JSON.stringify({ hex: Buffer.concat(parts).toString('hex'), type: req.headers['content-type'] ?? null, length: req.headers['content-length'] ?? null })));
+      return;
+    }
     case '/to-localhost-auth': return res.writeHead(302, { location: `http://localhost:${port}/method` }).end();
     case '/head': return res.writeHead(200, { 'x-len': '5' }).end('hello');
     default: return res.writeHead(404).end('not found');
@@ -135,6 +141,16 @@ describe('createHttp: basics', () => {
     expect((await h.request(`${base()}/method`, { method: 'POST', body: 'x=1' })).text).toBe('POST x=1 auth=-');
     expect((await h.request(`${base()}/post-303`, { method: 'POST', body: 'x=1' })).text).toBe('GET  auth=-');
     expect((await h.request(`${base()}/post-307`, { method: 'POST', body: 'x=1' })).text).toBe('POST x=1 auth=-');
+  });
+
+  it('POST sends a Buffer body byte for byte (multipart uploads)', async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x0d, 0x0a, 0x1a, 0x0a, 0x80, 0x00]);
+    const res = await devHttp().request(`${base()}/bytes`, {
+      method: 'POST',
+      body: bytes,
+      headers: { 'content-type': 'multipart/form-data; boundary=b' },
+    });
+    expect(JSON.parse(res.text)).toEqual({ hex: bytes.toString('hex'), type: 'multipart/form-data; boundary=b', length: String(bytes.length) });
   });
 });
 

@@ -38,7 +38,7 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
 | Solana RPC | `adapters/solana.ts` | `RPC_SOLANA`, `HELIUS_API_KEY` | `RPC_SOLANA`, else `https://mainnet.helius-rpc.com/?api-key=…`, else the public `https://api.mainnet-beta.solana.com` (rate limited, warned once). |
 | TronGrid | `adapters/tron.ts` | `TRONGRID_API_KEY` (header `TRON-PRO-API-KEY`) | Works without a key at a low rate. |
 | GitHub | `adapters/github.ts` | `GITHUB_TOKEN` | Works unauthenticated at 60 requests/hour (warned once). Rate limits (403 with `x-ratelimit-remaining: 0`, or 429) → `[]` + `lastError`. |
-| X API v2 | `adapters/x.ts` | `X_BEARER_TOKEN` (reads); `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` (`canPost`) | Without the bearer token every read is `null`, listed as `x`. `renameCount()` is always `null` (needs a third-party source). `mentions()` / `reply()` arrive in M2. |
+| X API v2 | `adapters/x.ts`, `oauth1.ts` | `X_BEARER_TOKEN` (reads); `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` (`canPost`: the bot); `X_BOT_USER_ID` (optional), `X_BOT_HANDLE` | Without the bearer token every post/account read is `null`, listed as `x`. `renameCount()` is always `null` (needs a third-party source). Without the four user keys `reply()` is `null` and `mentions()` uses the Bearer token, or returns `{ posts: [], newestId: null }` when that is missing too (warned once each). |
 | Fourtis | `adapters/fourtis.ts` | `FOURTIS_API_URL`, `FOURTIS_API_KEY` | Without both, `null`, listed as `fourtis`; `coinFacts` uses the public fallbacks. |
 
 ### What each one does
@@ -78,6 +78,63 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
   spec plus `note_tweet` (full text of posts over 280 characters). URLs are the `unwound_url` / `expanded_url`
   (the post's own photo/video links are dropped), cashtags upper-cased, `replyToId` / `quotedId` from
   `referenced_tweets`. `getUser` / `getUserById` add `expansions=pinned_tweet_id` for `pinnedText`.
+  The bot side (`mentions()`, `reply()`) is described in [X bot](#x-bot-m2) below.
+
+## X bot (M2)
+
+The bot (`apps/worker` bot queue) talks to X only through `sources.x.mentions()` and `sources.x.reply()`.
+Both never throw: failures resolve to empty / `null` and the reason is in `x.lastError` (and the current
+`captureErrors()` scope).
+
+**Keys.** All four OAuth 1.0a user keys of the bot account (`X_API_KEY` = consumer key, `X_API_SECRET` = consumer
+secret, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET`, from the X developer portal with Read and Write permission) make
+`canPost` true. They stay in env only (HANDOFF §11). `X_BOT_USER_ID` is the bot's numeric user id; when it is empty
+the adapter looks it up once per process (`GET /2/users/me` with the user keys, else `GET /2/users/by/username/
+{X_BOT_HANDLE}` with the Bearer token) and warns once that setting it saves the call.
+
+**Signing** (`src/oauth1.ts`, no dependency). OAuth 1.0a HMAC-SHA1 per RFC 5849: RFC 3986 percent-encoding;
+base string = `METHOD&enc(base URL)&enc(sorted params)` where the params are the URL query + the `oauth_*` params
+(+ the fields of an `application/x-www-form-urlencoded` body; JSON and multipart bodies are never signed); key =
+`enc(consumerSecret)&enc(tokenSecret)`; header `Authorization: OAuth oauth_consumer_key="…", …`. Tested against
+the X docs vectors ("Creating a signature" → `hCtSmYh+iHYCEqBWrE7C7hYmtUk=` for the 1.1 URL, "Authorizing a
+request" → `tnnArxj06cWHq44gCs1OSKk/jLY=`, which that page computed for the v1 URL), the RFC 5849 §3.4.1 example,
+and vectors from Python oauthlib. Signed requests never follow redirects.
+
+**`mentions(sinceId)`** — `GET https://api.x.com/2/users/{id}/mentions`, an **owned read** (the cheapest read type
+under pay-per-use) signed with the user keys; Bearer when only `X_BEARER_TOKEN` is set. Params: `since_id` (when
+given), `max_results=100`, `expansions=author_id,referenced_tweets.id,referenced_tweets.id.author_id,entities.mentions.username`,
+`tweet.fields=created_at,entities,conversation_id,referenced_tweets,author_id,in_reply_to_user_id,display_text_range,note_tweet`,
+`user.fields=created_at,username,name,public_metrics,verified,description,entities,url`.
+
+- Follows `meta.next_token` up to 5 pages when `sinceId` is set (more → the oldest are skipped, noted in `lastError`);
+  with `sinceId = null` only the newest page is read, so the first poll doesn't answer an old backlog.
+- Returns posts **oldest first**. Each `XPost` has `author` (with `createdAt` for the 7-day rule), plus
+  `displayTextRange` (`[start, end)` as JS indices into `text`; X puts the auto-added reply @mentions before
+  `start`, so a mention typed by the author is at or after it), `inReplyToUserId`, and `repliedTo`: the parent
+  post from `includes.tweets` with its author (null when it is not a reply or X didn't include it — deleted or
+  protected; use `replyToId` + `getPost()` then). Long posts use `note_tweet` text and entities.
+- `newestId` = `meta.newest_id` of the first page: the next `since_id`. It is `null` when nothing new arrived **or**
+  the walk stopped on a later page (429 / error): keep the old `since_id`; the posts that did arrive are returned,
+  and reading them again is harmless because `BotMention` is unique on the tweet id.
+- 429: `lastError = "x.mentions: rate limited until <x-rate-limit-reset>"`, and calls before that time return
+  empty without a request.
+
+**`reply(inReplyToId, text, mediaPng?)`** — returns the new post id or `null`.
+
+1. With a PNG: the v2 chunked upload (the endpoints `twitter-api-v2@1.29.1` uses), all signed, no body params in
+   the signature:
+   `POST /2/media/upload/initialize` JSON `{ media_type: "image/png", total_bytes, media_category: "tweet_image" }` → `data.id`;
+   `POST /2/media/upload/{id}/append` multipart/form-data `segment_index`, `media` (≤ 1 MB per chunk, 30 s timeout);
+   `POST /2/media/upload/{id}/finalize`; when `data.processing_info` is set, `GET /2/media/upload?command=STATUS&media_id={id}`
+   after `check_after_secs` (clamped 1–10 s, at most 10 polls / 60 s) until `succeeded`.
+   **If any of that fails, the text is posted without the card** (`lastError = "x.uploadMedia: …"`, one warning line).
+2. `POST /2/tweets` JSON `{ text, reply: { in_reply_to_tweet_id }, media?: { media_ids: [id] } }` → `data.id`.
+
+Failures → `null` + `lastError`: `x.reply: duplicate content (HTTP 403)`, other 403s with X's reason (e.g. the reply
+restriction when the author never mentioned the bot), `x.reply: rate limited until …` (the latest exhausted window
+of `x-rate-limit-*`, `x-user-limit-24hour-*`, `x-app-limit-24hour-*`; later replies inside it fail fast), 5xx,
+invalid id / empty text (no request). The caller marks the mention FAILED and may retry. The adapter does not
+count characters: the caller keeps `text` within 280.
 
 ### Fourtis endpoints (placeholders)
 
@@ -112,7 +169,7 @@ chain's public fallbacks. **Fourtis values win**; every section records its `sou
 
 ## HTTP client (`createHttp(env)`)
 
-undici, no global state. User-Agent `Mozilla/5.0 (compatible; ApeCheckBot/1.0; +https://apecheck.io/bot)`,
+undici, no global state. `body` may be a string or a `Buffer` (multipart uploads). User-Agent `Mozilla/5.0 (compatible; ApeCheckBot/1.0; +https://apecheck.io/bot)`,
 default timeout 10 s (covers redirects and the body), default `maxBytes` 2 MB counted after decompression
 (`truncated: true` when cut), gzip/deflate/br decoded. Redirects are followed by hand (max 5); a cross-origin hop
 drops `Authorization`/`Cookie`; 303 (and 301/302 after POST) turn into GET. `json()` throws `HttpError`
@@ -178,4 +235,7 @@ npx tsc -p packages/sources/tsconfig.json  # typecheck
 LIVE_TESTS=1 npx vitest run test/github.test.ts   # optional live GitHub call through HTTPS_PROXY (LIVE_GITHUB_REPO=owner/repo)
 ```
 
-Fixtures in `test/fixtures/` follow the documented response shapes of each API.
+Fixtures in `test/fixtures/` follow the documented response shapes of each API (`x-mentions-page*.json`: two
+pages of `GET /2/users/:id/mentions` with `includes.users/tweets`, `display_text_range`, `note_tweet`, a missing
+parent in `errors` and `meta.next_token`). `test/x-bot.test.ts` drives the bot side through a fake Http that
+records every request and re-verifies each OAuth signature.

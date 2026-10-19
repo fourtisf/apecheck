@@ -158,7 +158,7 @@ export function createHttp(env: HttpEnv, options: HttpOptions = {}): Http {
     const guard = req.guard === true;
     const follow = req.redirect !== false;
     let method: 'GET' | 'POST' | 'HEAD' = req.method ?? 'GET';
-    let body = method === 'GET' || method === 'HEAD' ? undefined : req.body;
+    let body: string | Buffer | undefined = method === 'GET' || method === 'HEAD' ? undefined : req.body;
     const headers: Record<string, string> = {
       'user-agent': USER_AGENT,
       accept: '*/*',

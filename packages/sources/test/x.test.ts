@@ -16,9 +16,11 @@ describe('X adapter: stub', () => {
     expect(await x.getUserById('1500000000000000001')).toBeNull();
     expect(await x.renameCount('kairolabs')).toBeNull();
     expect(http.calls).toHaveLength(0);
+    // the bot methods exist but are stubs too (see x-bot.test.ts)
     const source: XSource = x;
-    expect(source.mentions).toBeUndefined();
-    expect(source.reply).toBeUndefined();
+    expect(await source.mentions!(null)).toEqual({ posts: [], newestId: null });
+    expect(await source.reply!('1846629381234567890', 'hi')).toBeNull();
+    expect(http.calls).toHaveLength(0);
   });
 
   it('canPost needs all four OAuth 1.0a keys', () => {

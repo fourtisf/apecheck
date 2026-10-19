@@ -1,0 +1,209 @@
+{
+  "data": [
+    {
+      "id": "1847000000000000300",
+      "text": "@kairolabs 🚀 @ApeCheckBot check this https://t.co/m3pic9",
+      "author_id": "1600000000000000002",
+      "created_at": "2026-10-19T09:15:02.000Z",
+      "conversation_id": "1846629381234567890",
+      "in_reply_to_user_id": "1500000000000000001",
+      "display_text_range": [
+        11,
+        36
+      ],
+      "referenced_tweets": [
+        {
+          "type": "replied_to",
+          "id": "1846629381234567890"
+        }
+      ],
+      "entities": {
+        "mentions": [
+          {
+            "start": 0,
+            "end": 10,
+            "username": "kairolabs",
+            "id": "1500000000000000001"
+          },
+          {
+            "start": 13,
+            "end": 25,
+            "username": "ApeCheckBot",
+            "id": "1800000000000000000"
+          }
+        ],
+        "urls": [
+          {
+            "start": 37,
+            "end": 56,
+            "url": "https://t.co/m3pic9",
+            "expanded_url": "https://x.com/degenfren/status/1847000000000000300/photo/1",
+            "display_url": "pic.x.com/m3pic9",
+            "media_key": "3_1847000000000000301"
+          }
+        ]
+      },
+      "edit_history_tweet_ids": [
+        "1847000000000000300"
+      ]
+    },
+    {
+      "id": "1847000000000000200",
+      "text": "@ApeCheckBot is 0x1111111111111111111111111111111111111111 legit? $KAI",
+      "author_id": "1700000000000000003",
+      "created_at": "2026-10-19T09:10:00.000Z",
+      "conversation_id": "1847000000000000200",
+      "display_text_range": [
+        0,
+        70
+      ],
+      "entities": {
+        "mentions": [
+          {
+            "start": 0,
+            "end": 12,
+            "username": "ApeCheckBot",
+            "id": "1800000000000000000"
+          }
+        ],
+        "cashtags": [
+          {
+            "start": 66,
+            "end": 70,
+            "tag": "KAI"
+          }
+        ]
+      },
+      "edit_history_tweet_ids": [
+        "1847000000000000200"
+      ]
+    }
+  ],
+  "includes": {
+    "users": [
+      {
+        "id": "1600000000000000002",
+        "username": "degenfren",
+        "name": "degen fren",
+        "created_at": "2026-10-15T08:00:00.000Z",
+        "verified": false,
+        "description": "",
+        "public_metrics": {
+          "followers_count": 12,
+          "following_count": 340,
+          "tweet_count": 40,
+          "listed_count": 0
+        }
+      },
+      {
+        "id": "1500000000000000001",
+        "username": "kairolabs",
+        "name": "Kairo Labs",
+        "created_at": "2025-03-02T10:00:00.000Z",
+        "verified": false,
+        "description": "Building Kairo. Docs: https://t.co/docs77",
+        "url": "https://t.co/site11",
+        "public_metrics": {
+          "followers_count": 18234,
+          "following_count": 210,
+          "tweet_count": 1203,
+          "listed_count": 88,
+          "like_count": 900,
+          "media_count": 120
+        },
+        "entities": {
+          "url": {
+            "urls": [
+              {
+                "start": 0,
+                "end": 23,
+                "url": "https://t.co/site11",
+                "expanded_url": "https://kairo.xyz",
+                "display_url": "kairo.xyz"
+              }
+            ]
+          },
+          "description": {
+            "urls": [
+              {
+                "start": 22,
+                "end": 45,
+                "url": "https://t.co/docs77",
+                "expanded_url": "https://docs.kairo.xyz",
+                "display_url": "docs.kairo.xyz"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "1800000000000000000",
+        "username": "ApeCheckBot",
+        "name": "ApeCheck",
+        "created_at": "2026-09-01T00:00:00.000Z",
+        "verified": false,
+        "description": "Checks the claims, not the team. Automated by @alfa",
+        "public_metrics": {
+          "followers_count": 900,
+          "following_count": 1,
+          "tweet_count": 120,
+          "listed_count": 3
+        }
+      },
+      {
+        "id": "1700000000000000003",
+        "username": "oldwhale",
+        "name": "Old Whale",
+        "created_at": "2019-05-01T12:00:00.000Z",
+        "verified": true,
+        "description": "been here",
+        "public_metrics": {
+          "followers_count": 50210,
+          "following_count": 800,
+          "tweet_count": 30111,
+          "listed_count": 400
+        }
+      }
+    ],
+    "tweets": [
+      {
+        "id": "1846629381234567890",
+        "text": "Kairo v2 is live on mainnet. Trade now https://t.co/abc123 $kairo",
+        "author_id": "1500000000000000001",
+        "created_at": "2026-10-18T14:02:11.000Z",
+        "conversation_id": "1846629381234567890",
+        "display_text_range": [
+          0,
+          65
+        ],
+        "entities": {
+          "urls": [
+            {
+              "start": 39,
+              "end": 58,
+              "url": "https://t.co/abc123",
+              "expanded_url": "https://app.kairo.xyz/trade",
+              "display_url": "app.kairo.xyz/trade"
+            }
+          ],
+          "cashtags": [
+            {
+              "start": 59,
+              "end": 65,
+              "tag": "kairo"
+            }
+          ]
+        },
+        "edit_history_tweet_ids": [
+          "1846629381234567890"
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "result_count": 2,
+    "newest_id": "1847000000000000300",
+    "oldest_id": "1847000000000000200",
+    "next_token": "7140dibdnow9c7btw4b0u5ak2r4ptq"
+  }
+}

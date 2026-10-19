@@ -27,7 +27,8 @@ export { createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, DETECT_RETRY_D
 export { createSolana, SolanaAdapter, SOL_READ_METHODS, solanaRpcUrl } from './adapters/solana';
 export { createTron, TronAdapter } from './adapters/tron';
 export { createGitHub, GitHubAdapter, parseGitHubRef } from './adapters/github';
-export { createX, XAdapter } from './adapters/x';
+export { createX, XAdapter, type XOptions } from './adapters/x';
+export { signRequest, oauth1Header, percentEncode, type OAuth1Credentials, type OAuth1Request } from './oauth1';
 export { createFourtis, FourtisAdapter, FOURTIS_PATHS } from './adapters/fourtis';
 
 /**
