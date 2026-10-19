@@ -110,6 +110,10 @@ export interface ProductCauses {
   errorScreen: string | null;
   jsError: string | null;
   nothingToTry: boolean;
+  /** the main action asked the wallet to sign (a transaction is txReached) */
+  mainSigned?: boolean;
+  /** the main action only opened a dialog / changed the page: the flow wasn't completed */
+  mainPartial?: boolean;
 }
 
 export interface CoinJudgeFacts {
@@ -138,7 +142,8 @@ export interface JudgeInput {
   causes: ProductCauses;
   /** deterministic people signals; null = unknown (the judge decides) */
   people: { acct: SignalEvidence | null; git: SignalEvidence | null };
-  git: { found: boolean; burst: boolean; totalCommits: number; stale: boolean; thin: boolean; onlyForks: boolean };
+  /** `unchecked`: GitHub was unavailable or timed out, so nothing is known about the code */
+  git: { found: boolean; burst: boolean; totalCommits: number; stale: boolean; thin: boolean; onlyForks: boolean; unchecked?: boolean };
   coin: CoinJudgeFacts | null;
   auditLink: { url: string; stepIdx: number | null } | null;
   steps: { idx: number; status: string; text: string }[];

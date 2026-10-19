@@ -20,7 +20,7 @@ import {
 } from '@apecheck/core';
 import type { CoinRawFacts, RepoFacts, XUser } from '@apecheck/sources';
 import type { ProductCauses, SignalEvidence } from '../ai/types';
-import type { ExploreResult } from '../browser/agent';
+import { simSkipReason, type ExploreResult } from '../browser/agent';
 import type { DocsResult } from '../browser/docs';
 import { plural, sinceText } from './text';
 
@@ -56,8 +56,25 @@ export interface ProductSignals {
   causes: ProductCauses;
 }
 
-const ev = (signal: Signal, text: string, stepIdx: number | null = null): SignalEvidence => ({ signal, text, stepIdx });
+// a step that was dropped (its stage had ended) has idx -1: never cite it
+const ev = (signal: Signal, text: string, stepIdx: number | null = null): SignalEvidence => ({ signal, text, stepIdx: stepIdx != null && stepIdx >= 0 ? stepIdx : null });
 
+/** The way into the app (not the main action inside it) ended at a 404, a dead button, an error, a waitlist or 'Coming soon'. */
+function entryBlocked(x: ExploreResult): SignalEvidence | null {
+  if (x.launch404) return ev('fail', x.launch404.text, x.launch404.stepIdx);
+  if (x.deadLaunch) return ev('fail', x.deadLaunch.text, x.deadLaunch.stepIdx);
+  if (x.errorScreen && !x.errorScreen.main) return ev('fail', x.errorScreen.text, x.errorScreen.stepIdx);
+  if (x.waitlist && !x.waitlist.main) return ev('warn', x.waitlist.text, x.waitlist.stepIdx);
+  if (x.comingSoon && !x.comingSoon.main) return ev('warn', x.comingSoon.text, x.comingSoon.stepIdx);
+  return null;
+}
+
+/**
+ * launch: ok when an app screen was reached (app route or link, an amount field, a transaction, a signature
+ * from the main action). A wallet connect on a page that shows no app counts too, unless the site's app entry
+ * leads to a 404, nothing, an error, a waitlist or 'Coming soon': a header "Connect wallet" from a template
+ * doesn't make a waitlist site live.
+ */
 export function launchSignal(site: SiteFacts, x: ExploreResult | null): SignalEvidence {
   if (!site.hasSite) return ev('warn', 'No website was found to open');
   if (site.infraError && !site.loaded) return ev('warn', `The site could not be checked (${site.infraError})`, site.loadStepIdx);
@@ -66,6 +83,9 @@ export function launchSignal(site: SiteFacts, x: ExploreResult | null): SignalEv
   if (site.landingBlocked === 'coming_soon') return ev('warn', "The site is a 'Coming soon' page; there is no app to open", site.loadStepIdx);
   if (!x) return ev('warn', 'The app could not be tried in time');
   if (x.appReached) {
+    const confirmed = x.appVia !== 'wallet' || !!x.tx?.reached || !!x.mainOk;
+    const blocked = confirmed ? null : entryBlocked(x);
+    if (blocked) return { ...blocked, text: `${blocked.text} (only the wallet connect works)` };
     const wallet = x.tx?.reached || x.actions.some(a => a.outcome === 'wallet');
     return ev('ok', wallet ? 'App opened and wallet connect works' : `App opened at ${shortHost(x.appUrl)}`, x.appStepIdx);
   }
@@ -88,7 +108,8 @@ export function flowSignal(launch: SignalEvidence, x: ExploreResult | null): Sig
   const tx = x.tx;
   if (tx?.reached) {
     if (tx.simulated === 'ok') return ev('ok', 'Ran the main flow with a test wallet; the transaction simulates fine', tx.stepIdx);
-    if (tx.simulated === 'skipped') return ev('ok', 'Main flow reached a transaction with a test wallet (not simulated)', tx.stepIdx);
+    // not simulated (our RPC, an unsupported chain, out of time): reached, but not shown to work
+    if (tx.simulated === 'skipped') return ev('warn', `Main flow reached a transaction; it couldn't be simulated (${simSkipReason(tx)})`, tx.stepIdx);
     if (tx.needsFunds) return ev('warn', 'Main flow reached a transaction, but it needs funds the test wallet does not have', tx.stepIdx);
     return ev('fail', `Main flow reached a transaction, but the simulation failed: ${tx.detail ?? 'reverted'}`, tx.stepIdx);
   }
@@ -98,6 +119,15 @@ export function flowSignal(launch: SignalEvidence, x: ExploreResult | null): Sig
   if (x.waitlist) return ev('warn', 'Main flow stops at a waitlist form', x.waitlist.stepIdx);
   if (x.needsFunds) return ev('warn', x.needsFunds.text, x.needsFunds.stepIdx);
   if (x.mainOk) return ev('ok', `Ran the main flow with a test wallet: ${x.mainOk.text.replace(/^./, c => c.toLowerCase())}`, x.mainOk.stepIdx);
+  if (x.mainPartial) {
+    const k = x.mainPartial.kind;
+    const text =
+      k === 'modal' ? "The main action opened a dialog; the flow wasn't completed"
+      : k === 'connect' ? 'The main action only made a wallet request (connect or network switch); no transaction or signature followed'
+      : k === 'navigated' ? 'The main action opened another page; no transaction or signature followed'
+      : 'The main action changed the page, but no transaction or signature followed';
+    return ev('warn', text, x.mainPartial.stepIdx);
+  }
   if (x.mainTried) return ev('warn', "The main action didn't respond", lastIdx(x));
   return ev('warn', 'Nothing to try in the app beyond the first screen', x.appStepIdx);
 }
@@ -141,6 +171,8 @@ export function productSignals(site: SiteFacts, x: ExploreResult | null, docs: D
   const launch = launchSignal(site, x);
   const flow = flowSignal(launch, x);
   const d = docsSignal(docs, site.hasSite, site.loaded);
+  // the causes follow the launch signal: a wallet connect that didn't count as the app doesn't hide a dead entry
+  const launched = launch.signal === 'ok';
   const causes: ProductCauses = {
     noSite: !site.hasSite,
     unchecked: !!site.infraError && !site.loaded,
@@ -148,16 +180,18 @@ export function productSignals(site: SiteFacts, x: ExploreResult | null, docs: D
     noEntry: !!x && !x.entryFound && !x.appReached,
     waitlist: site.landingBlocked === 'waitlist' || !!x?.waitlist,
     comingSoon: site.landingBlocked === 'coming_soon' || !!x?.comingSoon,
-    deadLaunch: !!x?.deadLaunch && !x.appReached,
-    launch404: !!x?.launch404 && !x.appReached,
-    appReached: !!x?.appReached,
+    deadLaunch: !!x?.deadLaunch && !launched,
+    launch404: !!x?.launch404 && !launched,
+    appReached: !!x?.appReached && launched,
     walletConnected: !!x?.actions.some(a => a.outcome === 'wallet') || !!x?.tx,
     txReached: !!x?.tx?.reached,
     txSimulated: x?.tx?.simulated ?? null,
     needsFunds: !!x?.needsFunds || !!x?.tx?.needsFunds,
     errorScreen: x?.errorScreen?.text ?? null,
     jsError: x?.jsError?.text ?? null,
-    nothingToTry: !!x?.appReached && !x.mainTried,
+    nothingToTry: launched && !!x?.appReached && !x.mainTried,
+    mainSigned: !!x?.mainOk,
+    mainPartial: !!x?.mainPartial,
   };
   return { launch, flow, docs: d.e, plain: { launch: launch.text, flow: flow.text, docs: d.plain }, causes };
 }
@@ -179,7 +213,10 @@ export interface GitFacts {
   onlyForks: boolean;
 }
 
-/** Most commits within CONFIG.gitBurstHours of the anchor (token launch, else the first commit). */
+/**
+ * Most commits within CONFIG.gitBurstHours of the anchor (token launch, else the first commit): a share above
+ * TUNING.gitBurstShare, and only with at least TUNING.gitBurstMinCommits commits.
+ */
 export function gitFacts(repos: RepoFacts[], launchAt: string | null, now = Date.now()): GitFacts {
   const originals = repos.filter(r => !r.fork);
   const totalCommits = originals.reduce((s, r) => s + (r.commits || 0), 0);
@@ -199,7 +236,7 @@ export function gitFacts(repos: RepoFacts[], launchAt: string | null, now = Date
   const denom = Math.max(totalCommits, dates.length);
   const burstShare = denom ? inWindow / denom : 0;
   // a burst only means something with more than a couple of commits
-  const burst = denom >= 3 && burstShare > 0.5;
+  const burst = denom >= TUNING.gitBurstMinCommits && burstShare > TUNING.gitBurstShare;
   const stale = !!lastCommit && now - Date.parse(lastCommit) > TUNING.gitStaleDays * 86_400_000;
   return {
     repos,

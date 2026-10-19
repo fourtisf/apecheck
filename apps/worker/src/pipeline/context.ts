@@ -8,7 +8,7 @@ import type { ChainKey, Detected, Env, ExtractedClaim, Judged, TargetKindS } fro
 import type { CoinRawFacts, DexTokenInfo, Sources, XPost, XUser } from '@apecheck/sources';
 import type { AiAdapter, AiStage, SignalEvidence } from '../ai/types';
 import type { BrowserHost, BrowseSession } from '../browser/browser';
-import type { Explorer } from '../browser/agent';
+import type { Explorer, ExploreResult } from '../browser/agent';
 import type { DocsResult } from '../browser/docs';
 import type { PageText } from '../browser/page';
 import type { Logger } from '../log';
@@ -103,6 +103,8 @@ export class CheckRun {
   links: Links = { site: null, x: null, github: [], docs: null, telegram: null, discord: null };
   /** the contract was announced in a step already (Stage A or D) */
   coinAnnounced = false;
+  /** an address seen on the page / in the post that couldn't be vetted because DexScreener or the RPCs were down */
+  unconfirmedCoin: { address: string; why: string } | null = null;
 
   /* Stage B */
   session: BrowseSession | null = null;
@@ -110,6 +112,8 @@ export class CheckRun {
   siteInfo: { url: string; finalUrl: string | null; title: string | null; loadMs: number | null; httpStatus: number | null } | null = null;
   landing: PageText | null = null;
   explorer: Explorer | null = null;
+  /** the explorer's result as it stood when the explore stage ended (what the verdict uses) */
+  explored: ExploreResult | null = null;
   docs: { link: string | null; result: DocsResult | null; timedOut: boolean; stepIdx: number | null } = { link: null, result: null, timedOut: false, stepIdx: null };
   walletSummary: { requested: boolean; connected: boolean; methods: string[] } | null = null;
   /** uncaught page errors first, then console errors */
@@ -121,9 +125,14 @@ export class CheckRun {
   claims: ExtractedClaim[] = [];
 
   /* Stage D */
-  git: { facts: GitFacts | null; signal: SignalEvidence | null; plain: string | null; found: boolean } = { facts: null, signal: null, plain: null, found: false };
+  /** `unknown`: why the code is unknown when `signal` is null (null too when Stage D didn't get to it) */
+  git: { facts: GitFacts | null; signal: SignalEvidence | null; plain: string | null; found: boolean; unknown?: 'unavailable' | 'nothing-to-look-up' | null } = {
+    facts: null, signal: null, plain: null, found: false, unknown: null,
+  };
   acct: { signal: SignalEvidence | null; plain: string | null; renamed?: number | null } = { signal: null, plain: null };
   coin: { raw: CoinRawFacts; signals: CoinSignals; evidence: { deployer?: SignalEvidence; bundle?: SignalEvidence; holders?: SignalEvidence } } | null = null;
+  /** the coinFacts request for chain/ca (started once, shared by Stage D and the after-timeout path) */
+  coinFacts: { chain: ChainKey; ca: string; promise: Promise<CoinRawFacts>; raw: CoinRawFacts | null } | null = null;
   auditLink: { url: string; stepIdx: number | null } | null = null;
 
   /* Stage E */

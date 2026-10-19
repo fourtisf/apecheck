@@ -53,7 +53,9 @@ it('a queued check on the local working-app fixture finishes DONE with the expec
   expect(status).toBe('DONE');
 
   const c = await prisma.check.findUniqueOrThrow({ where: { id: check.id }, include: { steps: { orderBy: { idx: 'asc' } }, claims: true } });
-  expect([c.sigLaunch, c.sigFlow, c.sigDocs]).toEqual(['OK', 'OK', 'OK']);
+  // the transaction is reached but our RPC can't simulate it here: not shown to work (warn), never "end to end"
+  expect([c.sigLaunch, c.sigFlow, c.sigDocs]).toEqual(['OK', 'WARN', 'OK']);
+  expect(c.summary).toMatch(/^The app reaches a transaction, but it couldn't be simulated; /);
   expect(c.narScore).toBeGreaterThan(0);
   expect(c.isLatest).toBe(true);
   expect(c.claims.length).toBeGreaterThan(0);

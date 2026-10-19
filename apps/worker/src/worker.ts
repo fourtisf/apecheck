@@ -11,7 +11,8 @@ import { createAi } from './ai';
 import type { AiAdapter } from './ai/types';
 import { BrowserHost, type BrowserHostOptions } from './browser/browser';
 import { createLogger, type Logger } from './log';
-import { recoverStaleChecks, runCheck, type PipelineDeps, type RunResult } from './pipeline';
+import { SHOTS_CLEANUP_JOB, SHOTS_CLEANUP_PATTERN, cleanupShots } from './maintenance/shots';
+import { RunSuperseded, endStuckCheck, recoverStaleChecks, runCheck, type JobStateLookup, type PipelineDeps, type RunResult } from './pipeline';
 import type { StageLimits } from './pipeline/context';
 import { fireWebhooksNoop } from './pipeline/save';
 import { PRICE_TICK_MS } from './prices/schedule';
@@ -26,16 +27,28 @@ export class BrowserPool {
     private readonly log: Logger,
   ) {}
 
+  /**
+   * The live browser, relaunched once when it died: of the callers that find the same dead host, exactly one
+   * closes it and launches the next (the promise is swapped in before any await); the others wait for that one.
+   */
   async get(): Promise<BrowserHost | null> {
-    const current = this.host ? await this.host : null;
-    if (current && current.connected) return current;
-    if (current) await current.close();
-    this.host = BrowserHost.launch(this.opts).catch(e => {
-      this.log.error('Chromium could not start', e);
-      this.host = null;
-      return null;
-    });
-    return this.host;
+    for (;;) {
+      const seen = this.host;
+      const current = seen ? await seen : null;
+      if (current && current.connected) return current;
+      // another caller replaced the host while we waited: use theirs
+      if (this.host !== seen) continue;
+      const launching: Promise<BrowserHost | null> = (async () => {
+        if (current) await current.close();
+        return BrowserHost.launch(this.opts);
+      })().catch(e => {
+        this.log.error('Chromium could not start', e);
+        if (this.host === launching) this.host = null;
+        return null;
+      });
+      this.host = launching;
+      return launching;
+    }
   }
 
   async close(): Promise<void> {
@@ -55,8 +68,18 @@ export interface CheckWorkerOptions {
   browser?: Partial<BrowserHostOptions>;
   fetchCard?: PipelineDeps['fetchCard'];
   limits?: Partial<StageLimits>;
-  /** run the startup recovery of stuck checks (default true) */
+  /** run the recovery of stuck checks at startup and every `recoverEveryMs` (default true) */
   recover?: boolean;
+  /** default 5 minutes */
+  recoverEveryMs?: number;
+}
+
+/** BullMQ state of the check's job (jobId = check id), null when the job is gone. */
+export function jobStateOf(queue: Queue<CheckJob>): JobStateLookup {
+  return async checkId => {
+    const job = await queue.getJob(checkId);
+    return job ? await job.getState() : null;
+  };
 }
 
 export interface RunningWorker {
@@ -94,8 +117,18 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
     },
   };
 
-  if (opts.recover !== false) await recoverStaleChecks(deps).catch(e => log.error('stale check recovery failed', e));
+  const checksQueue = new Queue<CheckJob>(QUEUES.checks, { connection: bull });
+  const jobState = jobStateOf(checksQueue);
+  const recover = () => recoverStaleChecks(deps, Date.now(), jobState).catch(e => log.error('stale check recovery failed', e));
+  let recoverTimer: NodeJS.Timeout | null = null;
+  if (opts.recover !== false) {
+    await recover();
+    // also later: a job that stalled past its limit or failed outright leaves its check QUEUED / RUNNING
+    recoverTimer = setInterval(() => void recover(), opts.recoverEveryMs ?? 5 * 60_000);
+    recoverTimer.unref();
+  }
 
+  // job id → its run (job ids are check ids)
   const running = new Map<string, AbortController>();
   const worker = new Worker<CheckJob, Pick<RunResult, 'status' | 'error'>>(
     QUEUES.checks,
@@ -103,12 +136,13 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
       const checkId = job.data?.checkId;
       if (typeof checkId !== 'string' || !checkId) return { status: 'skipped' };
       const ctrl = new AbortController();
-      running.set(checkId, ctrl);
+      const key = job.id ?? checkId;
+      running.set(key, ctrl);
       try {
         const r = await runCheck(checkId, deps, { signal: ctrl.signal });
         return { status: r.status, error: r.error };
       } finally {
-        running.delete(checkId);
+        if (running.get(key) === ctrl) running.delete(key);
       }
     },
     {
@@ -119,7 +153,22 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
       maxStalledCount: 1,
     },
   );
-  worker.on('failed', (job, err) => log.error(`job ${job?.id ?? '?'} failed`, err));
+  worker.on('failed', (job, err) => {
+    log.error(`job ${job?.id ?? '?'} failed`, err);
+    // the last attempt failed (e.g. the database was unreachable when the check started): end the check
+    // instead of leaving it QUEUED, where it would block new checks of its target
+    const checkId = job?.data?.checkId;
+    if (!job || typeof checkId !== 'string' || job.attemptsMade < (job.opts.attempts ?? 1)) return;
+    void deps.prisma.check
+      .findUnique({ where: { id: checkId }, select: { id: true, shortId: true, status: true, startedAt: true, createdAt: true } })
+      .then(c => (c && (c.status === 'QUEUED' || c.status === 'RUNNING') ? endStuckCheck(deps, c, c.status === 'RUNNING' ? 'restart' : 'not-run') : false))
+      .catch(e => log.error(`could not end the check of failed job ${job.id}`, e));
+  });
+  // our lock on a job was lost (Redis outage, blocked event loop): BullMQ will hand the job to another run, so
+  // this one stops at once without marking, publishing or replying anything
+  worker.on('lockRenewalFailed', ids => {
+    for (const id of ids) running.get(id)?.abort(new RunSuperseded());
+  });
   worker.on('error', err => log.error('worker error', err));
   log.info(`listening on "${QUEUES.checks}" (concurrency ${Math.max(1, env.MAX_CONCURRENT_BROWSERS)}, AI: ${deps.ai.mode})`);
 
@@ -133,7 +182,9 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
         for (const c of running.values()) c.abort();
         await Promise.race([closed, new Promise(r => setTimeout(r, 10_000))]);
       }
+      if (recoverTimer) clearInterval(recoverTimer);
       await botQueue.close().catch(() => undefined);
+      await checksQueue.close().catch(() => undefined);
       await pool.close();
       await pub.quit().catch(() => undefined);
       await bull.quit().catch(() => undefined);
@@ -157,10 +208,23 @@ export async function startPricesWorker(opts: PricesWorkerOptions): Promise<Runn
   const bull = bullConnection(env.REDIS_URL);
   const queue = new Queue(QUEUES.prices, { connection: bull });
   await queue.upsertJobScheduler('prices-tick', { every: PRICE_TICK_MS }, { name: 'tick', data: {}, opts: { removeOnComplete: 50, removeOnFail: 50 } });
-  const worker = new Worker(QUEUES.prices, async () => runPriceTick({ prisma, dex: sources.dex, log }), { connection: bull, concurrency: 1 });
-  worker.on('failed', (_job, err) => log.error('price tick failed', err));
+  // HANDOFF §12.6: daily screenshot cleanup rides the same queue (one job at a time, never alongside a tick)
+  await queue.upsertJobScheduler(
+    SHOTS_CLEANUP_JOB,
+    { pattern: SHOTS_CLEANUP_PATTERN, tz: 'UTC' },
+    { name: SHOTS_CLEANUP_JOB, data: {}, opts: { removeOnComplete: 20, removeOnFail: 20 } },
+  );
+  const worker = new Worker(
+    QUEUES.prices,
+    async (job: Job) =>
+      job.name === SHOTS_CLEANUP_JOB
+        ? cleanupShots({ prisma, screenshotDir: env.SCREENSHOT_DIR, log })
+        : runPriceTick({ prisma, dex: sources.dex, log }),
+    { connection: bull, concurrency: 1 },
+  );
+  worker.on('failed', (job, err) => log.error(job?.name === SHOTS_CLEANUP_JOB ? 'screenshot cleanup failed' : 'price tick failed', err));
   worker.on('error', err => log.error('worker error', err));
-  log.info(`price tracker scheduled every ${PRICE_TICK_MS / 60_000} minutes`);
+  log.info(`price tracker scheduled every ${PRICE_TICK_MS / 60_000} minutes; screenshot cleanup daily (${SHOTS_CLEANUP_PATTERN} UTC)`);
   let closing: Promise<void> | null = null;
   return {
     close: () =>

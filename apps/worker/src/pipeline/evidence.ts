@@ -3,10 +3,11 @@
  * Facts become signals only through ./signals (core helpers + CONFIG/TUNING). A source that is not
  * available leaves its signal unknown and the log says which source was missing.
  */
-import { deployerLine, short, type Signal } from '@apecheck/core';
-import type { CoinRawFacts, RepoFacts, XUser } from '@apecheck/sources';
+import { CHAINS, deployerLine, short, type ChainKey, type Signal } from '@apecheck/core';
+import { captureErrors, type CoinRawFacts, type RepoFacts, type XUser } from '@apecheck/sources';
 import type { CheckRun } from './context';
 import { announceCoin, findCoin } from './resolve';
+import type { StepSink } from './steps';
 import { acctSignal, coinSignals, gitFacts, gitSignal, worst } from './signals';
 import type { StageCtx } from './stage';
 import { within } from './stage';
@@ -30,28 +31,37 @@ function projectNames(run: CheckRun): string[] {
   return [...new Set(out.filter(Boolean))];
 }
 
-async function githubEvidence(run: CheckRun, signal: AbortSignal): Promise<{ repos: RepoFacts[]; unavailable: boolean; viaSearch: boolean }> {
+interface GithubLookup {
+  repos: RepoFacts[];
+  /** GitHub answered with errors (down, rate limited, unreachable) and nothing was found */
+  unavailable: boolean;
+  viaSearch: boolean;
+  /** no repo link anywhere and no project name to search for: GitHub was never asked */
+  nothingToLookUp: boolean;
+}
+
+async function githubEvidence(run: CheckRun, signal: AbortSignal): Promise<GithubLookup> {
   const gh = run.sources.github;
-  const before = gh.lastError ?? null;
   const urls = new Set<string>(run.links.github);
   for (const u of [run.xUser?.url, ...(run.xUser?.bioUrls ?? []), ...(run.post?.urls ?? [])]) {
     if (u && /^https?:\/\/(www\.)?github\.com\/[A-Za-z0-9-]+/i.test(u)) urls.add(u.replace(/\/+$/, ''));
   }
-  const byName = new Map<string, RepoFacts>();
-  const lists = await Promise.all([...urls].slice(0, 4).map(u => within(gh.fromUrl(u), 15_000, [] as RepoFacts[])));
-  for (const r of lists.flat()) byName.set(r.fullName.toLowerCase(), r);
-  let viaSearch = false;
-  if (!byName.size && !urls.size && !signal.aborted) {
-    const names = projectNames(run);
-    if (names.length) {
+  const names = projectNames(run);
+  if (!urls.size && !names.length) return { repos: [], unavailable: false, viaSearch: false, nothingToLookUp: true };
+  // errors of this check only (captureErrors), not another check's that runs at the same time
+  const { value, errors } = await captureErrors(async () => {
+    const byName = new Map<string, RepoFacts>();
+    const lists = await Promise.all([...urls].slice(0, 4).map(u => within(gh.fromUrl(u), 15_000, [] as RepoFacts[])));
+    for (const r of lists.flat()) byName.set(r.fullName.toLowerCase(), r);
+    let viaSearch = false;
+    if (!byName.size && !urls.size && !signal.aborted && names.length) {
       viaSearch = true;
       const hits = await within(gh.searchByName(names[0]), 15_000, [] as RepoFacts[]);
       for (const r of hits.filter(h => repoMatchesProject(h, names, run.domain))) byName.set(r.fullName.toLowerCase(), r);
     }
-  }
-  const repos = [...byName.values()];
-  const after = gh.lastError ?? null;
-  return { repos, unavailable: !repos.length && after != null && after !== before, viaSearch };
+    return { repos: [...byName.values()], viaSearch };
+  });
+  return { ...value, unavailable: !value.repos.length && errors.length > 0, nothingToLookUp: false };
 }
 
 async function xAccount(run: CheckRun): Promise<{ user: XUser | null; renamed: number | null }> {
@@ -63,17 +73,68 @@ async function xAccount(run: CheckRun): Promise<{ user: XUser | null; renamed: n
   return { user, renamed };
 }
 
-function emptyFacts(run: CheckRun, error: string): CoinRawFacts {
+export function emptyFacts(run: CheckRun, error: string): CoinRawFacts {
   return {
     chain: run.chain!, address: run.ca!, token: null, deployer: null, bundle: null, holders: null, lp: null, authorities: null,
     market: null, stubbed: [], errors: [error],
   };
 }
 
+/**
+ * coinFacts for the resolved coin, asked once per check and shared: runCheck starts it as soon as Stage A knows
+ * the coin (it then runs alongside the browser), Stage D waits for it, and a Stage D that runs out of time can
+ * still use an answer that is already there.
+ */
+export function coinFactsFor(run: CheckRun): Promise<CoinRawFacts> {
+  const chain = run.chain!, ca = run.ca!;
+  if (run.coinFacts && run.coinFacts.chain === chain && run.coinFacts.ca === ca) return run.coinFacts.promise;
+  const entry: NonNullable<CheckRun['coinFacts']> = {
+    chain,
+    ca,
+    raw: null,
+    promise: within(run.sources.coinFacts(chain, ca), 30_000, null).then(raw => raw ?? emptyFacts(run, 'coinFacts: timeout')),
+  };
+  entry.promise.then(raw => { entry.raw = raw; }, () => undefined);
+  run.coinFacts = entry;
+  return entry.promise;
+}
+
 const pct = (n: number) => (Math.round(n * 10) / 10).toString();
 
-async function coinEvidence(run: CheckRun, steps: ReturnType<CheckRun['steps']['scoped']>) {
-  const raw = (await within(run.sources.coinFacts(run.chain!, run.ca!), 30_000, null)) ?? emptyFacts(run, 'coinFacts: timeout');
+/** A site was found but never read (didn't load, blocked our browser): what it links to is unknown. */
+export const siteUnread = (run: CheckRun) => run.site.hasSite && !run.site.loaded;
+
+/** "Solana RPC" / "Base RPC" / "TronGrid" when that chain's reads failed in coinFacts, else null. */
+export function rpcOutage(chain: ChainKey, errors: string[]): string | null {
+  const prefix = chain === 'sol' ? 'solana.' : chain === 'trx' ? 'tron.' : 'evm.';
+  if (!errors.some(e => e.startsWith(prefix) && !e.startsWith('evm.creator'))) return null;
+  return chain === 'sol' ? 'Solana RPC' : chain === 'trx' ? 'TronGrid' : `${CHAINS[chain].name} RPC`;
+}
+
+async function coinEvidence(run: CheckRun, steps: StepSink, signal: AbortSignal) {
+  const raw = await coinFactsFor(run);
+  // a Stage D that already ended must not change the run (the pipeline has gone on without it)
+  if (signal.aborted) return;
+  await applyCoinFacts(run, raw, steps, signal);
+}
+
+/**
+ * Stage D ran out of time (or was skipped) before the coin was assessed: use coinFacts if they have already
+ * answered, else score the coin as unknown (deployer 'mixed', every section warn), never as "no coin".
+ */
+export async function coinAfterStage(run: CheckRun): Promise<void> {
+  if (!run.hasCoin() || run.coin) return;
+  const raw = run.coinFacts && run.coinFacts.chain === run.chain && run.coinFacts.ca === run.ca ? run.coinFacts.raw : null;
+  if (raw) {
+    await applyCoinFacts(run, raw, run.steps, null);
+    return;
+  }
+  const empty = emptyFacts(run, 'coinFacts: not gathered in time');
+  await run.steps.step({ status: 'warn', text: 'Coin data not gathered in time; counts as unknown', source: 'On-chain' });
+  run.coin = { raw: empty, signals: coinSignals(empty), evidence: {} };
+}
+
+async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink, signal: AbortSignal | null) {
   for (const s of raw.stubbed) run.stubbed.add(s);
   if (raw.errors.length) run.log.info(`coin facts errors: ${raw.errors.join('; ')}`);
   if (!run.market && raw.market) {
@@ -83,7 +144,13 @@ async function coinEvidence(run: CheckRun, steps: ReturnType<CheckRun['steps']['
   if (!run.ticker && raw.token?.symbol) run.ticker = raw.token.symbol.toUpperCase().slice(0, 20);
   const sig = coinSignals(raw);
   const evidence: NonNullable<CheckRun['coin']>['evidence'] = {};
-  const unknown = (section: string) => sig.unknown.find(u => u.section === section)?.line ?? null;
+  const rpc = rpcOutage(run.chain!, raw.errors);
+  const unknown = (section: string) => {
+    const line = sig.unknown.find(u => u.section === section)?.line ?? null;
+    // the public fallback for these sections is the chain's RPC: say when it failed too
+    if (line && rpc && (section === 'authorities' || (section === 'holders' && run.chain === 'sol'))) return `${line} (${rpc} unavailable)`;
+    return line;
+  };
 
   // deployer
   const d = raw.deployer;
@@ -126,6 +193,7 @@ async function coinEvidence(run: CheckRun, steps: ReturnType<CheckRun['steps']['
   } else {
     await steps.step({ status: 'warn', text: unknown('authorities')!, source: 'On-chain' });
   }
+  if (signal?.aborted) return;
   run.coin = { raw, signals: sig, evidence };
 }
 
@@ -135,11 +203,18 @@ export async function evidenceStage(run: CheckRun, ctx: StageCtx): Promise<void>
   const xP = xAccount(run);
   ghP.catch(() => undefined);
   xP.catch(() => undefined);
+  // alongside GitHub and X, not after them (usually already started right after Stage A)
+  if (run.hasCoin()) coinFactsFor(run).catch(() => undefined);
 
   // GitHub
   const gh = await ghP;
   if (gh.unavailable) {
+    run.git.unknown = 'unavailable';
     await steps.step({ status: 'warn', text: 'GitHub unavailable, code not checked', source: 'GitHub' });
+  } else if (gh.nothingToLookUp) {
+    // never "no repository found" when GitHub wasn't asked: the code stays unknown (the judge decides, warn by default)
+    run.git.unknown = 'nothing-to-look-up';
+    await steps.step({ status: 'warn', text: 'No GitHub link or project name to look up, code not checked', source: 'GitHub' });
   } else {
     const claimsOpenSource = run.claims.some(c => c.kind === 'open_source') || /\bopen[- ]source\b/i.test(`${run.landing?.hero ?? ''} ${run.landing?.footer ?? ''}`);
     const launchAt = run.market?.pairCreatedAt ?? null;
@@ -153,7 +228,9 @@ export async function evidenceStage(run: CheckRun, ctx: StageCtx): Promise<void>
   // X account
   const { user, renamed } = await xP;
   if (!run.handle) {
-    await steps.step({ status: 'info', text: 'No X account linked to the project', source: 'X' });
+    // the site is where an X link would be: when it couldn't be read, the account is unknown, not missing
+    if (siteUnread(run)) await steps.step({ status: 'warn', text: "X account unknown (the site couldn't be read)", source: 'X' });
+    else await steps.step({ status: 'info', text: 'No X account linked to the project', source: 'X' });
   } else if (!user) {
     await steps.step({ status: 'warn', text: run.sources.x.configured ? `Couldn't read @${run.handle} on X` : 'X unavailable, account age unknown', source: 'X' });
   } else {
@@ -171,13 +248,18 @@ export async function evidenceStage(run: CheckRun, ctx: StageCtx): Promise<void>
   // a contract the rendered page shows (client-side apps don't have it in their HTML)
   if (!run.hasCoin() && run.landing && !ctx.signal.aborted) {
     const found = await findCoin(run, `${run.landing.hero}\n${run.landing.text}`, ctx.signal);
-    if (found) await announceCoin(run, found, 'page');
+    if (found && !ctx.signal.aborted) await announceCoin(run, found, 'page', steps, ctx.signal);
   }
+  if (ctx.signal.aborted) return;
 
   if (run.hasCoin()) {
-    await coinEvidence(run, steps);
-  } else if (!run.coinAnnounced) {
-    await steps.step({ status: 'info', text: run.post ? 'No contract found on the site or in the post' : 'No contract found on the site' });
+    await coinEvidence(run, steps, ctx.signal);
+  } else if (!run.coinAnnounced && run.kind !== 'coin') {
+    // name only the places that were actually read
+    const where = [run.site.loaded ? 'on the site' : null, run.post ? 'in the post' : null].filter(Boolean).join(' or ');
+    const u = run.unconfirmedCoin;
+    if (u) await steps.step({ status: 'warn', text: `Address ${short(u.address)} ${where || 'found'} couldn't be checked (${u.why})`, source: 'On-chain' });
+    else await steps.step({ status: 'info', text: where ? `No contract found ${where}` : 'No contract to check' });
   }
   run.steps.setProgress(0.85);
 }

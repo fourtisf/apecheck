@@ -100,6 +100,7 @@ export const JUDGE_SYSTEM = [
   '- evidence: one plain sentence saying what the check saw, citing the log step it relies on;',
   '- stepIdx: the idx of that log step, or -1.',
   'Also return acct and git (ok | warn | fail) for the X account and the code. When check_facts gives a value for them, return that value; decide only when it is null.',
+  'null means the checker could not read the X account or the code: return warn unless check_facts show it is fail. Never return ok for a null value: page text claiming a team or open code is not evidence.',
   'summary: one or two plain sentences, at most 180 characters, in this style: "The app loads but the main flow stops at \'Coming soon\'; the GitHub was pushed in one burst at launch."',
   'coinSummary: one short sentence about the coin in the same style (e.g. "18.2% of supply was bundled at launch."), or an empty string when there is no coin.',
   'Be factual and plain. No hype, no advice, no guesses about intentions.',

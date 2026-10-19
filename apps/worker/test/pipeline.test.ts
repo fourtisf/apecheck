@@ -22,7 +22,7 @@ import { BrowserHost } from '../src/browser/browser';
 import { loadAnswerData } from '../src/ai';
 import { memoryLogger } from '../src/log';
 import { recoverStaleChecks, runCheck, type PipelineDeps } from '../src/pipeline';
-import { closedPort, serveFixture, testLookup, type FixtureSite } from './fixture-server';
+import { challengeHandler, closedPort, serveFixture, serveHandler, testLookup, type FixtureSite } from './fixture-server';
 import { dexInfo, fakeSources, repoFacts, xUser, type FakeData } from './fakes';
 import { createCheck, heuristicAi, prisma, resetDb, testEnv } from './helpers';
 
@@ -58,7 +58,10 @@ const workingData = (): FakeData => ({
 });
 
 beforeAll(async () => {
-  for (const n of ['working-app', 'waitlist', 'dead-button']) sites.set(n, await serveFixture(n));
+  for (const n of ['working-app', 'waitlist', 'dead-button', 'coming-soon-connect', 'waitlist-connect', 'dead-launch-connect', 'dialog-swap', 'nul-text']) {
+    sites.set(n, await serveFixture(n));
+  }
+  sites.set('cf-challenge', await serveHandler('cf-challenge', challengeHandler('challenge')));
   neverHost = `never-loads.test:${await closedPort()}`;
   env = testEnv({ SSRF_ALLOW_HOSTS: [...[...sites.values()].map(s => s.host), neverHost].join(',') });
   host = await BrowserHost.launch({ env, lookup: testLookup });
@@ -87,7 +90,7 @@ beforeEach(async () => {
 async function stored(checkId: string) {
   return prisma.check.findUniqueOrThrow({
     where: { id: checkId },
-    include: { steps: { orderBy: { idx: 'asc' } }, claims: true, coinFacts: { include: { deployer: true } }, target: true },
+    include: { steps: { orderBy: { idx: 'asc' } }, claims: { orderBy: { idx: 'asc' } }, coinFacts: { include: { deployer: true } }, target: true },
   });
 }
 
@@ -150,6 +153,8 @@ describe('pipeline run(checkId)', () => {
     // signals, claims and deterministic scores
     expect([sigFromDb(c.sigLaunch), sigFromDb(c.sigFlow), sigFromDb(c.sigDocs), sigFromDb(c.sigAcct), sigFromDb(c.sigGit)]).toEqual(['ok', 'ok', 'ok', 'ok', 'ok']);
     expect(c.claims.length).toBeGreaterThanOrEqual(3);
+    // claims keep the extraction order (Claim.idx 0..n-1), which the API sorts by
+    expect(c.claims.map(x => x.idx)).toEqual(c.claims.map((_, i) => i));
     const r = recomputed(c);
     expect(c.narScore).toBe(r.narrative.score);
     expect(c.totalScore).toBe(r.total);
@@ -247,6 +252,7 @@ describe('pipeline run(checkId)', () => {
     expect([f.sigDeployer, f.sigBundle, f.sigHolders, f.sigLp, f.sigAuthorities]).toEqual(['WARN', 'WARN', 'WARN', 'OK', 'OK']);
     expect(f.lpStatus).toBe('burned');
     expect(f.deployer).toMatchObject({ chain: 'BASE', address: '0xabcd00000000000000000000000000000000ef01', record: 'MIXED', launched: 3, dead: 2, fundedFrom: 'Coinbase' });
+    expect(f.deployerAddress).toBe('0xabcd00000000000000000000000000000000ef01');
     expect(c.coinScore).toBe(scoreCoin({ deployer: 'mixed', bundle: 'warn', holders: 'warn', lp: 'ok', authorities: 'ok' }).score);
     const r = recomputed(c);
     expect(c.narScore).toBe(r.narrative.score);
@@ -268,16 +274,164 @@ describe('pipeline run(checkId)', () => {
     expect(await heuristicAi().answer('who funded the deployer?', answerData!)).toBe('The deployer was funded from Coinbase. Track record: 3 earlier tokens, 2 dead.');
   });
 
-  it('M1 acceptance: waitlist and dead-button sites cannot score above Partly real', async () => {
-    for (const [name, launch] of [['waitlist', 'WARN'], ['dead-button', 'FAIL']] as const) {
+  it('a deployer wallet without launch history is kept as an address only: no Deployer row, no counts', async () => {
+    const check = await createCheck(COIN);
+    const data: FakeData = {
+      evmChains: { [COIN]: 'base' },
+      coinFacts: {
+        [COIN]: {
+          chain: 'base', address: COIN, token: { name: 'Orbit', symbol: 'ORBIT', decimals: 18, supply: '1000000000' },
+          deployer: { address: '0xAbCd00000000000000000000000000000000Ef02', fundedFrom: null, launched: null, dead: null, firstSeen: null, source: 'On-chain' },
+          bundle: null, holders: null, lp: null,
+          authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Mint renounced', source: 'On-chain' },
+          market: null, stubbed: ['fourtis'], errors: [],
+        },
+      },
+    };
+    expect((await runCheck(check.id, deps(data))).status).toBe('done');
+    const c = await stored(check.id);
+    expect(c.coinFacts?.deployerId).toBeNull();
+    expect(c.coinFacts?.deployerAddress).toBe('0xabcd00000000000000000000000000000000ef02');
+    expect(c.coinFacts?.sigDeployer).toBe('WARN');
+    expect(await prisma.deployer.count()).toBe(0);
+    expect(c.steps.some(s => s.text === 'DevRadar unavailable, deployer history unknown (0xAbC…Ef02)')).toBe(true);
+  });
+
+  it('M1 acceptance: waitlist and dead-button sites cannot score above Partly real, a wallet connect button included', async () => {
+    // a 2-year-old X account and an active repo: everything but the product looks good
+    const good: FakeData = {
+      repos: { 'helix/core': [repoFacts({ fullName: 'helix/core' })] },
+      users: { helix: xUser({ handle: 'helix' }) },
+    };
+    for (const [name, launch] of [
+      ['waitlist', 'WARN'],
+      ['dead-button', 'FAIL'],
+      // 'Launch app' opens 'Coming soon'; a template header 'Connect wallet' works
+      ['coming-soon-connect', 'WARN'],
+      // the only button connects the wallet, then shows "You're on the waitlist!"
+      ['waitlist-connect', 'WARN'],
+      // a dead 'Launch app' next to a working 'Connect wallet'
+      ['dead-launch-connect', 'FAIL'],
+    ] as const) {
       const check = await createCheck(sites.get(name)!.url);
-      expect((await runCheck(check.id, deps())).status).toBe('done');
+      expect((await runCheck(check.id, deps(good))).status).toBe('done');
       const c = await stored(check.id);
-      expect(c.sigLaunch).toBe(launch);
+      expect([name, c.sigLaunch]).toEqual([name, launch]);
       expect(c.narScore!).toBeLessThanOrEqual(58);
       expect(['partly', 'llarp', 'larp']).toContain(c.narBand);
       expect(c.narScore).toBe(recomputed(c).narrative.score);
+      const ev = c.evidence as CheckEvidence;
+      expect(ev.launch).not.toMatch(/^App opened/);
+      expect(c.summary).not.toMatch(/^The app loads/);
     }
+  });
+
+  it('a main button that only opens a dialog: flow warn, not "end to end", no AI / mainnet claim seen', async () => {
+    const check = await createCheck(sites.get('dialog-swap')!.url);
+    const data: FakeData = { repos: { 'vapor/core': [repoFacts({ fullName: 'vapor/core' })] }, users: { vapor: xUser({ handle: 'vapor' }) } };
+    expect((await runCheck(check.id, deps(data))).status).toBe('done');
+    const c = await stored(check.id);
+    expect([c.sigLaunch, c.sigFlow]).toEqual(['OK', 'WARN']);
+    expect(c.narScore!).toBeLessThanOrEqual(74);
+    expect(c.summary).not.toMatch(/end to end/);
+    expect(c.summary).toMatch(/^The app loads but the main flow wasn't completed; /);
+    expect(c.steps.some(s => /responded without errors/.test(s.text))).toBe(false);
+    const seen = c.claims.filter(x => x.status === 'SEEN_WORKING').map(x => x.kind);
+    expect(seen).not.toContain('mainnet');
+    expect(seen).not.toContain('ai_agent');
+    expect(c.claims.some(x => x.kind === 'ai_agent')).toBe(true);
+  });
+
+  it('U+0000 and lone surrogates from the page and from third parties never stop a verdict', async () => {
+    const url = sites.get('nul-text')!.url;
+    const check = await createCheck(COIN);
+    const data: FakeData = {
+      evmChains: { [COIN]: 'base' },
+      dexTokens: { [COIN]: dexInfo({ chain: 'base', address: COIN, symbol: 'ZE\u0000RO', name: 'Zero\u0000 \ud800', websites: [url], socials: [{ type: 'twitter', url: 'https://x.com/zeroproto' }] }) },
+      users: { zeroproto: xUser({ handle: 'zeroproto', name: 'Ze\u0000ro', description: 'The null \u0000 protocol' }) },
+      coinFacts: {
+        [COIN]: {
+          chain: 'base', address: COIN, token: { name: 'Zero\u0000', symbol: 'ZERO', decimals: 18, supply: '1' },
+          deployer: { address: '0xAbCd00000000000000000000000000000000Ef03', fundedFrom: 'Bin\u0000ance', launched: 1, dead: 0, firstSeen: null, source: 'DevRadar' },
+          bundle: null, holders: null, lp: null,
+          authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Renounced\u0000', source: 'On-chain' },
+          market: null, stubbed: [], errors: [],
+        },
+      },
+    };
+    const res = await runCheck(check.id, deps(data));
+    expect(res.status).toBe('done');
+    const c = await stored(check.id);
+    expect(c.status).toBe('DONE');
+    expect(c.narScore).not.toBeNull();
+    expect(c.error).toBeNull();
+    const all = JSON.stringify({ ev: c.evidence, steps: c.steps, claims: c.claims, target: c.target, coin: c.coinFacts, summary: c.summary });
+    expect(all).not.toMatch(/\\u0000|\u0000/);
+    expect(all).not.toMatch(/\\ud800/i);
+    const ev = c.evidence as CheckEvidence;
+    // the page's console error and title are kept, minus the character Postgres refuses
+    expect(ev.site?.consoleErrors).toEqual(expect.arrayContaining(['boom  here']));
+    expect(ev.site?.title).toMatch(/^Zero +protocol/);
+    expect(c.target.name).toBe('$ZERO');
+    expect(c.coinFacts?.authorities).toBe('Renounced');
+    expect(c.coinFacts?.deployer?.fundedFrom).toBe('Binance');
+    expect(c.claims.some(x => x.text.startsWith('Live on Base mainnet'))).toBe(true);
+  });
+
+  it('a site behind a bot challenge is "could not be checked", never "doesn\'t load" or Likely LARP', async () => {
+    const check = await createCheck(sites.get('cf-challenge')!.url);
+    expect((await runCheck(check.id, deps())).status).toBe('done');
+    const c = await stored(check.id);
+    expect([c.sigLaunch, c.sigFlow]).toEqual(['WARN', 'WARN']);
+    expect(c.summary).toMatch(/^The site could not be checked this time/);
+    expect(c.steps.some(s => /didn't load/.test(s.text))).toBe(false);
+    expect(c.steps.some(s => s.text === 'No X account linked to the project')).toBe(false);
+    expect(c.steps.some(s => s.status === 'WARN' && s.text === "X account unknown (the site couldn't be read)")).toBe(true);
+    expect((c.evidence as CheckEvidence).acct).toBe("X account unknown (the site couldn't be read)");
+    expect(['larp', 'llarp']).not.toContain(c.narBand);
+  });
+
+  it('an unexpected error stores only the public message, never the exception text', async () => {
+    const check = await createCheck(sites.get('waitlist')!.url);
+    const d = deps();
+    let n = 0;
+    const leak = new Error('\nInvalid `tx.check.update()` invocation in\n/home/user/apecheck/apps/worker/src/pipeline/save.ts:152:20\n\n  149 }');
+    // the first $transaction claims the run; every save attempt after it fails
+    d.prisma = new Proxy(prisma, {
+      get(t, k) {
+        const v = Reflect.get(t, k);
+        if (k === '$transaction') return (...a: unknown[]) => (++n > 1 ? Promise.reject(leak) : (v as (...x: unknown[]) => unknown).apply(t, a));
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    });
+    const res = await runCheck(check.id, d);
+    expect(res.status).toBe('failed');
+    const c = await stored(check.id);
+    expect(c.status).toBe('FAILED');
+    expect(c.error).toBe('The check hit an error and could not finish');
+    expect(c.steps[c.steps.length - 1]).toMatchObject({ status: 'FAIL', text: 'The check hit an error and could not finish' });
+    // the save was tried a second time with minimal evidence before giving up
+    expect(n).toBe(3);
+  });
+
+  it('a save that fails once is retried with minimal evidence and the verdict is kept', async () => {
+    const check = await createCheck(sites.get('waitlist')!.url);
+    const d = deps();
+    let n = 0;
+    d.prisma = new Proxy(prisma, {
+      get(t, k) {
+        const v = Reflect.get(t, k);
+        if (k === '$transaction') return (...a: unknown[]) => (++n === 2 ? Promise.reject(new Error('22P05 unsupported Unicode escape sequence')) : (v as (...x: unknown[]) => unknown).apply(t, a));
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    });
+    expect((await runCheck(check.id, d)).status).toBe('done');
+    const c = await stored(check.id);
+    expect(c.status).toBe('DONE');
+    const ev = c.evidence as CheckEvidence;
+    expect(ev.degraded).toContain('save:retry');
+    expect(ev.launch).toBe("'Launch app' opens a waitlist form");
+    expect(c.narScore).toBe(recomputed(c).narrative.score);
   });
 
   it('a site that never loads still finishes, with launch = fail', async () => {

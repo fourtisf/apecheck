@@ -2,14 +2,21 @@
  * Code that runs inside the checked page. Kept as plain JS strings: functions passed to page.evaluate
  * are serialised from their source, and transpiler helpers would not exist in the page.
  * These scripts only read the DOM (plus a data attribute used to target clicks); they never send anything.
+ *
+ * SUMMARY / PROBE / TEXT run in an isolated world (page.ts readPage): the page shares the DOM with them but
+ * can't redefine the builtins or DOM getters they see, so the length caps below hold. Every field is capped
+ * here and clamped again on the Node side.
  */
 
-/** Counts meaningful DOM changes (added/removed elements, text edits) for dead-button detection. */
-export const OBSERVER_SCRIPT = `(() => {
-  if (window.__apecheckMut) return;
-  const state = { added: 0, removed: 0, text: 0 };
-  try { Object.defineProperty(window, '__apecheckMut', { value: state }); } catch (e) { return; }
-  const start = () => {
+/**
+ * Counts meaningful DOM changes (added/removed elements, text edits) for dead-button detection. Installed
+ * lazily by the first probe of each document, in the same isolated world that reads it.
+ */
+const OBSERVE = `
+  const mutState = (() => {
+    if (window.__apecheckMut) return window.__apecheckMut;
+    const state = { added: 0, removed: 0, text: 0 };
+    window.__apecheckMut = state;
     try {
       new MutationObserver(list => {
         for (const m of list) {
@@ -20,9 +27,9 @@ export const OBSERVER_SCRIPT = `(() => {
         }
       }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     } catch (e) {}
-  };
-  if (document.documentElement) start(); else document.addEventListener('readystatechange', start, { once: true });
-})();`;
+    return state;
+  })();
+`;
 
 const HELPERS = `
   const vis = (el) => {
@@ -33,6 +40,7 @@ const HELPERS = `
     return cs.visibility !== 'hidden' && cs.display !== 'none' && parseFloat(cs.opacity || '1') > 0.05;
   };
   const clean = (s, n) => String(s || '').replace(/\\s+/g, ' ').trim().slice(0, n);
+  const cut = (s, n) => String(s == null ? '' : s).slice(0, n);
   const textOf = (el) => clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || el.value || (el.querySelector && el.querySelector('img[alt]') ? el.querySelector('img[alt]').alt : ''), 80);
   const findModal = () => {
     const explicit = [...document.querySelectorAll('[role=dialog],[role=alertdialog],[aria-modal=true],dialog[open]')];
@@ -69,7 +77,7 @@ export const SUMMARY_SCRIPT = `((opts) => {
     const isLink = el.tagName === 'A' || el.getAttribute('role') === 'link';
     raw.push({
       id, kind: isLink ? 'link' : 'button', text,
-      href: el.tagName === 'A' && el.href ? String(el.href).slice(0, 500) : null,
+      href: el.tagName === 'A' && el.href ? cut(el.href, 500) : null,
       disabled: !!(el.disabled || el.getAttribute('aria-disabled') === 'true'),
       inViewport: r.top < innerHeight && r.bottom > 0,
       inModal: !!(modal && modal.contains(el)),
@@ -90,7 +98,7 @@ export const SUMMARY_SCRIPT = `((opts) => {
   }
   const headings = [...document.querySelectorAll('h1,h2,h3')].filter(vis).map(h => clean(h.innerText, 120)).filter(Boolean).slice(0, 10);
   return {
-    url: location.href,
+    url: cut(location.href, 2000),
     title: clean(document.title, 160),
     headings,
     elements: els,
@@ -103,12 +111,13 @@ export const SUMMARY_SCRIPT = `((opts) => {
 /** Light probe for before/after comparisons around an action. */
 export const PROBE_SCRIPT = `(() => {
   ${HELPERS}
+  ${OBSERVE}
   const modal = findModal();
-  const m = window.__apecheckMut || { added: 0, removed: 0, text: 0 };
-  const text = document.body ? document.body.innerText : '';
+  const m = mutState;
+  const text = document.body ? String(document.body.innerText || '') : '';
   return {
-    url: location.href,
-    title: document.title,
+    url: cut(location.href, 2000),
+    title: clean(document.title, 160),
     text: text.slice(0, 30000),
     textLen: text.length,
     modalText: modal ? clean(modal.innerText, 1500) : null,
@@ -151,22 +160,28 @@ export const TEXT_SCRIPT = `(() => {
     else if (top < H) hero.push(text);
     else if (!footerEl && top > docH - H * 0.35) footer.push(text);
   }
-  const links = [...document.querySelectorAll('a[href]')].slice(0, 500).map(a => ({ href: String(a.href).slice(0, 500), text: textOf(a) }));
+  const links = [...document.querySelectorAll('a[href]')].slice(0, 500).map(a => ({ href: cut(a.href, 500), text: textOf(a) }));
   const metaMod = document.querySelector('meta[property="article:modified_time"],meta[property="og:updated_time"],meta[name="last-modified"],meta[itemprop="dateModified"]');
-  const times = [...document.querySelectorAll('time[datetime]')].slice(0, 20).map(t => t.getAttribute('datetime'));
+  const times = [...document.querySelectorAll('time[datetime]')].slice(0, 20).map(t => { const v = t.getAttribute('datetime'); return v == null ? null : cut(v, 100); });
   return {
     title: clean(document.title, 160),
     hero: hero.join('\\n').slice(0, 6000),
     footer: footer.join('\\n').slice(0, 3000),
-    text: (document.body ? document.body.innerText : '').slice(0, 20000),
+    text: (document.body ? String(document.body.innerText || '') : '').slice(0, 20000),
     links,
-    modified: metaMod ? metaMod.getAttribute('content') : null,
+    modified: metaMod && metaMod.getAttribute('content') != null ? cut(metaMod.getAttribute('content'), 100) : null,
     times,
     codeBlocks: document.querySelectorAll('pre, code').length,
   };
 })()`;
 
-/** Put an amount into the first empty amount field so a main-action button can be tried. */
+/** Navigation timing of the current document (ms), 0 when unknown. */
+export const LOAD_MS_SCRIPT = `(() => { const n = performance.getEntriesByType('navigation')[0]; return n ? Math.round(n.loadEventEnd || n.domContentLoadedEventEnd || 0) : 0; })()`;
+
+/**
+ * Put an amount into the first empty amount field so a main-action button can be tried. Runs in the page's
+ * main world (the page's own listeners must see the input) and only ever returns true / false.
+ */
 export const FILL_AMOUNT_SCRIPT = `(() => {
   ${HELPERS}
   const el = [...document.querySelectorAll('input[inputmode=decimal],input[type=number],input[placeholder*="0.0"],input[placeholder="0"],input[name*=amount i],input[placeholder*=amount i]')]

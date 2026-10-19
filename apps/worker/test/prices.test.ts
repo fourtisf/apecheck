@@ -54,7 +54,7 @@ describe('price tick', () => {
     const due = await coin(a, 2 * HOUR, 20 * MIN);
     const fresh = await coin(b, 2 * HOUR, 5 * MIN);
     const old = await coin(c, 40 * DAY, 2 * DAY);
-    // first check 40 days ago, re-checked yesterday: tracking still follows the first check
+    // first check 40 days ago, re-checked yesterday: tracked again, hourly from the re-check (last point 2 days old: due)
     const rechecked = await coin(d, 40 * DAY, 2 * DAY, 1 * DAY);
     const site = await prisma.target.create({ data: { key: 'site:no-coin.xyz', kind: 'SITE', name: 'no-coin.xyz', domain: 'no-coin.xyz' } });
     await prisma.check.create({ data: { shortId: 'site001', targetId: site.id, targetRaw: 'no-coin.xyz', status: 'DONE', finishedAt: ago(HOUR) } });
@@ -64,8 +64,8 @@ describe('price tick', () => {
       dexTokens: Object.fromEntries([a, b, c, d].map(x => [x, dexInfo({ chain: 'base', address: x, priceUsd: 0.5, mc: 500_000, vol5m: 1200, ch24: -4.2 })])),
     });
     const res = await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger(), batchSize: 1 }, now);
-    expect(res).toEqual({ tracked: 2, due: 1, written: 1 });
-    expect(sources.calls.filter(x => x.startsWith('dex.tokens'))).toEqual(['dex.tokens base 1']);
+    expect(res).toEqual({ tracked: 3, due: 2, written: 2 });
+    expect(sources.calls.filter(x => x.startsWith('dex.tokens'))).toEqual(['dex.tokens base 1', 'dex.tokens base 1']);
 
     const points = await prisma.pricePoint.findMany({ where: { targetId: due.id }, orderBy: { ts: 'asc' } });
     expect(points).toHaveLength(2);
@@ -77,7 +77,33 @@ describe('price tick', () => {
     expect(Number(t.lastVol5m)).toBe(1200);
     expect(t.lastCh24).toBe(-4.2);
     expect(t.priceUpdatedAt?.getTime()).toBe(now);
-    for (const x of [fresh, old, rechecked]) expect(await prisma.pricePoint.count({ where: { targetId: x.id } })).toBe(1);
+    for (const x of [fresh, old]) expect(await prisma.pricePoint.count({ where: { targetId: x.id } })).toBe(1);
+    expect(await prisma.pricePoint.count({ where: { targetId: rechecked.id } })).toBe(2);
+  });
+
+  it('a re-check restarts the schedule: first check 40 days ago, re-checked a minute ago → a point every 15 minutes', async () => {
+    const e = '0xe100000000000000000000000000000000000006';
+    const t = await coin(e, 40 * DAY, null, 1 * MIN);
+    // saveStage set lastPrice to the re-check's priceAtCheck
+    await prisma.target.update({ where: { id: t.id }, data: { lastPrice: 1 } });
+    const env = testEnv();
+    const sources = fakeSources(env, { dexTokens: { [e]: dexInfo({ chain: 'base', address: e, priceUsd: 2 }) } });
+    // a tick 20 minutes after the re-check
+    const later = now + 20 * MIN;
+    expect(await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger() }, later)).toEqual({ tracked: 1, due: 1, written: 1 });
+    expect(Number((await prisma.target.findUniqueOrThrow({ where: { id: t.id } })).lastPrice)).toBe(2);
+    // 10 minutes later it is not due yet (15-minute cadence of the re-check's first day), 20 minutes later it is
+    expect((await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger() }, later + 10 * MIN)).due).toBe(0);
+    expect((await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger() }, later + 15 * MIN)).due).toBe(1);
+  });
+
+  it('a re-check within the 30 days uses its own cadence, not the first check\'s', async () => {
+    const f = '0xf100000000000000000000000000000000000007';
+    // first check 10 days ago (daily cadence), re-checked 2 h ago, last point 20 minutes ago: due on the 15-minute cadence
+    await coin(f, 10 * DAY, 20 * MIN, 2 * HOUR);
+    const env = testEnv();
+    const sources = fakeSources(env, { dexTokens: { [f]: dexInfo({ chain: 'base', address: f, priceUsd: 0.7 }) } });
+    expect(await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger() }, now)).toEqual({ tracked: 1, due: 1, written: 1 });
   });
 
   it('a coin DexScreener no longer knows is skipped without failing the tick', async () => {

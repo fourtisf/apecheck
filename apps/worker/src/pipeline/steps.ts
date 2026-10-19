@@ -18,6 +18,7 @@ import {
   type StepStatusS,
 } from '@apecheck/core';
 import type { Logger } from '../log';
+import { pgText } from './pgsafe';
 
 export interface StepInput {
   status: StepStatusS;
@@ -54,17 +55,52 @@ export interface StepLoggerDeps {
   log: Logger;
 }
 
+export interface StepLoggerOptions {
+  /**
+   * First idx of this run. A re-run (stalled job picked up again) continues after the previous run's last
+   * idx, so an open SSE stream (which drops idx it already sent) shows the new steps and no screenshot path
+   * (<checkId>/<idx>.jpg, served as immutable) is ever reused for a different image.
+   */
+  firstIdx?: number;
+  /**
+   * The run's Check.startedAt. When set, a step is only written while the check still belongs to this run;
+   * once another run took the check over, steps are dropped and `superseded` turns true.
+   */
+  owner?: Date;
+  /** called once when the check turns out to belong to another run */
+  onSuperseded?: () => void;
+}
+
+/** The check was taken over by another run of the same job (lost lock, stalled job re-run). */
+export class RunSuperseded extends Error {
+  constructor() {
+    super('Another run of this check took over');
+    this.name = 'RunSuperseded';
+  }
+}
+
+const notFound = (e: unknown) => (e as { code?: string } | null)?.code === 'P2025';
+
 export class StepLogger implements StepSink {
   readonly rows: LoggedStep[] = [];
-  private next = 0;
+  private next: number;
   private chain: Promise<unknown> = Promise.resolve();
   private progressValue = 0;
+  private lost = false;
 
   constructor(
     private readonly deps: StepLoggerDeps,
     private readonly check: { id: string; shortId: string },
     private readonly startedAt: number,
-  ) {}
+    private readonly opts: StepLoggerOptions = {},
+  ) {
+    this.next = Math.max(0, opts.firstIdx ?? 0);
+  }
+
+  /** another run owns the check now: nothing this run writes is kept */
+  get superseded(): boolean {
+    return this.lost;
+  }
 
   get progress(): number {
     return this.progressValue;
@@ -73,7 +109,7 @@ export class StepLogger implements StepSink {
   /** Progress only moves forward. Written to the progress key (TTL 1h) without waiting. */
   setProgress(p: number): void {
     const v = clamp(p, 0, 1);
-    if (v <= this.progressValue) return;
+    if (v <= this.progressValue || this.lost) return;
     this.progressValue = v;
     this.deps.redis.set(progressKey(this.check.id), v.toFixed(3), 'EX', 3600).catch(e => this.deps.log.warn('progress write failed', e));
   }
@@ -97,6 +133,7 @@ export class StepLogger implements StepSink {
   }
 
   private async write(idx: number, tMs: number, s: StepInput): Promise<number> {
+    if (this.lost) return -1;
     let screenshot: string | null = null;
     if (s.shot && s.shot.length) {
       const rel = `${this.check.id}/${idx}.jpg`;
@@ -112,25 +149,36 @@ export class StepLogger implements StepSink {
       idx,
       tMs,
       status: s.status,
-      text: clip(s.text.replace(/\s+/g, ' ').trim(), 300),
+      // page text and third-party strings can carry U+0000 / lone surrogates, which Postgres refuses
+      // (applied after clipping: a cut can split a surrogate pair)
+      text: pgText(clip(s.text.replace(/\s+/g, ' ').trim(), 300)),
       source: s.source ?? null,
-      url: s.url ? s.url.slice(0, 1000) : null,
-      caption: s.caption ? clip(s.caption, 80) : null,
+      url: s.url ? pgText(s.url.slice(0, 1000)) : null,
+      caption: s.caption ? pgText(clip(s.caption, 80)) : null,
       screenshot,
     };
-    await this.deps.prisma.checkStep.create({
-      data: {
-        checkId: this.check.id,
-        idx,
-        tMs,
-        status: stepStatusToDb(row.status),
-        text: row.text,
-        source: row.source,
-        url: row.url,
-        caption: row.caption,
-        screenshot: row.screenshot,
-      },
-    });
+    const step = {
+      idx,
+      tMs,
+      status: stepStatusToDb(row.status),
+      text: row.text,
+      source: row.source,
+      url: row.url,
+      caption: row.caption,
+      screenshot: row.screenshot,
+    };
+    if (this.opts.owner) {
+      // only while this run still owns the check (a re-run of the job may have taken it over)
+      try {
+        await this.deps.prisma.check.update({ where: { id: this.check.id, startedAt: this.opts.owner }, data: { steps: { create: step } }, select: { id: true } });
+      } catch (e) {
+        if (!notFound(e)) throw e;
+        this.supersede();
+        return -1;
+      }
+    } else {
+      await this.deps.prisma.checkStep.create({ data: { checkId: this.check.id, ...step } });
+    }
     this.rows.push(row);
     const dto: StepDTO = {
       idx,
@@ -147,7 +195,16 @@ export class StepLogger implements StepSink {
     return idx;
   }
 
+  /** Mark this run as taken over (also used when a final write finds another owner). */
+  supersede(): void {
+    if (this.lost) return;
+    this.lost = true;
+    this.deps.log.warn('another run took this check over; this run stops writing');
+    this.opts.onSuperseded?.();
+  }
+
   async publish(msg: CheckChannelMsg): Promise<void> {
+    if (this.lost) return;
     try {
       await this.deps.redis.publish(checkChannel(this.check.id), JSON.stringify(msg));
     } catch (e) {

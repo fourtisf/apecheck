@@ -9,7 +9,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
-/** Interval between points for a coin first checked at `anchor`; null once tracking has ended. */
+/** Interval between points for a coin whose latest check finished at `anchor`; null once tracking has ended. */
 export function priceInterval(anchor: Date, now: number): number | null {
   const age = now - anchor.getTime();
   if (age < 0) return 15 * MIN;

@@ -4,7 +4,7 @@
  * from whatever was observed, even when part of the stage timed out.
  */
 import { CHAINS, normalizeDomain, type ChainKey } from '@apecheck/core';
-import { Explorer, type SimOutcome } from '../browser/agent';
+import { Explorer, type ExploreResult, type SimOutcome } from '../browser/agent';
 import { COMING_SOON_RE, CONNECT_RE, NEEDS_FUNDS_RE, SIM_INFRA_RE, WAITLIST_RE, isAppUrl, launchRank, AUDIT_RE } from '../browser/keywords';
 import { chainFromHex, evmChainIdHex, type CapturedTx } from '../browser/mock-wallet';
 import { crawlDocs, findDocsLink } from '../browser/docs';
@@ -44,17 +44,32 @@ export function classifySim(r: { ok: boolean; error?: string | null }, chain: Ch
   return { status: 'fail', detail, needsFunds: NEEDS_FUNDS_RE.test(detail), chain };
 }
 
-function simulator(run: CheckRun) {
-  return async (tx: CapturedTx): Promise<SimOutcome> => {
+/**
+ * The chain a captured EVM transaction runs on. The wallet starts on the check's chain (`walletChainId`); a
+ * chain the site switched to must be one we know, or the transaction isn't simulated at all: running it
+ * against another chain's state proves nothing (an address with no code "succeeds" on Ethereum).
+ */
+export function simChain(txChainId: string | null, walletChainId: string, runChain: ChainKey | null): ChainKey | null {
+  const evmRun = runChain && CHAINS[runChain].family === 'evm' ? runChain : null;
+  if (!txChainId) return evmRun ?? 'eth';
+  // still on the chain the wallet started on (also covers Robinhood Chain, which has no numeric id here)
+  if (evmRun && txChainId.toLowerCase() === walletChainId.toLowerCase()) return evmRun;
+  return chainFromHex(txChainId);
+}
+
+function simulator(run: CheckRun, walletChainId: string) {
+  return async (tx: CapturedTx, maxMs: number): Promise<SimOutcome> => {
     const { evm, sol } = run.sources;
+    const ms = Math.max(1000, Math.min(15_000, maxMs));
     if (tx.kind === 'evm') {
-      const chain = chainFromHex(tx.chainId) ?? (run.chain && CHAINS[run.chain].family === 'evm' ? run.chain : 'eth');
+      const chain = simChain(tx.chainId, walletChainId, run.chain);
+      if (!chain) return { status: 'skipped', detail: `unsupported chain ${tx.chainId ?? ''}`.trim(), needsFunds: false, chain: null };
       if (!tx.evm) return { status: 'skipped', detail: 'no transaction payload', needsFunds: false, chain };
-      const r = await within(evm.simulate(chain, tx.evm), 15_000, { ok: false, error: 'simulation timed out' });
+      const r = await within(evm.simulate(chain, tx.evm), ms, { ok: false, error: 'simulation timed out' });
       return classifySim(r, chain);
     }
     if (!tx.base64) return { status: 'skipped', detail: 'transaction could not be serialised', needsFunds: false, chain: 'sol' };
-    const r = await within(sol.simulate(tx.base64), 15_000, { ok: false, error: 'simulation timed out' });
+    const r = await within(sol.simulate(tx.base64), ms, { ok: false, error: 'simulation timed out' });
     return classifySim(r, 'sol');
   };
 }
@@ -102,8 +117,9 @@ export async function browseStage(run: CheckRun): Promise<void> {
   }
   const domain = run.domain ?? normalizeDomain(new URL(run.siteUrl).hostname);
   const evmChain = run.chain && CHAINS[run.chain].family === 'evm' ? run.chain : null;
+  const walletChainId = evmChainIdHex(evmChain);
   try {
-    run.session = await host.newSession({ evmChainId: evmChainIdHex(evmChain), wallet: { readRpc: readRpcFor(run) } });
+    run.session = await host.newSession({ evmChainId: walletChainId, wallet: { readRpc: readRpcFor(run) } });
 
     const opened = await runStage(run, 'open', run.limits.open, ctx => openStage(run, domain, ctx));
     if (!opened.ok && !run.siteInfo) {
@@ -116,9 +132,12 @@ export async function browseStage(run: CheckRun): Promise<void> {
     if (run.site.loaded && !run.site.landingBlocked) {
       const docsReserve = Math.min(run.limits.docs, 15_000);
       const exploreMs = Math.min(run.limits.explore, Math.max(5000, run.left() - docsReserve));
-      const res = await runStage(run, 'explore', exploreMs, ctx => exploreStage(run, ctx));
+      const res = await runStage(run, 'explore', exploreMs, ctx => exploreStage(run, ctx, walletChainId));
+      // what the explore stage saw, frozen now: an action still in flight can't change the verdict without a step
+      run.explored = run.explorer?.snapshot() ?? null;
       if (!res.ok && res.reason !== 'skipped') {
         await run.steps.step({ status: 'warn', text: res.reason === 'timeout' ? 'Ran out of time trying the app' : 'The browser agent stopped with an error' });
+        await recoverLateTx(run, walletChainId);
       }
     }
     run.steps.setProgress(0.45);
@@ -155,8 +174,26 @@ export async function browseStage(run: CheckRun): Promise<void> {
 }
 
 function finishProduct(run: CheckRun) {
-  const x = run.explorer?.result ?? null;
-  run.product = productSignals(run.site, x, run.docs);
+  run.product = productSignals(run.site, run.explored, run.docs);
+}
+
+/**
+ * The stage ended while the main action's transaction was being handled: it was captured but never recorded.
+ * Keep it, with its own log step, as reached but not simulated in time.
+ */
+export async function recoverLateTx(run: CheckRun, walletChainId: string) {
+  const x: ExploreResult | null = run.explored;
+  const tx = run.session?.wallet.txs[0];
+  if (!x || x.tx || !tx) return;
+  const stepIdx = await run.steps.step({ status: 'warn', text: 'Main flow reached a transaction; it was not simulated in time', caption: 'Trying the main flow' });
+  const chain = tx.kind === 'sol' ? 'sol' : simChain(tx.chainId, walletChainId, run.chain);
+  x.tx = { reached: true, kind: tx.kind, simulated: 'skipped', detail: 'not simulated in time', needsFunds: false, chain, stepIdx };
+  x.mainTried = true;
+  if (!x.appReached) {
+    x.appReached = true;
+    x.appStepIdx = stepIdx;
+  }
+  x.appVia = 'page';
 }
 
 async function openStage(run: CheckRun, domain: string, ctx: StageCtx): Promise<void> {
@@ -169,6 +206,13 @@ async function openStage(run: CheckRun, domain: string, ctx: StageCtx): Promise<
   run.siteInfo = { url: run.siteUrl!, finalUrl: o.finalUrl, title: null, loadMs: o.loadMs, httpStatus: o.status };
   run.site.loaded = o.loaded;
   run.site.error = o.error;
+  if (!o.loaded && o.botWall) {
+    // a bot challenge says nothing about the project: the product is unchecked (warn), not dead
+    run.site.infraError = o.error;
+    run.degraded.push('browse:blocked');
+    run.site.loadStepIdx = await steps.step({ status: 'warn', text: `${domain} blocks automated browsers (${o.botWall}); the site could not be checked`, url: run.siteUrl, caption: 'Loading page', shot });
+    return;
+  }
   if (!o.loaded) {
     run.site.loadStepIdx = await steps.step({ status: 'fail', text: `${domain} didn't load (${o.error ?? 'no response'})`, url: run.siteUrl, caption: 'Loading page', shot });
     return;
@@ -209,7 +253,7 @@ async function openStage(run: CheckRun, domain: string, ctx: StageCtx): Promise<
   }
 }
 
-async function exploreStage(run: CheckRun, ctx: StageCtx): Promise<void> {
+async function exploreStage(run: CheckRun, ctx: StageCtx, walletChainId: string): Promise<void> {
   const session = run.session!;
   const maxActions = Math.max(1, run.env.CHECK_MAX_AGENT_ACTIONS);
   run.explorer = new Explorer({
@@ -221,7 +265,7 @@ async function exploreStage(run: CheckRun, ctx: StageCtx): Promise<void> {
     maxActions,
     deadline: ctx.deadline,
     signal: ctx.signal,
-    simulate: simulator(run),
+    simulate: simulator(run, walletChainId),
     onAction: n => run.steps.setProgress(0.12 + 0.33 * Math.min(1, n / maxActions)),
   });
   await run.explorer.run();

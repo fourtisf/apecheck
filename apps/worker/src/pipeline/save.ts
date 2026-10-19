@@ -25,6 +25,9 @@ import { heuristicJudge } from '../ai/heuristic';
 import { finalJudgement, judgeInput } from './judge';
 import { saveTarget } from './resolve';
 import { buildEvidence } from './record';
+import { pgSafe } from './pgsafe';
+import { RunSuperseded } from './steps';
+import type { CheckEvidence } from '@apecheck/core';
 
 export interface SavedCheck {
   narScore: number;
@@ -54,7 +57,8 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
       ...c,
       status: (j?.status ?? 'not_seen') as ClaimStatus,
       evidence: j?.evidence || 'Nothing the agent saw confirms or contradicts this',
-      stepIdx: j?.stepIdx ?? null,
+      // -1 is a step that was dropped (its stage had ended): never cite it
+      stepIdx: j?.stepIdx != null && j.stepIdx >= 0 ? j.stepIdx : null,
     };
   });
   const signals = { launch: p.launch.signal, flow: p.flow.signal, docs: p.docs.signal, acct, git };
@@ -74,15 +78,23 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
   const summary = judged.summary || standIn?.summary || null;
   const coinSummary = run.coin ? judged.coinSummary || standIn?.coinSummary || null : null;
   const checkId = run.check.id;
+  const owner = new Date(run.startedAt);
 
   await saveTarget(run).catch(e => run.log.warn('target update failed', e));
-  await prisma.$transaction(async tx => {
+  // everything below can hold page / third-party text: pgSafe() strips what Postgres refuses (U+0000, lone surrogates)
+  const write = (ev: CheckEvidence) => prisma.$transaction(async tx => {
     // one finisher per target at a time, so exactly one check ends up isLatest
     await tx.$executeRaw`SELECT 1 FROM "Target" WHERE "id" = ${run.targetId} FOR UPDATE`;
+    // still this run's check (a re-run of the job may have taken it over): lock the row and make sure
+    const mine = await tx.check.updateMany({ where: { id: checkId, startedAt: owner, status: 'RUNNING' }, data: { status: 'RUNNING' } });
+    if (!mine.count) throw new RunSuperseded();
     let deployerId: string | null = null;
+    // the wallet is shown whenever it is known; a Deployer row (record, counts) only when its history is
+    let deployerAddress: string | null = null;
     if (run.coin && run.chain) {
       const d = run.coin.raw.deployer;
       const chain = chainToDb(run.chain)!;
+      if (d?.address) deployerAddress = addrKey(run.chain, d.address);
       if (d && run.coin.signals.historyKnown) {
         const address = addrKey(run.chain, d.address);
         const fields = {
@@ -94,8 +106,8 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
         };
         const dep = await tx.deployer.upsert({
           where: { chain_address: { chain, address } },
-          create: { chain, address, ...fields },
-          update: fields,
+          create: pgSafe({ chain, address, ...fields }),
+          update: pgSafe(fields),
           select: { id: true },
         });
         deployerId = dep.id;
@@ -109,8 +121,9 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
     await tx.claim.deleteMany({ where: { checkId } });
     if (claims.length) {
       await tx.claim.createMany({
-        data: claims.map(c => ({
+        data: pgSafe(claims).map((c, idx) => ({
           checkId,
+          idx,
           text: c.text,
           source: c.source,
           kind: c.kind,
@@ -125,6 +138,7 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
       const raw = run.coin.raw;
       const data = {
         deployerId,
+        deployerAddress,
         sigDeployer: sigToDb(s.deployer)!,
         sigBundle: sigToDb(s.bundle)!,
         sigHolders: sigToDb(s.holders)!,
@@ -140,13 +154,13 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
         liquidityUsd: finite(m?.liquidityUsd),
         pairCreatedAt: asDate(m?.pairCreatedAt),
       };
-      await tx.coinFacts.upsert({ where: { checkId }, create: { checkId, ...data }, update: data });
+      await tx.coinFacts.upsert({ where: { checkId }, create: pgSafe({ checkId, ...data }), update: pgSafe(data) });
     }
 
     await tx.check.updateMany({ where: { targetId: run.targetId, isLatest: true, id: { not: checkId } }, data: { isLatest: false } });
     await tx.check.update({
       where: { id: checkId },
-      data: {
+      data: pgSafe({
         targetId: run.targetId,
         status: 'DONE',
         sigLaunch: sigToDb(signals.launch),
@@ -154,7 +168,7 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
         sigDocs: sigToDb(signals.docs),
         sigAcct: sigToDb(signals.acct),
         sigGit: sigToDb(signals.git),
-        evidence: evidence as Prisma.InputJsonValue,
+        evidence: ev as Prisma.InputJsonValue,
         narScore: scores.narrative.score,
         coinScore: scores.coin?.score ?? null,
         totalScore: scores.total,
@@ -169,7 +183,7 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
         error: null,
         priceAtCheck: price,
         mcAtCheck: mc,
-      },
+      }),
     });
     if (price != null) {
       await tx.pricePoint.create({ data: { targetId: run.targetId, ts: finishedAt, price, mc, vol5m: finite(m?.vol5m) } });
@@ -185,6 +199,19 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
     });
   });
 
+  try {
+    await write(pgSafe(evidence));
+  } catch (e) {
+    if (e instanceof RunSuperseded) {
+      run.steps.supersede();
+      throw e;
+    }
+    // one odd value must not cost the verdict: save again with the evidence reduced to its sentences
+    run.log.error('saving the check failed; saving again with minimal evidence', e);
+    run.degraded.push('save:retry');
+    await write(pgSafe(minimalEvidence(evidence, run.degraded)));
+  }
+
   return {
     narScore: scores.narrative.score,
     coinScore: scores.coin?.score ?? null,
@@ -193,6 +220,22 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
     coinBand: scores.coin?.band.key ?? null,
     signals,
     claims: claims.map(c => ({ text: c.text, status: c.status })),
+  };
+}
+
+/** The evidence a check keeps when the full object could not be saved: the signal sentences and the AI mode. */
+export function minimalEvidence(ev: CheckEvidence, degraded: string[]): CheckEvidence {
+  const s = (v: string | undefined) => (typeof v === 'string' ? v.slice(0, 300) : undefined);
+  return {
+    stepsExpected: ev.stepsExpected,
+    ai: ev.ai,
+    launch: s(ev.launch),
+    flow: s(ev.flow),
+    docs: s(ev.docs),
+    git: s(ev.git),
+    acct: s(ev.acct),
+    stubbed: ev.stubbed,
+    degraded: [...degraded],
   };
 }
 

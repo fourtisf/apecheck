@@ -1,8 +1,11 @@
 /** Facts → signals: the deterministic rules (people, coin, docs, product). */
 import { describe, expect, it } from 'vitest';
 import { CONFIG, TUNING } from '@apecheck/core';
-import { acctSignal, coinSignals, docsSignal, flowSignal, gitFacts, gitSignal, launchSignal, type SiteFacts } from '../src/pipeline/signals';
-import { classifySim } from '../src/pipeline/browse';
+import { acctSignal, coinSignals, docsSignal, flowSignal, gitFacts, gitSignal, launchSignal, productSignals, type SiteFacts } from '../src/pipeline/signals';
+import { classifySim, simChain } from '../src/pipeline/browse';
+import { productSentence } from '../src/ai/phrases';
+import { simSkipReason } from '../src/browser/agent';
+import { detectBotWall } from '../src/browser/page';
 import type { ExploreResult } from '../src/browser/agent';
 import { emptyCoinFacts, repoFacts, xUser } from './fakes';
 
@@ -42,6 +45,21 @@ describe('git signal', () => {
 
   it('unknown (GitHub unavailable) stays null for the judge', () => {
     expect(gitSignal(null, { claimsOpenSource: true, anchor: 'first' })).toBeNull();
+  });
+
+  it('burst thresholds come from TUNING: a share strictly above gitBurstShare, at least gitBurstMinCommits commits', () => {
+    expect([TUNING.gitBurstShare, TUNING.gitBurstMinCommits]).toEqual([0.5, 3]);
+    const launch = iso(100 * DAY);
+    const near = (n: number) => Array.from({ length: n }, (_, i) => new Date(Date.parse(launch) - i * 3_600_000).toISOString());
+    const far = (n: number) => Array.from({ length: n }, (_, i) => iso((5 + i * 10) * DAY));
+    const facts = (dates: string[]) => gitFacts([repoFacts({ fullName: 'a/b', commits: dates.length, recentCommitDates: dates, firstCommit: dates[dates.length - 1], lastCommit: dates[0] })], launch, now);
+    // exactly half inside the window: not a burst
+    expect(facts([...near(2), ...far(2)]).burst).toBe(false);
+    // more than half: a burst
+    expect(facts([...near(3), ...far(2)]).burst).toBe(true);
+    // all inside, but fewer than the minimum: not a burst
+    expect(facts(near(TUNING.gitBurstMinCommits - 1)).burst).toBe(false);
+    expect(facts(near(TUNING.gitBurstMinCommits)).burst).toBe(true);
   });
 });
 
@@ -100,28 +118,111 @@ describe('docs signal', () => {
 describe('product signals', () => {
   const site: SiteFacts = { hasSite: true, loaded: true, error: null, claimsLive: true, landingBlocked: null, loadStepIdx: 1 };
   const x = (p: Partial<ExploreResult>): ExploreResult => ({
-    actions: [], entryFound: true, appReached: false, appUrl: null, appStepIdx: null, waitlist: null, comingSoon: null, errorScreen: null, jsError: null,
-    deadLaunch: null, launch404: null, deadButtons: [], mainTried: false, mainOk: null, needsFunds: null, tx: null, doneReason: null, keyShots: [], ...p,
+    actions: [], entryFound: true, appReached: false, appVia: null, appUrl: null, appStepIdx: null, waitlist: null, comingSoon: null, errorScreen: null, jsError: null,
+    deadLaunch: null, launch404: null, deadButtons: [], mainTried: false, mainOk: null, mainPartial: null, needsFunds: null, tx: null, doneReason: null, keyShots: [], ...p,
   });
+  const docs = { link: null, result: null, timedOut: false, stepIdx: null };
   it('launch rules', () => {
     expect(launchSignal({ ...site, loaded: false, error: 'connection refused' }, null)).toMatchObject({ signal: 'fail', text: "The site didn't load (connection refused)" });
     expect(launchSignal(site, x({ entryFound: false }))).toMatchObject({ signal: 'warn', text: "The site says the product is live, but there is no 'Launch app' or similar button" });
     expect(launchSignal(site, x({ deadLaunch: { stepIdx: 2, text: "'Launch app' does nothing when clicked" } }))).toMatchObject({ signal: 'fail', stepIdx: 2 });
-    expect(launchSignal(site, x({ waitlist: { stepIdx: 2, text: "'Launch app' opens a waitlist form" } })).signal).toBe('warn');
+    expect(launchSignal(site, x({ waitlist: { stepIdx: 2, text: "'Launch app' opens a waitlist form", main: false } })).signal).toBe('warn');
     expect(launchSignal({ ...site, landingBlocked: 'coming_soon' }, null).signal).toBe('warn');
     expect(launchSignal({ ...site, hasSite: false }, null).signal).toBe('warn');
+    // our browser was blocked (bot challenge): unchecked, never "doesn't load"
+    expect(launchSignal({ ...site, loaded: false, error: 'the site blocks automated browsers', infraError: 'the site blocks automated browsers' }, null)).toMatchObject({
+      signal: 'warn',
+      text: 'The site could not be checked (the site blocks automated browsers)',
+    });
+  });
+
+  it('a wallet connect alone does not outweigh an app entry that leads nowhere', () => {
+    const wallet = { tool: 'click' as const, label: 'Connect wallet', role: 'entry' as const, outcome: 'wallet' as const, status: 'ok' as const, text: "'Connect wallet' asked the test wallet to connect", stepIdx: 5, url: null };
+    const viaWallet = { appReached: true, appVia: 'wallet' as const, appStepIdx: 5, actions: [wallet] };
+    // 'Launch app' shows 'Coming soon', a header 'Connect wallet' works
+    expect(launchSignal(site, x({ ...viaWallet, comingSoon: { stepIdx: 3, text: "'Launch app' shows 'Coming soon'", main: false } }))).toEqual({
+      signal: 'warn', text: "'Launch app' shows 'Coming soon' (only the wallet connect works)", stepIdx: 3,
+    });
+    // a dead 'Launch app' plus a working connect
+    expect(launchSignal(site, x({ ...viaWallet, deadLaunch: { stepIdx: 3, text: "'Launch app' does nothing when clicked" } })).signal).toBe('fail');
+    // the connect itself lands on a waitlist: not an app at all
+    expect(launchSignal(site, x({ waitlist: { stepIdx: 3, text: "'Connect wallet' opens a waitlist form", main: false } })).signal).toBe('warn');
+    // a landing page that is the app (connect works, nothing blocks) is still ok
+    expect(launchSignal(site, x(viaWallet)).signal).toBe('ok');
+    // an app screen that was really reached (route, amount field, transaction, signature) wins over a blocked entry
+    expect(launchSignal(site, x({ ...viaWallet, appVia: 'page', comingSoon: { stepIdx: 3, text: "'Launch app' shows 'Coming soon'", main: false } })).signal).toBe('ok');
+    expect(launchSignal(site, x({ ...viaWallet, comingSoon: { stepIdx: 3, text: 'x', main: false }, mainOk: { stepIdx: 7, text: 'signed' } })).signal).toBe('ok');
+    // a waitlist behind the main action inside a real app is a flow problem, not a launch problem
+    expect(launchSignal(site, x({ appReached: true, appVia: 'page', waitlist: { stepIdx: 6, text: 'Main flow stops at a waitlist form', main: true } })).signal).toBe('ok');
+
+    // the summary follows the corrected launch signal
+    const p = productSignals(site, x({ ...viaWallet, deadLaunch: { stepIdx: 3, text: "'Launch app' does nothing when clicked" } }), docs);
+    expect(p.causes.deadLaunch).toBe(true);
+    expect(p.flow.signal).toBe('fail');
+    expect(productSentence(p.causes, p)).toBe("'Launch app' does nothing");
+    const cs = productSignals(site, x({ ...viaWallet, comingSoon: { stepIdx: 3, text: "'Launch app' shows 'Coming soon'", main: false } }), docs);
+    expect(productSentence(cs.causes, cs)).toBe("The app is still 'Coming soon'");
   });
   it('flow rules', () => {
     const launchOk = { signal: 'ok' as const, text: 'App opened', stepIdx: 2 };
     const tx = (simulated: 'ok' | 'fail' | 'skipped', needsFunds = false) => x({ appReached: true, tx: { reached: true, kind: 'evm', simulated, detail: 'execution reverted', needsFunds, chain: 'base', stepIdx: 4 } });
     expect(flowSignal(launchOk, tx('ok')).signal).toBe('ok');
-    expect(flowSignal(launchOk, tx('skipped')).signal).toBe('ok');
+    // reached but not simulated: not shown to work
+    expect(flowSignal(launchOk, x({ appReached: true, tx: { reached: true, kind: 'evm', simulated: 'skipped', detail: 'fetch failed', needsFunds: false, chain: 'base', stepIdx: 4 } }))).toEqual({
+      signal: 'warn', text: "Main flow reached a transaction; it couldn't be simulated (our Base RPC didn't answer)", stepIdx: 4,
+    });
+    // the main action only opened a dialog / changed the page: not a working flow
+    expect(flowSignal(launchOk, x({ appReached: true, mainTried: true, mainPartial: { stepIdx: 5, text: "'Swap' opens a dialog; no transaction or signature followed", kind: 'modal' } }))).toEqual({
+      signal: 'warn', text: "The main action opened a dialog; the flow wasn't completed", stepIdx: 5,
+    });
+    expect(flowSignal(launchOk, x({ appReached: true, mainTried: true, mainPartial: { stepIdx: 5, text: 'x', kind: 'changed' } })).signal).toBe('warn');
+    // a signature request from the main action is a working flow
+    expect(flowSignal(launchOk, x({ appReached: true, mainTried: true, mainOk: { stepIdx: 5, text: "'Swap' asked the test wallet to sign; the flow works up to that point" } })).signal).toBe('ok');
+    // a dropped step (idx -1) is never cited
+    expect(flowSignal(launchOk, x({ appReached: true, mainTried: true, mainPartial: { stepIdx: -1, text: 'x', kind: 'modal' } })).stepIdx).toBeNull();
     expect(flowSignal(launchOk, tx('fail', true)).signal).toBe('warn');
     expect(flowSignal(launchOk, tx('fail')).text).toBe('Main flow reached a transaction, but the simulation failed: execution reverted');
     expect(flowSignal(launchOk, x({ appReached: true, jsError: { stepIdx: 4, text: 'Main flow throws an error: TypeError' } })).signal).toBe('fail');
     expect(flowSignal(launchOk, x({ appReached: true })).text).toBe('Nothing to try in the app beyond the first screen');
     expect(flowSignal({ signal: 'warn', text: 'waitlist', stepIdx: 2 }, null).signal).toBe('warn');
   });
+  it("'works end to end' only when a transaction simulated", () => {
+    const appSite = { appReached: true, appVia: 'page' as const, appStepIdx: 2, mainTried: true };
+    const sentence = (r: Partial<ExploreResult>) => {
+      const p = productSignals(site, x({ ...appSite, ...r }), docs);
+      return productSentence(p.causes, p);
+    };
+    expect(sentence({ tx: { reached: true, kind: 'evm', simulated: 'ok', detail: null, needsFunds: false, chain: 'base', stepIdx: 4 } })).toBe('The app works end to end');
+    expect(sentence({ tx: { reached: true, kind: 'evm', simulated: 'skipped', detail: 'fetch failed', needsFunds: false, chain: 'base', stepIdx: 4 } })).toBe("The app reaches a transaction, but it couldn't be simulated");
+    expect(sentence({ mainPartial: { stepIdx: 4, text: 'x', kind: 'modal' } })).toBe("The app loads but the main flow wasn't completed");
+    expect(sentence({ mainOk: { stepIdx: 4, text: 'x' } })).toBe('The app works up to the wallet signature');
+  });
+
+  it('simulation chain: a chain the site switched to must be one we know', () => {
+    // no chain id: the check's chain (or Ethereum)
+    expect(simChain(null, '0x2105', 'base')).toBe('base');
+    expect(simChain(null, '0x1', null)).toBe('eth');
+    // still on the wallet's starting chain (Robinhood Chain has no numeric id here)
+    expect(simChain('0x1', '0x1', 'rh')).toBe('rh');
+    expect(simChain('0x2105', '0x1', null)).toBe('base');
+    // Polygon / Optimism…: not simulated at all, never on Ethereum
+    expect(simChain('0x89', '0x2105', 'base')).toBeNull();
+    expect(simChain('0xa', '0x1', null)).toBeNull();
+    expect(simSkipReason({ detail: 'unsupported chain 0x89', chain: null })).toBe("it targets a chain ApeCheck can't simulate (chain id 137)");
+    expect(simSkipReason({ detail: 'not simulated in time', chain: 'base' })).toBe('not simulated in time');
+  });
+
+  it('bot walls: challenge markers, never a plain origin error', () => {
+    expect(detectBotWall(403, { 'cf-mitigated': 'challenge', server: 'cloudflare' }, 'Just a moment...')).toBe('Cloudflare bot challenge');
+    expect(detectBotWall(503, { server: 'cloudflare' }, 'Just a moment...')).toBe('bot challenge page');
+    expect(detectBotWall(403, {}, 'Attention Required! | Cloudflare')).toBe('bot challenge page');
+    expect(detectBotWall(403, { 'x-vercel-mitigated': 'challenge' }, '')).toBe('Vercel bot challenge');
+    expect(detectBotWall(429, {}, 'Too Many Requests')).toBe('rate limited');
+    expect(detectBotWall(403, { server: 'cloudflare' }, '403 Forbidden')).toBeNull();
+    expect(detectBotWall(404, {}, 'Not Found')).toBeNull();
+    expect(detectBotWall(503, { server: 'nginx' }, 'Service Unavailable')).toBeNull();
+  });
+
   it('simulation outcomes: no funds is the wallet, not the project', () => {
     expect(classifySim({ ok: false, error: 'insufficient funds for gas * price + value' }, 'base')).toMatchObject({ status: 'fail', needsFunds: true });
     expect(classifySim({ ok: false, error: 'Attempt to debit an account but found no record of a prior credit.' }, 'sol')).toMatchObject({ needsFunds: true });

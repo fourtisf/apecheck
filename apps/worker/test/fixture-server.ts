@@ -49,6 +49,52 @@ export async function serveFixture(name: string): Promise<FixtureSite> {
   };
 }
 
+/** A fixture host answered by `handler` (status codes and headers the static sites can't produce). */
+export async function serveHandler(name: string, handler: http.RequestListener): Promise<FixtureSite> {
+  const server = http.createServer(handler);
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as net.AddressInfo).port;
+  const host = `${name}.test:${port}`;
+  return {
+    name,
+    host,
+    port,
+    url: `http://${host}/`,
+    close: () => new Promise<void>(r => { server.closeAllConnections(); server.close(() => r()); }),
+  };
+}
+
+/** Cloudflare's "Just a moment..." bot challenge (403 + cf-mitigated), or a plain 403 from an origin behind Cloudflare. */
+export function challengeHandler(kind: 'challenge' | 'plain403'): http.RequestListener {
+  return (_req, res) => {
+    if (kind === 'challenge') {
+      res.writeHead(403, { 'content-type': 'text/html; charset=UTF-8', 'cf-mitigated': 'challenge', server: 'cloudflare', 'cache-control': 'no-store' });
+      res.end('<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title></head><body><noscript>Enable JavaScript and cookies to continue</noscript><p>Checking your browser before accessing the site.</p></body></html>');
+    } else {
+      res.writeHead(403, { 'content-type': 'text/html', server: 'cloudflare' });
+      res.end('<!doctype html><html><head><title>403 Forbidden</title></head><body><h1>403 Forbidden</h1></body></html>');
+    }
+  };
+}
+
+/** A hostile page: megabytes of text, and the builtins the page scripts use redefined to defeat their caps. */
+export function hostileHandler(): http.RequestListener {
+  return (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><head><title>Hostile</title></head><body><h1>Hi</h1><a href="/x" id="l">Launch app</a><script>
+      const big = 'word '.repeat(1000000);
+      document.body.appendChild(document.createTextNode(big));
+      document.getElementById('l').href = '/' + 'a'.repeat(200000);
+      document.title = 'T'.repeat(200000) + '\u0000';
+      String.prototype.slice = function () { return String(this); };
+      String.prototype.trim = function () { return String(this); };
+      String.prototype.replace = function () { return String(this); };
+      Array.prototype.slice = function () { return this; };
+      Object.defineProperty(HTMLElement.prototype, 'innerText', { get() { return 'EVIL'.repeat(1000000); } });
+    </script></body></html>`);
+  };
+}
+
 /** A port nothing listens on (the "never loads" site). */
 export async function closedPort(): Promise<number> {
   const s = net.createServer();

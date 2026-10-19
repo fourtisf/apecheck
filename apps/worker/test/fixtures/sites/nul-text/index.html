@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Zero</title><style>body{font-family:sans-serif;margin:0}main{padding:24px}.btn{padding:12px 20px}</style></head>
+<body>
+<main>
+  <h1>Zero: the null protocol</h1>
+  <p id="hero">Live on Base mainnet.</p>
+  <button class="btn" type="button" id="launch">Launch app</button>
+</main>
+<script>
+  // invisible to visitors: a U+0000 (and a lone surrogate) in the title, the hero copy, a console error,
+  // an uncaught page error and a dialog
+  document.title = 'Zero \u0000 protocol \ud800';
+  document.getElementById('hero').textContent = 'Live on Base\u0000 mainnet, AI agents\u0000 trade for you.';
+  console.error('boom \u0000 here');
+  document.getElementById('launch').addEventListener('click', () => alert('Coming \u0000 later'));
+  setTimeout(() => { throw new Error('page error \u0000 with a nul'); }, 0);
+</script>
+</body></html>

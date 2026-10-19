@@ -1,8 +1,9 @@
 /** Stage A: target detection and gap filling with FakeSources, Target re-keying in the test database. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { reportError, type Sources } from '@apecheck/sources';
 import { memoryLogger } from '../src/log';
 import { CheckRun, type PipelineDeps } from '../src/pipeline/context';
-import { findCoin, projectSite, resolveStage, xHandleFromLinks } from '../src/pipeline/resolve';
+import { findCoin, finishResolve, projectSite, resolveStage, saveTarget, xHandleFromLinks } from '../src/pipeline/resolve';
 import { StepLogger } from '../src/pipeline/steps';
 import { serveFixture, type FixtureSite } from './fixture-server';
 import { dexInfo, fakeSources, xUser, type FakeData } from './fakes';
@@ -23,14 +24,19 @@ afterAll(async () => {
 });
 beforeEach(() => resetDb());
 
-async function resolve(targetRaw: string, data: FakeData) {
+async function resolve(targetRaw: string, data: FakeData, tweak?: (s: Sources) => void) {
   const check = await createCheck(targetRaw);
   const mem = memoryStepDeps();
   const log = memoryLogger();
-  const deps: PipelineDeps = { env, prisma, redis: mem.redis, sources: fakeSources(env, data), ai: heuristicAi(), browser: async () => null, log };
+  const sources = fakeSources(env, data);
+  tweak?.(sources);
+  const deps: PipelineDeps = { env, prisma, redis: mem.redis, sources, ai: heuristicAi(), browser: async () => null, log };
   const steps = new StepLogger({ prisma, redis: mem.redis, screenshotDir: env.SCREENSHOT_DIR, log }, check, Date.now());
   const run = new CheckRun(deps, check, steps, Date.now(), Date.now() + 60_000, new AbortController().signal);
   await resolveStage(run, { signal: new AbortController().signal, deadline: Date.now() + 25_000 });
+  // runCheck saves the Target once Stage A is over
+  finishResolve(run);
+  await saveTarget(run);
   await steps.flush();
   const target = await prisma.target.findUniqueOrThrow({ where: { id: run.targetId } });
   return { run, texts: steps.rows.map(r => `${r.status}|${r.source ?? ''}|${r.text}`), target };
@@ -77,6 +83,22 @@ describe('Stage A — resolve', () => {
     expect(target).toMatchObject({ key: 'site:coin-site.test', kind: 'SITE', name: 'coin-site.test', ca: PEPE, chain: 'BASE', ticker: 'PROCKET', handle: 'peperocket' });
   });
 
+  it('website: a contract on the page that DexScreener and the RPCs could not vet is "unconfirmed", not "not found"', async () => {
+    const { run, target } = await resolve(coinSite.url, {}, s => {
+      s.dex.token = async () => {
+        reportError('dexscreener.token: getaddrinfo ENOTFOUND api.dexscreener.com');
+        return null;
+      };
+      s.evm.detectChain = async () => {
+        for (const c of ['base', 'eth', 'bnb', 'arb']) reportError(`evm.getCode ${c}: getaddrinfo ENOTFOUND rpc`);
+        return null;
+      };
+    });
+    expect(run.hasCoin()).toBe(false);
+    expect(run.unconfirmedCoin).toEqual({ address: PEPE, why: 'DexScreener and the chain RPCs unavailable' });
+    expect(target.ca).toBeNull();
+  });
+
   it('EVM contract: chain detection, then token info → website + X handle', async () => {
     const coin = '0x3333333333333333333333333333333333333333';
     const { texts, target } = await resolve(coin, {
@@ -87,11 +109,69 @@ describe('Stage A — resolve', () => {
     expect(target).toMatchObject({ key: `ca:arb:${coin}`, name: '$ZAP', chain: 'ARB', domain: 'zap.finance', handle: 'zapfinance' });
   });
 
-  it('EVM contract found on no chain', async () => {
+  it('EVM contract found on no chain (only the chains that were asked are named)', async () => {
     const coin = '0x4444444444444444444444444444444444444444';
     const { texts, target } = await resolve(coin, {});
-    expect(texts).toEqual(['warn||Contract 0x444…4444 not found on Base, Ethereum, BNB Chain, Arbitrum or Robinhood Chain']);
+    expect(texts).toEqual(['warn|On-chain|Contract 0x444…4444 not found on Base, Ethereum, BNB Chain or Arbitrum']);
     expect(target.key).toBe(`ca:evm:${coin}`);
+  });
+
+  it('never says "not found" for chains whose RPC could not answer', async () => {
+    const coin = '0x5555555555555555555555555555555555555555';
+    const down = (chains: string[]) => (s: Sources) => {
+      s.evm.detectChain = async () => {
+        for (const c of chains) reportError(`evm.getCode ${c}: getaddrinfo ENOTFOUND rpc.${c}`);
+        return null;
+      };
+      s.dex.token = async () => {
+        reportError('dexscreener.token: getaddrinfo ENOTFOUND api.dexscreener.com');
+        return null;
+      };
+    };
+    const all = await resolve(coin, {}, down(['base', 'eth', 'bnb', 'arb']));
+    expect(all.texts).toEqual([
+      'warn|On-chain|Couldn\'t reach the Base, Ethereum, BNB Chain and Arbitrum RPCs, so the chain of 0x555…5555 is unknown',
+      'warn|DexScreener|DexScreener unavailable, no market data',
+    ]);
+    const some = await resolve(coin, {}, down(['bnb']));
+    expect(some.texts[0]).toBe('warn|On-chain|Contract 0x555…5555 not found on Base, Ethereum or Arbitrum; BNB Chain RPC unavailable');
+  });
+
+  describe('an earlier chain\'s RPC did not answer but a later chain has the code', () => {
+    const coin = '0x6666666666666666666666666666666666666666';
+    // Base rate-limited for the whole detection (the adapter already retried it), same address has code on Ethereum
+    const baseDown = (s: Sources) => {
+      s.evm.detectChain = async () => {
+        reportError('evm.getCode base: HTTP 429 from mainnet.base.org');
+        return 'eth';
+      };
+    };
+
+    it('DexScreener\'s pair on the unanswered chain wins', async () => {
+      const { texts, target, run } = await resolve(coin, { dexTokens: { [coin]: dexInfo({ chain: 'base', address: coin, symbol: 'SAME' }) } }, baseDown);
+      expect(texts[0]).toBe('info|DexScreener|Contract on Base: 0x666…6666');
+      expect(texts.some(t => t.includes('RPC unavailable'))).toBe(false);
+      expect(target).toMatchObject({ key: `ca:base:${coin}`, chain: 'BASE', ticker: 'SAME' });
+      expect(run.market?.chain).toBe('base');
+    });
+
+    it('no pair anywhere: stays on the later chain and says the earlier RPC went unanswered', async () => {
+      const { texts, target } = await resolve(coin, {}, baseDown);
+      expect(texts).toEqual([
+        'info|On-chain|Contract on Ethereum: 0x666…6666',
+        'warn|On-chain|Base RPC unavailable; contract found on Ethereum',
+        'info|DexScreener|No trading pair found on DexScreener',
+      ]);
+      expect(target).toMatchObject({ key: `ca:eth:${coin}`, chain: 'ETH' });
+    });
+
+    it('a pair on a chain after the hit is not used; the hit chain is asked for its own pair', async () => {
+      const { texts, target, run } = await resolve(coin, { dexTokens: { [coin]: dexInfo({ chain: 'arb', address: coin }) } }, baseDown);
+      expect(texts[0]).toBe('info|On-chain|Contract on Ethereum: 0x666…6666');
+      expect(texts[1]).toBe('warn|On-chain|Base RPC unavailable; contract found on Ethereum');
+      expect(target).toMatchObject({ chain: 'ETH' });
+      expect(run.market).toBeNull();
+    });
   });
 });
 

@@ -4,6 +4,8 @@
  * so it only runs with E2E=1 (meant for the VPS: `E2E=1 pnpm e2e`). Keys come from the repo-root .env;
  * the database and Redis stay the isolated test ones.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -20,11 +22,12 @@ describe.skipIf(!enabled)(`public smoke check: ${target}`, () => {
   let worker: CheckWorkerHandle;
   let queue: Queue<CheckJob>;
   let conn: Redis;
+  let shotDir: string;
 
   beforeAll(async () => {
     // keys from .env, but never its DATABASE_URL / REDIS_URL: the test config already set the isolated ones
     const env = loadEnv({ override: false });
-    env.SCREENSHOT_DIR = tmpDir('apecheck-e2e-shots-');
+    shotDir = env.SCREENSHOT_DIR = tmpDir('apecheck-e2e-shots-');
     worker = await startCheckWorker({ env, log: createLogger('e2e'), recover: false });
     conn = new Redis(process.env.REDIS_URL!, { maxRetriesPerRequest: null });
     queue = new Queue<CheckJob>(QUEUES.checks, { connection: conn });
@@ -54,5 +57,21 @@ describe.skipIf(!enabled)(`public smoke check: ${target}`, () => {
     expect(c.narScore).not.toBeNull();
     expect(c.steps.length).toBeGreaterThan(4);
     expect(c.steps.some(s => s.screenshot)).toBe(true);
+
+    // a check that never reached the site (no DNS / egress from this machine) must not pass as a real check
+    const unreachable = c.steps.find(s => /Blocked by SSRF guard: could not resolve|the domain does not resolve|blocks automated browsers/.test(s.text));
+    if (unreachable) throw new Error(`the public site was not reached from this machine (no outbound DNS / egress?): "${unreachable.text}"`);
+    expect(c.steps.some(s => /didn't load/.test(s.text))).toBe(false);
+    expect(c.sigLaunch).not.toBe('FAIL');
+    // the page really loaded and rendered: an OK load step with its screenshot on disk
+    const loadIdx = c.steps.findIndex(s => s.status === 'OK' && /^Page loaded in/.test(s.text));
+    expect(loadIdx).toBeGreaterThanOrEqual(0);
+    const load = c.steps[loadIdx];
+    expect(load.screenshot).toBeTruthy();
+    expect(fs.existsSync(path.join(shotDir, load.screenshot!))).toBe(true);
+    // and was explored after it (agent actions, docs, claims), with every screenshot written
+    expect(c.steps.length - loadIdx - 1).toBeGreaterThan(0);
+    expect(c.steps.slice(loadIdx + 1).some(s => s.screenshot)).toBe(true);
+    for (const s of c.steps) if (s.screenshot) expect(fs.existsSync(path.join(shotDir, s.screenshot))).toBe(true);
   });
 });

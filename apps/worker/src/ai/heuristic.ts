@@ -4,10 +4,12 @@
  * refuses or returns something that fails validation.
  */
 import {
+  CHAINS,
   CLAIM_KINDS,
   TUNING,
   clipSentence,
   normaliseClaims,
+  type ChainKey,
   type ClaimKind,
   type ClaimSource,
   type ClaimStatus,
@@ -177,7 +179,9 @@ export function heuristicClaims(input: ClaimsInput): ExtractedClaim[] {
       if (source === 'docs' && kind === 'docs') continue;
       if ((perKind.get(kind) ?? 0) >= 2) continue;
       perKind.set(kind, (perKind.get(kind) ?? 0) + 1);
-      found.push({ text: s.length > 120 ? clipSentence(s, 120) : s, source, kind });
+      // claims read as short phrases ("Live on Base mainnet"), like the prototype and the model's output
+      const text = (s.length > 120 ? clipSentence(s, 120) : s).replace(/(?<!\.)\.$/, '');
+      found.push({ text, source, kind });
     }
   }
   // most checkable kinds first, keeping copy order within a kind
@@ -192,21 +196,50 @@ const STATUS_BY_SIGNAL: Record<Signal, ClaimStatus> = { ok: 'seen_working', warn
 const FACT_STATUS_BY_SIGNAL: Record<Signal, ClaimStatus> = { ok: 'checks_out', warn: 'not_seen', fail: 'contradicted' };
 
 function judged(index: number, status: ClaimStatus, ev: SignalEvidence | null, fallback: string): JudgedClaim {
-  return { index, status, evidence: ev?.text || fallback, stepIdx: ev?.stepIdx ?? null };
+  // idx -1 is a step that was dropped (its stage had ended): never cite it
+  const stepIdx = ev?.stepIdx != null && ev.stepIdx >= 0 ? ev.stepIdx : null;
+  return { index, status, evidence: ev?.text || fallback, stepIdx };
+}
+
+const CLAIM_CHAINS: [RegExp, ChainKey][] = [
+  [/\bbase\b/i, 'base'],
+  [/\b(ethereum|eth mainnet|ethereum mainnet)\b/i, 'eth'],
+  [/\b(bnb|bsc|binance smart chain)\b/i, 'bnb'],
+  [/\barbitrum\b/i, 'arb'],
+  [/\brobinhood\b/i, 'rh'],
+  [/\bsolana\b/i, 'sol'],
+];
+
+/** The chain a "mainnet" claim names ("Live on Base mainnet" → base), or null when it names none. */
+export function claimedChain(text: string): ChainKey | null {
+  return CLAIM_CHAINS.find(([re]) => re.test(text))?.[1] ?? null;
 }
 
 export function heuristicJudge(input: JudgeInput): Judged {
   const p = input.product;
-  const acct = input.people.acct ?? { signal: 'warn' as Signal, text: 'No X account to check', stepIdx: null };
+  // unknown people signals: the evidence line says why ("@x: account could not be read" when X was unavailable)
+  const acct = input.people.acct ?? { signal: 'warn' as Signal, text: input.evidence.acct || 'No X account to check', stepIdx: null };
   const git = input.people.git ?? { signal: 'warn' as Signal, text: 'GitHub: not checked', stepIdx: null };
   const claims: JudgedClaim[] = input.claims.map((c, i) => {
     switch (c.kind) {
       case 'live_product':
-      case 'mainnet':
         return judged(i, STATUS_BY_SIGNAL[p.launch.signal], p.launch, 'Nothing on the site could be opened');
+      case 'mainnet': {
+        // an app that opens doesn't show which chain it runs on: only a transaction that simulated fine, on the
+        // chain the claim names, counts as seeing it live
+        if (p.launch.signal !== 'ok') return judged(i, STATUS_BY_SIGNAL[p.launch.signal], p.launch, 'Nothing on the site could be opened');
+        const tx = input.evidence.site?.wallet?.tx ?? null;
+        const named = claimedChain(c.text);
+        if (input.causes.txSimulated === 'ok' && tx && (!named || named === tx.chain)) return judged(i, 'seen_working', p.flow, 'The main flow reached a transaction');
+        if (input.causes.txSimulated === 'ok' && tx?.chain && named && named !== tx.chain) {
+          return judged(i, 'not_seen', { signal: 'warn', text: `The transaction the agent reached runs on ${CHAINS[tx.chain as ChainKey]?.name ?? tx.chain}, not ${CHAINS[named].name}`, stepIdx: p.flow.stepIdx }, '');
+        }
+        return judged(i, 'not_seen', p.flow, 'No transaction was simulated, so the chain was not seen');
+      }
       case 'ai_agent': {
-        const flow = p.launch.signal === 'ok' ? p.flow : p.launch;
-        return judged(i, STATUS_BY_SIGNAL[flow.signal], flow, 'The main flow was not reached');
+        // a working swap doesn't show an AI agent: only a product that doesn't open says something about it
+        if (p.launch.signal === 'fail') return judged(i, 'contradicted', p.launch, 'Nothing on the site could be opened');
+        return judged(i, 'not_seen', null, 'Nothing the agent saw shows an AI agent at work');
       }
       case 'open_source':
         return judged(i, STATUS_BY_SIGNAL[git.signal], git, 'No repository was found');

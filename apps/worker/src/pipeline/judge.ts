@@ -7,6 +7,7 @@ import { heuristicJudge } from '../ai/heuristic';
 import type { CoinJudgeFacts, JudgeInput, SignalEvidence } from '../ai/types';
 import type { CheckRun } from './context';
 import { buildEvidence } from './record';
+import { worst } from './signals';
 import type { StageCtx } from './stage';
 import { plural } from './text';
 
@@ -33,7 +34,7 @@ export function judgeInput(run: CheckRun): JudgeInput {
       evidence,
     };
   }
-  const shots = [run.landingShot, ...(run.explorer?.result.keyShots ?? [])].filter((b): b is Buffer => !!b).slice(0, 3);
+  const shots = [run.landingShot, ...(run.explored?.keyShots ?? [])].filter((b): b is Buffer => !!b).slice(0, 3);
   return {
     name: run.ticker ? `$${run.ticker}` : run.domain ?? (run.handle ? `@${run.handle}` : 'the project'),
     kind: run.kind,
@@ -48,6 +49,7 @@ export function judgeInput(run: CheckRun): JudgeInput {
       stale: g?.stale ?? false,
       thin: g?.thin ?? false,
       onlyForks: g?.onlyForks ?? false,
+      unchecked: !run.git.signal,
     },
     coin,
     auditLink: run.auditLink,
@@ -66,10 +68,16 @@ export async function judgeStage(run: CheckRun, ctx: StageCtx): Promise<void> {
   run.judged = await run.deps.ai.judge(judgeInput(run), run.aiCtx(ctx.signal));
 }
 
-/** Judge output, or the stand-in when the judge stage didn't finish. */
+/**
+ * Judge output, or the stand-in when the judge stage didn't finish. The deterministic acct / git signals win.
+ * When one is unknown the judge may only lower it: an unknown is never `ok` (the model has no X or GitHub
+ * data, and page copy claiming "a doxxed team" is no evidence). When the source itself was unavailable (X not
+ * readable, GitHub down, Stage D cut short) it is `warn`; only when there was nothing to look up (no X account,
+ * no repo link or name) may the judge's `fail` stand.
+ */
 export function finalJudgement(run: CheckRun) {
   const judged = run.judged ?? heuristicJudge(judgeInput(run));
-  const acct: SignalEvidence['signal'] = run.acct.signal?.signal ?? judged.acct;
-  const git: SignalEvidence['signal'] = run.git.signal?.signal ?? judged.git;
+  const acct: SignalEvidence['signal'] = run.acct.signal?.signal ?? (run.handle ? 'warn' : worst(judged.acct, 'warn'));
+  const git: SignalEvidence['signal'] = run.git.signal?.signal ?? (run.git.unknown === 'nothing-to-look-up' ? worst(judged.git, 'warn') : 'warn');
   return { judged, acct, git };
 }

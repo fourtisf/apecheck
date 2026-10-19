@@ -3,7 +3,7 @@ import { STEPS_EXPECTED, type CheckEvidence } from '@apecheck/core';
 import type { CheckRun } from './context';
 
 export function buildEvidence(run: CheckRun): CheckEvidence {
-  const x = run.explorer?.result ?? null;
+  const x = run.explored;
   const p = run.product;
   const ev: CheckEvidence = {
     stepsExpected: STEPS_EXPECTED[run.kind],
@@ -15,7 +15,13 @@ export function buildEvidence(run: CheckRun): CheckEvidence {
     ev.docs = p.plain.docs;
   }
   ev.git = run.git.plain ?? 'not checked';
-  ev.acct = run.acct.plain ?? (run.handle ? `@${run.handle}: account could not be read` : 'No X account linked to the project');
+  ev.acct =
+    run.acct.plain ??
+    (run.handle
+      ? `@${run.handle}: account could not be read`
+      : run.site.hasSite && !run.site.loaded
+        ? "X account unknown (the site couldn't be read)"
+        : 'No X account linked to the project');
 
   const u = run.xUser;
   if (u || run.handle) {

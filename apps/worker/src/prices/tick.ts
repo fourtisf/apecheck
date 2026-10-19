@@ -1,6 +1,8 @@
 /**
  * worker-prices tick: pick tracked coins that are due, fetch them from DexScreener in batches, store a
- * PricePoint each and refresh Target.last*. Coins are tracked from their first finished check for 30 days.
+ * PricePoint each and refresh Target.last*. A coin is tracked for 30 days after its latest finished check, on
+ * that check's cadence (every new check — a Re-check included — starts the 15 min / 1 h / 1 day schedule
+ * again), because "since check" compares the latest price with the latest check's priceAtCheck.
  */
 import type { PrismaClient } from '@apecheck/db';
 import { chainFromDb, type ChainKey } from '@apecheck/core';
@@ -27,14 +29,15 @@ const finite = (n: number | null | undefined) => (n != null && Number.isFinite(n
 export async function runPriceTick(deps: PriceTickDeps, now = Date.now()): Promise<PriceTickResult> {
   const { prisma, dex, log } = deps;
   const since = new Date(now - TRACK_DAYS * 86_400_000);
-  const firsts = await prisma.check.groupBy({
+  // the newest finished check of each target (the one the feed and report show) anchors its schedule
+  const latest = await prisma.check.groupBy({
     by: ['targetId'],
     where: { status: 'DONE', finishedAt: { not: null } },
-    _min: { finishedAt: true },
-    having: { finishedAt: { _min: { gte: since } } },
+    _max: { finishedAt: true },
+    having: { finishedAt: { _max: { gte: since } } },
   });
-  if (!firsts.length) return { tracked: 0, due: 0, written: 0 };
-  const anchors = new Map(firsts.map(f => [f.targetId, f._min.finishedAt!]));
+  if (!latest.length) return { tracked: 0, due: 0, written: 0 };
+  const anchors = new Map(latest.map(f => [f.targetId, f._max.finishedAt!]));
   const ids = [...anchors.keys()];
   const targets = await prisma.target.findMany({
     where: { id: { in: ids }, ca: { not: null }, chain: { not: null } },

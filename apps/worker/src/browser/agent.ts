@@ -5,7 +5,7 @@
  * dead button, JS error) and logs one step with a screenshot per action.
  */
 import type { Page } from 'playwright';
-import type { ChainKey } from '@apecheck/core';
+import { CHAINS, type ChainKey } from '@apecheck/core';
 import type { AiAdapter, AiCallCtx, BrowserAction, DomElement, DomSummary, ExploreFlags } from '../ai/types';
 import type { StepSink, StepInput } from '../pipeline/steps';
 import { netErrorText, quote, shortUrl } from '../pipeline/text';
@@ -51,6 +51,22 @@ export interface SimOutcome {
   chain: ChainKey | null;
 }
 
+/**
+ * Why a captured transaction couldn't be simulated, in plain words for the log (the raw transport error,
+ * e.g. "getaddrinfo ENOTFOUND …", stays in Check.evidence). It is our RPC that failed, not the project.
+ */
+export function simSkipReason(sim: Pick<SimOutcome, 'detail' | 'chain'>): string {
+  const d = sim.detail ?? '';
+  if (/^(no transaction payload|transaction could not be serialised|not simulated in time)$/.test(d)) return d;
+  const unsupported = /^unsupported chain(?: (0x[0-9a-f]+))?/i.exec(d);
+  if (unsupported) {
+    const id = unsupported[1] ? Number.parseInt(unsupported[1], 16) : NaN;
+    return Number.isFinite(id) ? `it targets a chain ApeCheck can't simulate (chain id ${id})` : "it targets a chain ApeCheck can't simulate";
+  }
+  if (/timed out|timeout/i.test(d)) return sim.chain ? `our ${CHAINS[sim.chain].name} RPC timed out` : 'the RPC timed out';
+  return sim.chain ? `our ${CHAINS[sim.chain].name} RPC didn't answer` : 'no RPC';
+}
+
 export interface ExploreDeps {
   session: BrowseSession;
   ai: AiAdapter;
@@ -61,7 +77,8 @@ export interface ExploreDeps {
   /** epoch ms; exploration stops before this */
   deadline: number;
   signal: AbortSignal;
-  simulate(tx: CapturedTx): Promise<SimOutcome>;
+  /** simulate a captured transaction; `maxMs` is what is left of the stage for it */
+  simulate(tx: CapturedTx, maxMs: number): Promise<SimOutcome>;
   onAction?(done: number): void;
 }
 
@@ -80,17 +97,27 @@ export interface ExploreResult {
   /** the landing page shows an app entry (Launch app / Trade / Connect wallet…) */
   entryFound: boolean;
   appReached: boolean;
+  /**
+   * How the app was reached: 'page' = an app screen was seen (app route or link, an amount field, a
+   * transaction); 'wallet' = only a wallet connect on a page that otherwise shows no app. A wallet connect
+   * alone doesn't outweigh an app entry that leads to a waitlist, 'Coming soon', a 404 or nothing.
+   */
+  appVia: 'page' | 'wallet' | null;
   appUrl: string | null;
   appStepIdx: number | null;
-  waitlist: { stepIdx: number; text: string } | null;
+  /** `main`: on the main action inside the app, not on the way into it */
+  waitlist: { stepIdx: number; text: string; main: boolean } | null;
   comingSoon: { stepIdx: number; text: string; main: boolean } | null;
-  errorScreen: { stepIdx: number; text: string } | null;
+  errorScreen: { stepIdx: number; text: string; main: boolean } | null;
   jsError: { stepIdx: number; text: string } | null;
   deadLaunch: { stepIdx: number; text: string } | null;
   launch404: { stepIdx: number; text: string } | null;
   deadButtons: string[];
   mainTried: boolean;
+  /** the main action asked the wallet to sign (a transaction is `tx`) */
   mainOk: { stepIdx: number; text: string } | null;
+  /** the main action only opened a dialog / changed the page / asked to connect: the flow wasn't completed */
+  mainPartial: { stepIdx: number; text: string; kind: 'modal' | 'changed' | 'navigated' | 'connect' } | null;
   needsFunds: { stepIdx: number; text: string } | null;
   tx: TxResult | null;
   doneReason: string | null;
@@ -158,8 +185,8 @@ export class Explorer {
     appReached: false, walletRequested: false, walletConnected: false, txCaptured: false, waitlist: false, comingSoon: false, errorScreen: false,
   };
   private readonly r: ExploreResult = {
-    actions: [], entryFound: false, appReached: false, appUrl: null, appStepIdx: null, waitlist: null, comingSoon: null, errorScreen: null,
-    jsError: null, deadLaunch: null, launch404: null, deadButtons: [], mainTried: false, mainOk: null, needsFunds: null, tx: null,
+    actions: [], entryFound: false, appReached: false, appVia: null, appUrl: null, appStepIdx: null, waitlist: null, comingSoon: null, errorScreen: null,
+    jsError: null, deadLaunch: null, launch404: null, deadButtons: [], mainTried: false, mainOk: null, mainPartial: null, needsFunds: null, tx: null,
     doneReason: null, keyShots: [],
   };
   private readonly siteHost: string | null;
@@ -171,13 +198,27 @@ export class Explorer {
     this.siteHost = hostOf(d.siteUrl);
   }
 
-  /** what has been observed so far (also readable after a stage timeout) */
+  /** what has been observed so far (live: an action still in flight after a stage timeout can't change it once aborted) */
   get result(): ExploreResult {
     return this.r;
   }
 
+  /**
+   * A copy of the result as it stands now. The pipeline takes it when the explore stage ends, so nothing an
+   * abandoned action does later can change the verdict without a log step.
+   */
+  snapshot(): ExploreResult {
+    const r = this.r;
+    return { ...r, actions: [...r.actions], deadButtons: [...r.deadButtons], keyShots: [...r.keyShots], tx: r.tx ? { ...r.tx } : null };
+  }
+
   private left(): number {
     return this.d.deadline - Date.now();
+  }
+
+  /** the stage ended (timeout or budget): whatever an action still in flight finds is not recorded */
+  private get stopped(): boolean {
+    return this.d.signal.aborted;
   }
 
   async run(): Promise<ExploreResult> {
@@ -217,6 +258,7 @@ export class Explorer {
         break;
       }
       const rec = await this.execute(action, summary);
+      if (this.stopped) break;
       this.r.actions.push(rec);
       this.d.onAction?.(this.r.actions.length);
       lastResult = rec.text;
@@ -230,23 +272,34 @@ export class Explorer {
     return this.r;
   }
 
+  /**
+   * Only copies what the wallet saw. Whether that means the app was reached is decided per action in click():
+   * a connect that lands on a waitlist / 'Coming soon' screen is not an app.
+   */
   private syncWalletFlags() {
     const w = this.d.session.wallet;
     this.flags.walletRequested = w.requested;
     this.flags.walletConnected = w.connected;
-    if (w.requested) this.markApp(this.page.url(), null);
   }
 
-  private markApp(url: string, stepIdx: number | null) {
+  private markApp(url: string, stepIdx: number | null, via: 'page' | 'wallet') {
+    if (this.stopped) return;
     this.flags.appReached = true;
     this.r.appReached = true;
+    if (via === 'page' || !this.r.appVia) this.r.appVia = via;
     if (!this.r.appUrl) this.r.appUrl = url;
     if (this.r.appStepIdx == null && stepIdx != null && stepIdx >= 0) this.r.appStepIdx = stepIdx;
   }
 
   private async log(s: StepInput, keyShot = false): Promise<number> {
+    if (this.stopped) return -1;
     if (keyShot && s.shot && this.r.keyShots.length < 2) this.r.keyShots.push(s.shot);
     return this.d.steps.step(s);
+  }
+
+  /** The action that was in flight when the stage ended: returned to the loop, never recorded. */
+  private abandoned(tool: BrowserAction['tool'], label: string, role: ActionRole): ActionRecord {
+    return this.record(tool, label, role, 'missing', 'info', 'Stopped: the time for trying the app ran out', -1, null);
   }
 
   private async execute(action: BrowserAction, summary: DomSummary): Promise<ActionRecord> {
@@ -293,6 +346,7 @@ export class Explorer {
     const after = await probe(this.page);
     const shot = await screenshot(this.page);
     const label = shortUrl(url);
+    if (this.stopped) return this.abandoned('open_link', label, appLike ? 'entry' : 'other');
     const caption = `Opening ${label}`;
     if (error || (status != null && status >= 400) || NOT_FOUND_RE.test(`${after.title} ${after.h1}`)) {
       const text = error ? `${label} doesn't load (${error})` : `${label} returns ${status === 404 || status == null ? '404' : `HTTP ${status}`}`;
@@ -302,7 +356,7 @@ export class Explorer {
     if (appLike || after.connectButton || after.amountInput) {
       const text = `Opened the app at ${shortUrl(after.url)}`;
       const idx = await this.log({ status: 'ok', text, url: after.url, caption, shot }, true);
-      this.markApp(after.url, idx);
+      this.markApp(after.url, idx, 'page');
       return this.record('open_link', label, 'entry', 'app', 'ok', text, idx, after.url);
     }
     const text = `Opened ${shortUrl(after.url)}`;
@@ -329,7 +383,7 @@ export class Explorer {
     await sleep(500);
     const before = await probe(page);
     const noise = before.added + before.removed - (before0.added + before0.removed);
-    const w0 = s.wallet.activity, tx0 = s.wallet.txs.length, err0 = s.pageErrors.length, pop0 = s.popups.length, dlg0 = s.dialogs.length;
+    const w0 = s.wallet.activity, sig0 = s.wallet.signatures, tx0 = s.wallet.txs.length, err0 = s.pageErrors.length, pop0 = s.popups.length, dlg0 = s.dialogs.length;
     const url0 = page.url();
     const t0 = Date.now();
 
@@ -360,6 +414,7 @@ export class Explorer {
     }
     const elapsed = Date.now() - t0;
     const navigated = pageNow !== page || normUrl(after.url) !== normUrl(url0);
+    if (this.stopped) return this.abandoned('click', label, role);
     if (navigated) this.page = pageNow;
 
     const jsErr = s.pageErrors.slice(err0)[0]?.message ?? null;
@@ -389,8 +444,13 @@ export class Explorer {
     else outcome = 'dead';
 
     this.syncWalletFlags();
+    const walletRose = s.wallet.activity > w0;
+    const signed = s.wallet.signatures > sig0;
     const shot = await screenshot(pageNow);
+    if (this.stopped) return this.abandoned('click', label, role);
     const url = after.url || pageNow.url();
+    // a wallet connect counts as reaching an app screen only when that screen shows one (an amount field, an app route)
+    const walletVia = (): 'page' | 'wallet' => (after.amountInput || isAppUrl(url, this.siteHost) ? 'page' : 'wallet');
     const caption = role === 'main' ? 'Trying the main flow' : role === 'connect' || role === 'wallet' ? 'Connecting the test wallet' : `Clicking ${q}`;
     const step = (st: StepInput['status'], text: string, key = false) => this.log({ status: st, text, url, caption, shot }, key);
     const rec = async (st: StepInput['status'], text: string, key = false) => {
@@ -402,18 +462,21 @@ export class Explorer {
       const tx = s.wallet.txs[s.wallet.txs.length - 1];
       this.flags.txCaptured = true;
       this.r.mainTried = true;
-      const sim = await this.d.simulate(tx);
+      // bounded by what is left of the stage, so a slow RPC ends as "not simulated" inside the stage, not after it
+      const sim = await this.d.simulate(tx, Math.max(1000, Math.min(15_000, this.left() - 1500)));
+      // the stage ended while simulating: the pipeline records the captured transaction itself
+      if (this.stopped) return this.abandoned('click', label, role);
       const text =
         sim.status === 'ok'
           ? 'Main flow reached a transaction; simulation succeeded'
           : sim.status === 'skipped'
-            ? `Main flow reached a transaction; it could not be simulated (${sim.detail ?? 'no RPC'})`
+            ? `Main flow reached a transaction; it could not be simulated (${simSkipReason(sim)})`
             : sim.needsFunds
               ? 'Main flow reached a transaction, but the test wallet has no funds to finish it'
               : `Main flow reached a transaction; simulation failed: ${sim.detail ?? 'reverted'}`;
-      const st: StepInput['status'] = sim.status === 'ok' || sim.status === 'skipped' ? 'ok' : sim.needsFunds ? 'warn' : 'fail';
+      const st: StepInput['status'] = sim.status === 'ok' ? 'ok' : sim.status === 'skipped' || sim.needsFunds ? 'warn' : 'fail';
       const { idx, record } = await rec(st, text, true);
-      this.markApp(url, idx);
+      this.markApp(url, idx, 'page');
       this.r.tx = { reached: true, kind: tx.kind, simulated: sim.status, detail: sim.detail, needsFunds: sim.needsFunds, chain: sim.chain, stepIdx: idx };
       return record;
     }
@@ -430,7 +493,7 @@ export class Explorer {
         case 'waitlist': {
           const { idx, record } = await rec('warn', 'Main flow stops at a waitlist form', true);
           this.flags.waitlist = true;
-          this.r.waitlist ??= { stepIdx: idx, text: record.text };
+          this.r.waitlist ??= { stepIdx: idx, text: record.text, main: true };
           return record;
         }
         case 'error':
@@ -438,7 +501,7 @@ export class Explorer {
           const what = outcome === 'not_found' ? 'a 404 page' : `an error: ${snippet(screenText, ERROR_SCREEN_RE)}`;
           const { idx, record } = await rec('fail', `Main flow shows ${what}`, true);
           this.flags.errorScreen = true;
-          this.r.errorScreen ??= { stepIdx: idx, text: record.text };
+          this.r.errorScreen ??= { stepIdx: idx, text: record.text, main: true };
           return record;
         }
         case 'js_error': {
@@ -458,9 +521,22 @@ export class Explorer {
           return record;
         }
         default: {
-          const text = outcome === 'wallet' ? `${q} asked the test wallet to sign; the flow works up to that point` : `${q} responded without errors`;
-          const { idx, record } = await rec('ok', text, true);
-          this.r.mainOk ??= { stepIdx: idx, text };
+          // only a signature request (a transaction is handled above) shows the main action works; a dialog
+          // ("Select a token"), a page change or a connect request is a flow that wasn't completed
+          if (outcome === 'wallet' && signed) {
+            const text = `${q} asked the test wallet to sign; the flow works up to that point`;
+            const { idx, record } = await rec('ok', text, true);
+            this.r.mainOk ??= { stepIdx: idx, text };
+            return record;
+          }
+          const kind = outcome === 'modal' ? 'modal' : outcome === 'wallet' ? 'connect' : outcome === 'app' || outcome === 'navigated' ? 'navigated' : 'changed';
+          const text =
+            kind === 'modal' ? `${q} opens a dialog; no transaction or signature followed`
+            : kind === 'connect' ? `${q} only made a wallet request (connect or network switch); no transaction or signature followed`
+            : kind === 'navigated' ? `${q} opens ${shortUrl(url)}; no transaction or signature followed`
+            : `${q} changes the page, but no transaction or signature followed`;
+          const { idx, record } = await rec('info', text, true);
+          this.r.mainPartial ??= { stepIdx: idx, text, kind };
           return record;
         }
       }
@@ -470,22 +546,23 @@ export class Explorer {
       switch (outcome) {
         case 'app':
         case 'navigated': {
-          if (outcome === 'navigated' && role !== 'entry') break;
-          const appLike = outcome === 'app';
+          if (outcome === 'navigated' && role !== 'entry' && !walletRose) break;
+          // a page that asks the wallet to connect as it opens is an app too
+          const appLike = outcome === 'app' || walletRose;
           const text = `${q} opens ${shortUrl(url)}`;
           const { idx, record } = await rec(appLike ? 'ok' : 'info', text, appLike);
-          if (appLike) this.markApp(url, idx);
+          if (appLike) this.markApp(url, idx, 'page');
           return record;
         }
         case 'wallet': {
           const { idx, record } = await rec('ok', `${q} asked the test wallet to connect`, true);
-          this.markApp(url, idx);
+          this.markApp(url, idx, walletVia());
           return record;
         }
         case 'waitlist': {
           const { idx, record } = await rec('warn', `${q} opens a waitlist form`, true);
           this.flags.waitlist = true;
-          this.r.waitlist ??= { stepIdx: idx, text: record.text };
+          this.r.waitlist ??= { stepIdx: idx, text: record.text, main: false };
           return record;
         }
         case 'coming_soon': {
@@ -502,7 +579,7 @@ export class Explorer {
         case 'error': {
           const { idx, record } = await rec('fail', `${q} shows an error: ${snippet(screenText, ERROR_SCREEN_RE)}`, true);
           this.flags.errorScreen = true;
-          this.r.errorScreen ??= { stepIdx: idx, text: record.text };
+          this.r.errorScreen ??= { stepIdx: idx, text: record.text, main: false };
           return record;
         }
         case 'js_error':
@@ -526,9 +603,9 @@ export class Explorer {
 
     // anything else: a plain click
     if (outcome === 'dead') this.r.deadButtons.push(label);
-    if (outcome === 'app') {
+    if (outcome === 'app' || (outcome === 'navigated' && walletRose)) {
       const { idx, record } = await rec('ok', `${q} opens ${shortUrl(url)}`, true);
-      this.markApp(url, idx);
+      this.markApp(url, idx, 'page');
       return record;
     }
     const plain =
@@ -538,7 +615,7 @@ export class Explorer {
       : outcome === 'modal' ? `${q} opens a dialog`
       : `Clicked ${q}`;
     const { idx, record } = await rec('info', plain);
-    if (outcome === 'wallet') this.markApp(url, idx);
+    if (outcome === 'wallet') this.markApp(url, idx, walletVia());
     return record;
   }
 }
