@@ -55,19 +55,60 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
   only chains that never answered are reported (`evm.getCode <chain>: …`), so the worker can say "Base RPC
   unavailable" next to an Ethereum hit. `tokenBasics` decodes ABI and bytes32 strings, reads
   `owner()` (fallback `getOwner()`), and scans bytecode opcodes for `PUSH4` mint selectors (`0x40c10f19`,
-  `0xa0712d68`, `0x4e6ec247`); behind EIP-1167 / EIP-1967 proxies the implementation is scanned too. Owner
+  `0xa0712d68`, `0x4e6ec247`); behind a proxy the implementation is scanned too and returned as `implementation`
+  (EIP-1167 target, the EIP-1967 implementation slot, or `implementation()` of the EIP-1967 beacon; both slots are
+  read at once). **A read the node did not run is never an answer:** an `eth_call` error counts as "the function
+  isn't there" only when the contract ran and failed (code 3, "execution reverted", "invalid opcode", "out of gas",
+  Nethermind's -32015 "VM execution error"); HTTP 429 / 5xx, -32005 rate limits, -32603, "header not found",
+  "missing trie node", timeouts are failed reads (`isExecutionFailure`). An `owner()`/`getOwner()` failure is reported
+  (`evm.tokenBasics owner <chain>`) and leaves `ownerRenounced` `null`; an unread proxy slot (`evm.implementation
+  <chain>`) or implementation code leaves `hasMintFunction` `null`, never `false`. Owner
   `0x0` / `0x…dEaD` → `ownerRenounced`. No `owner()`/`getOwner()` counts as renounced only when the bytecode is
   known and shows nothing else that controls the supply: no owner selector, no role-based control (AccessControl
   `hasRole`/`grantRole`/`getRoleAdmin`/`revokeRole`/`MINTER_ROLE()`, AccessManaged `authority()`, MinterRole
   `isMinter`/`addMinter`) and no mint function. Otherwise `ownerRenounced` is `null` (a minter role, bridge or
   anyone may still mint: "Mint function present, owner unknown", authorities unknown → warn). `simulate()` = `eth_call` + `eth_estimateGas` with
   the decoded `Error(string)` / `Panic(uint256)` reason. **Never `eth_sendTransaction` / `eth_sendRawTransaction`.**
-- **Solana** — `mintInfo` (`getAccountInfo` jsonParsed, SPL Token and Token-2022), `largestHolders`
+- **Solana** — `mintInfo` (`getAccountInfo` jsonParsed, SPL Token and Token-2022; a Token-2022 mint also gets
+  `extensions`: each extension with the settings only an authority changes — transfer fee rate and authorities,
+  transfer hook program, permanent delegate, pause, default account state, close authority… — never withheld fees
+  or other counters), `largestHolders`
   (`getTokenLargestAccounts` + `getTokenSupply` + `getMultipleAccounts` for owners, % of supply),
   `simulate` (`simulateTransaction`, base64, `sigVerify: false`, `replaceRecentBlockhash: true`).
   **Never `sendTransaction`.**
+
+## Wallet reads (M3: tiers and sign-in)
+
+The API reads these for tiers by $APECHECK holding and smart-wallet sign-in; the worker can reuse them (with
+`@apecheck/db` `computeTier`). They are optional on the `EvmSource` / `SolanaSource` interfaces (test fakes need not
+stub them) and always present on the adapters: `createEvm()` / `createSolana()` / `createSources()` return
+`EvmWalletSource` / `SolanaWalletSource`. Like every method they never throw; failures are `null` + `lastError`.
+
+- `sol.tokenBalance(owner, mint)` — whole tokens: one `getTokenAccountsByOwner(owner, { mint }, { encoding:
+  'jsonParsed' })` (the RPC resolves the mint's program, SPL Token or Token-2022), keeping the accounts of either token
+  program whose `info.mint` is the mint and summing their raw `tokenAmount.amount` (exact BigInt) scaled by
+  `decimals`. No account → `0`. The query failing → `null`. Never a `{ programId }` scan of the wallet: the owner sets
+  its size (each spam token account adds ~500 bytes), so they could push it past the RPC size cap / timeout and make
+  their own read fail at will.
+- `evm.tokenBalance(chain, token, owner)` — `balanceOf(owner)` / 10^`decimals()` via `eth_call` on that chain
+  (decimals cached per token). No ERC-20 at the address (revert / empty) or no `decimals()` → `null`, never a
+  guessed scale.
+- `evm.isValidSignature(chain, address, hash, signature, { timeoutMs = 4000 })` — EIP-1271:
+  `isValidSignature(bytes32,bytes)` (selector `0x1626ba7e`, ABI-encoded by `encodeIsValidSignature`) via `eth_call`;
+  `true` only when the first 32-byte word it returns is the magic value ABI-encoded (`0x1626ba7e` + 28 zero bytes,
+  `ERC1271_MAGIC_WORD`, as OpenZeppelin's SignatureChecker requires), `false` for anything else or a revert (an EOA
+  answers empty data). Matching only the first 4 bytes would accept any contract that echoes its call data (it starts
+  with the same selector), e.g. the identity precompile `0x…04`; addresses below `0x10000` (precompiles) are `false`
+  without a request. `null` when the chain didn't answer.
+- `walletTokenBalance({ evm, sol }, chain, token, owner)` — picks the reader by chain family (Tron → `null`).
+- The $APECHECK quote uses the existing `dex.token(TOKEN_CHAIN, TOKEN_ADDRESS)` (price, 24 h change).
+- `base58Encode` / `base58Decode` and `toUnits(raw, decimals)` are exported for the API (Solana public keys).
 - **Tron** — `/wallet/getcontract` (creator = `origin_address`, bytecode for the mint scan) and
   `/wallet/triggerconstantcontract` for `name/symbol/decimals/totalSupply/owner` (owner converted to base58check).
+  A constant call is "not there" only when the contract answered (`CONTRACT_EXE_ERROR`, a run whose transaction
+  `ret` is `FAILED`); an HTTP error (TronGrid's 429 without a key), `SERVER_BUSY` / `OTHER_ERROR` or an answer without
+  a result is a failed read. For `owner()` that failure is reported (`tron.tokenInfo owner`) and leaves
+  `ownerRenounced` `null`.
 - **GitHub** — `fromUrl` accepts `owner/repo`, `github.com/owner[/repo]`, `owner.github.io`; an owner alone
   gives its top 3 non-fork repos by last push. Per repo: commits from `?per_page=100` (recent dates, last
   commit) plus, when there is more than one page, the `rel="last"` page (total = (pages − 1) × 100 + rows on the

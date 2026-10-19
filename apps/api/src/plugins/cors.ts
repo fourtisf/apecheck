@@ -32,7 +32,7 @@ export async function registerCors(app: FastifyInstance, env: Env) {
       cb(null, originAllowed(env, allowed, origin));
     },
     credentials: true,
-    methods: ['GET', 'HEAD', 'POST', 'OPTIONS'],
+    methods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Last-Event-ID'],
     exposedHeaders: ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'retry-after'],
     maxAge: 600,

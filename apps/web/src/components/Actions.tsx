@@ -4,7 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { detect } from '@apecheck/core';
 import { createCheck, isApiError, NETWORK_ERROR } from '@/lib/api';
 import { reportPath } from '@/lib/env';
-import { AccessModal } from './AccessModal';
+import { AccessModal, accessTitle } from './AccessModal';
+import { useAccount } from './Account';
 import { useFeedState } from './FeedState';
 import { useLive } from './Live';
 import { useMe } from './Me';
@@ -16,9 +17,6 @@ import type { VCardItem } from './VCard';
 /** Same words as the prototype's startCheck() toast. */
 export const BAD_TARGET_MSG = 'Paste a contract address, an X post link or a website';
 
-/** Wallet sign-in (SIWE / SIWS) arrives in M3; until then "Connect wallet" opens the access modal. */
-const WALLET_SIGN_IN = false;
-
 export interface ActionsApi {
   /** the access modal; out=true when the viewer has no checks left */
   openAccess(out?: boolean): void;
@@ -27,9 +25,10 @@ export interface ActionsApi {
   /**
    * Start a check like the hero form: bad input → toast, no credits → access modal, otherwise
    * POST /v1/checks, refresh credits and go to the report. Resolves to the check id, or null.
+   * `private` (Max only) keeps the check off the public feed.
    */
-  startCheck(raw: string, opts?: { recheck?: boolean }): Promise<string | null>;
-  /** header "Connect wallet" */
+  startCheck(raw: string, opts?: { recheck?: boolean; private?: boolean }): Promise<string | null>;
+  /** "Connect wallet": the wallet sign-in modal */
   connectWallet(): void;
   /** header search fallback: filter the feed's verdict list by `q` (on "/" only; elsewhere navigate to /?q=) */
   requestFeedSearch(q: string): void;
@@ -55,20 +54,23 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const toast = useToast();
   const { open: openModal } = useModal();
-  const { me, refresh, setCredits } = useMe();
+  const { me, creditsKnown, refresh, setCredits } = useMe();
   const { trackMine } = useLive();
+  const { openWallets } = useAccount();
   const feedState = useFeedState();
   const [feedSearch, setFeedSearch] = useState<FeedSearchRequest | null>(null);
 
   const meRef = useRef(me);
+  const knownRef = useRef(creditsKnown);
   useEffect(() => {
     meRef.current = me;
-  }, [me]);
+    knownRef.current = creditsKnown;
+  }, [me, creditsKnown]);
   const busy = useRef(false);
 
   const openAccess = useCallback(
     (out = false) => {
-      openModal(<AccessModal out={out} />, { label: out ? "You've used today's free checks" : 'Checks and access' });
+      openModal(<AccessModal out={out} />, { label: accessTitle(meRef.current, out) });
     },
     [openModal],
   );
@@ -81,20 +83,21 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
   );
 
   const startCheck = useCallback(
-    async (raw: string, opts: { recheck?: boolean } = {}) => {
+    async (raw: string, opts: { recheck?: boolean; private?: boolean } = {}) => {
       const d = detect(raw);
       if (!d || d.kind === 'bad') {
         toast(BAD_TARGET_MSG);
         return null;
       }
-      if (meRef.current && meRef.current.credits <= 0) {
+      // (a placeholder count right after sign-out isn't "out": the API decides)
+      if (meRef.current && knownRef.current && meRef.current.credits <= 0) {
         openAccess(true);
         return null;
       }
       if (busy.current) return null;
       busy.current = true;
       try {
-        const res = await createCheck({ target: raw.trim(), recheck: opts.recheck || undefined });
+        const res = await createCheck({ target: raw.trim(), recheck: opts.recheck || undefined, private: opts.private || undefined });
         setCredits(res.credits);
         if (!res.cached && (res.status === 'queued' || res.status === 'running')) trackMine(res.id);
         router.push(reportPath(res.id));
@@ -115,9 +118,7 @@ export function ActionsProvider({ children }: { children: ReactNode }) {
     [toast, openAccess, setCredits, trackMine, router, refresh],
   );
 
-  const connectWallet = useCallback(() => {
-    if (!WALLET_SIGN_IN) openAccess(false);
-  }, [openAccess]);
+  const connectWallet = useCallback(() => openWallets(), [openWallets]);
 
   const requestFeedSearch = useCallback(
     (q: string) => {

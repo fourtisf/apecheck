@@ -17,17 +17,18 @@ export function fmtTokenPrice(usd: number): string {
 }
 
 /**
- * The header's "$APECHECK $0.00412 +6.1%". Hidden while the token isn't live (MeDTO.tokenLive false)
- * and whenever no real quote is passed in: it never shows a made-up price. MeDTO has no quote yet,
- * so the header renders nothing until the API provides one.
+ * The header's "$APECHECK $0.00412 +6.1%" (the prototype's markup) from MeDTO.token, or `quote` when given.
+ * Hidden while the token isn't live (MeDTO.tokenLive false) and whenever there is no real quote: it never shows a
+ * made-up price.
  */
 export function TokenPrice({ quote }: { quote?: TokenQuote | null }) {
   const { me } = useMe();
-  if (!me?.tokenLive || !quote) return null;
+  const q = quote ?? me?.token ?? null;
+  if (!me?.tokenLive || !q || !(q.usd > 0)) return null;
   return (
     <span className="tok">
-      $APECHECK <b>{fmtTokenPrice(quote.usd)}</b>{' '}
-      {quote.ch24 != null ? <span className={quote.ch24 >= 0 ? 'up' : 'dn'}>{fmtPct(quote.ch24)}</span> : null}
+      $APECHECK <b>{fmtTokenPrice(q.usd)}</b>{' '}
+      {q.ch24 != null ? <span className={q.ch24 >= 0 ? 'up' : 'dn'}>{fmtPct(q.ch24)}</span> : null}
     </span>
   );
 }

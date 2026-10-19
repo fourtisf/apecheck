@@ -127,8 +127,17 @@ export interface EvmTokenBasics {
    * access control, no mint function); null when who controls the token is unknown
    */
   ownerRenounced: boolean | null;
-  /** bytecode exposes a mint-like selector (mint(address,uint256) etc.) */
+  /**
+   * bytecode exposes a mint-like selector (mint(address,uint256) etc.), the logic behind a proxy included; null when
+   * unknown (no code, or the proxy's implementation couldn't be read)
+   */
   hasMintFunction: boolean | null;
+  /**
+   * The logic contract behind a proxy (EIP-1167 target, EIP-1967 implementation slot or beacon), lowercase; null when
+   * the token is not such a proxy, or when it couldn't be read (the failure is reported). Optional so test fakes need
+   * not set it.
+   */
+  implementation?: string | null;
 }
 export interface EvmSource {
   /** last non-fatal error (also reported to the current captureErrors() scope) */
@@ -147,7 +156,23 @@ export interface EvmSource {
   simulate(chain: ChainKey, tx: EvmTxRequest): Promise<SimResult>;
   /** contract creator (Etherscan V2 getcontractcreation); null when unavailable */
   creator(chain: ChainKey, address: string): Promise<{ creator: string; txHash: string | null; createdAt: string | null } | null>;
+  /**
+   * M3 (tiers): ERC-20 balance of `owner` in whole tokens (`balanceOf(owner)` / 10^`decimals()`, both via eth_call).
+   * null when it couldn't be read (no RPC, transport error, no ERC-20 at `token`, no decimals()); the reason is in
+   * lastError. Never 0 for "unknown". Optional on the interface so test fakes need not stub it (see EvmWalletSource).
+   */
+  tokenBalance?(chain: ChainKey, token: string, owner: string): Promise<number | null>;
+  /**
+   * M3 (wallet sign-in, smart wallets): EIP-1271 `isValidSignature(bytes32 hash, bytes signature)` on the contract
+   * at `address` via eth_call. true only when its first 32-byte return word is the magic value 0x1626ba7e ABI-encoded
+   * (left-aligned, zero-padded: ERC1271_MAGIC_WORD); false when it returns anything else (a shorter answer, call data
+   * echoed back) or reverts (also: no contract there, a precompile); null when the chain didn't answer (no RPC,
+   * timeout, HTTP error).
+   */
+  isValidSignature?(chain: ChainKey, address: string, hash: string, signature: string, opts?: { timeoutMs?: number }): Promise<boolean | null>;
 }
+/** The EVM source with the M3 wallet methods present (what createEvm() and createSources().evm return). */
+export type EvmWalletSource = EvmSource & Required<Pick<EvmSource, 'tokenBalance' | 'isValidSignature'>>;
 
 export interface SolMintInfo {
   exists: boolean;
@@ -157,6 +182,12 @@ export interface SolMintInfo {
   freezeAuthority: string | null;
   /** token-2022 program? */
   token2022: boolean;
+  /**
+   * Token-2022 only: its extensions, each with the settings that only change when an authority acts (transfer fee
+   * and its authorities, transfer hook program, permanent delegate, pause, default account state, close authority…),
+   * as sorted "<extension> <field>=<value> …" strings; balances and other counters are left out.
+   */
+  extensions?: string[];
 }
 export interface SolanaSource {
   configured: boolean;
@@ -167,7 +198,16 @@ export interface SolanaSource {
   largestHolders(mint: string): Promise<{ owner: string | null; account: string; amount: string; pct: number }[]>;
   /** simulateTransaction (sigVerify false). Never sendTransaction. */
   simulate(txBase64: string): Promise<SimResult>;
+  /**
+   * M3 (tiers): how many `mint` tokens `owner` holds, in whole tokens: getTokenAccountsByOwner (jsonParsed) filtered
+   * by the mint (the RPC resolves SPL Token or Token-2022), the accounts summed. null when it couldn't be read (the
+   * query failed, bad address); 0 when the wallet has no account of the mint. Optional on the interface so test
+   * fakes need not stub it (see SolanaWalletSource).
+   */
+  tokenBalance?(owner: string, mint: string): Promise<number | null>;
 }
+/** The Solana source with the M3 wallet method present (what createSolana() and createSources().sol return). */
+export type SolanaWalletSource = SolanaSource & Required<Pick<SolanaSource, 'tokenBalance'>>;
 
 export interface TronSource {
   configured: boolean;

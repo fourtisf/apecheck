@@ -5,15 +5,37 @@
 import { z } from 'zod';
 import { CHAINS, EVM_DETECT_ORDER, type ChainKey, type Env } from '@apecheck/core';
 import { warnOnce } from '@apecheck/core/node';
-import type { EvmSource, EvmTokenBasics, EvmTxRequest, Http, SimResult } from '../types';
+import type { EvmTokenBasics, EvmTxRequest, EvmWalletSource, Http, SimResult } from '../types';
 import {
-  BURN_ADDRESSES, EIP1967_IMPL_SLOT, MINT_SELECTORS, SELECTORS,
-  decodeAbiString, decodeAddress, decodeRevert, decodeUint, hasAnySelector, minimalProxyTarget, ownerlessRenounced, toQuantity,
+  BURN_ADDRESSES, EIP1967_BEACON_SLOT, EIP1967_IMPL_SLOT, MINT_SELECTORS, SELECTORS,
+  decodeAbiString, decodeAddress, decodeRevert, decodeUint, encodeAddressArg, hasAnySelector, minimalProxyTarget, ownerlessRenounced, toQuantity,
 } from '../abi';
 import { RpcError, jsonRpc } from '../rpc';
-import { ErrorState, RE_EVM_ADDRESS, errMsg, isoFromSeconds } from '../util';
+import { ErrorState, RE_EVM_ADDRESS, errMsg, isoFromSeconds, toUnits } from '../util';
 
 const TIMEOUT_MS = 8_000;
+/** EIP-1271 checks run while someone waits on sign-in: keep them short */
+export const ERC1271_TIMEOUT_MS = 4_000;
+/** bytes4(keccak256("isValidSignature(bytes32,bytes)")): the selector and the magic value a valid signature returns */
+export const ERC1271_MAGIC = '0x1626ba7e';
+/**
+ * What a valid signature returns: the magic value as one ABI word (bytes4 left-aligned in 32 bytes, zero-padded), as
+ * OpenZeppelin's SignatureChecker requires. Matching only the first 4 bytes would accept any contract that echoes its
+ * call data, which starts with the same selector (the identity precompile 0x…04, a fallback returning msg.data).
+ */
+export const ERC1271_MAGIC_WORD = ERC1271_MAGIC + '0'.repeat(56);
+/** precompiles and other reserved addresses below 0x10000: never a wallet (the identity precompile 0x…04 echoes its input) */
+const RE_RESERVED_ADDRESS = /^0x0{36}/;
+const RE_BYTES32 = /^0x[0-9a-fA-F]{64}$/;
+const RE_HEX_BYTES = /^0x(?:[0-9a-fA-F]{2})+$/;
+
+/** ABI-encode isValidSignature(bytes32 hash, bytes signature) call data */
+export function encodeIsValidSignature(hash: string, signature: string): string {
+  const sig = signature.replace(/^0x/i, '').toLowerCase();
+  const len = sig.length / 2;
+  const padded = sig.padEnd(Math.ceil(sig.length / 64) * 64, '0');
+  return ERC1271_MAGIC + hash.replace(/^0x/i, '').toLowerCase() + (64).toString(16).padStart(64, '0') + len.toString(16).padStart(64, '0') + padded;
+}
 
 /** The only JSON-RPC methods this adapter may send. No eth_sendTransaction / eth_sendRawTransaction, ever. */
 export const EVM_READ_METHODS: ReadonlySet<string> = new Set([
@@ -49,7 +71,10 @@ const CreationZ = z.object({
   ]).nullish(),
 });
 
-/** 'value' = returned data, 'absent' = reverted or empty (function not there), 'error' = transport failure */
+/**
+ * 'value' = returned data, 'absent' = the contract ran and reverted, or returned nothing (the function isn't there),
+ * 'error' = the node didn't run it (transport failure, rate limit, overloaded or lagging node: see isExecutionFailure)
+ */
 type CallOutcome = { kind: 'value'; data: string } | { kind: 'absent' } | { kind: 'error'; error: unknown };
 /** eth_getCode: the chain answered (code, '0x' or a malformed null) or it didn't */
 type CodeOutcome = { code: string | null } | { error: unknown };
@@ -72,9 +97,28 @@ function revertReason(e: unknown): string {
   return `simulation failed: ${errMsg(e)}`;
 }
 
-export class EvmAdapter implements EvmSource {
+const RE_EXECUTION_FAILURE =
+  /revert|invalid opcode|invalid jump|out of gas|stack (?:underflow|overflow|limit)|vm execution error|vm exception|write protection|return data out of bounds|bad instruction/i;
+
+/**
+ * An eth_call the node answered with a JSON-RPC error: did the contract run and fail (it reverted, hit an invalid
+ * opcode, ran out of gas: the function isn't there, or it refused), or did the node not run it (HTTP 429 / -32005 rate
+ * limits, -32603 internal errors, "header not found", "missing trie node", timeouts, a busy node)? Only an execution
+ * failure is an answer. Anything else is a failed read, so a throttled RPC never reads as "this contract has no
+ * owner() function" (geth answers a missing function with code 3 or -32000 "execution reverted", Nethermind with
+ * -32015 "VM execution error.", some nodes with an HTTP error status around the same body).
+ */
+export function isExecutionFailure(e: RpcError): boolean {
+  if (e.code === 3) return true;
+  if (RE_EXECUTION_FAILURE.test(e.message)) return true;
+  return typeof e.data === 'string' && /^revert/i.test(e.data);
+}
+
+export class EvmAdapter implements EvmWalletSource {
   private readonly errors = new ErrorState('evm');
   private readonly rpcUrls: Partial<Record<ChainKey, string>> = {};
+  /** decimals() per chain:token (they never change) */
+  private readonly decimalsCache = new Map<string, number>();
 
   constructor(private readonly env: EvmEnv, private readonly http: Http, private readonly opts: EvmOptions = {}) {
     for (const c of EVM_CHAINS) {
@@ -106,18 +150,18 @@ export class EvmAdapter implements EvmSource {
     return EVM_CHAINS.filter(c => !!this.rpcUrls[c]);
   }
 
-  private rpc(chain: ChainKey, method: string, params: unknown[]): Promise<unknown> {
+  private rpc(chain: ChainKey, method: string, params: unknown[], timeoutMs = TIMEOUT_MS): Promise<unknown> {
     const url = this.rpcUrls[chain];
     if (!url) return Promise.reject(new Error(`no RPC configured for ${CHAINS[chain].name}`));
-    return jsonRpc(this.http, url, method, params, EVM_READ_METHODS, { timeoutMs: TIMEOUT_MS });
+    return jsonRpc(this.http, url, method, params, EVM_READ_METHODS, { timeoutMs });
   }
 
-  private async call(chain: ChainKey, to: string, data: string): Promise<CallOutcome> {
+  private async call(chain: ChainKey, to: string, data: string, timeoutMs = TIMEOUT_MS): Promise<CallOutcome> {
     try {
-      const res = await this.rpc(chain, 'eth_call', [{ to, data }, 'latest']);
+      const res = await this.rpc(chain, 'eth_call', [{ to, data }, 'latest'], timeoutMs);
       return typeof res === 'string' && res !== '0x' ? { kind: 'value', data: res } : { kind: 'absent' };
     } catch (e) {
-      return e instanceof RpcError ? { kind: 'absent' } : { kind: 'error', error: e };
+      return e instanceof RpcError && isExecutionFailure(e) ? { kind: 'absent' } : { kind: 'error', error: e };
     }
   }
 
@@ -179,19 +223,37 @@ export class EvmAdapter implements EvmSource {
     return hit;
   }
 
-  /** Implementation behind an EIP-1167 / EIP-1967 proxy, so selector scans see the real logic. */
-  private async implementationCode(chain: ChainKey, address: string, code: string): Promise<string | null> {
-    let impl = minimalProxyTarget(code);
-    if (!impl) {
-      try {
-        const slot = await this.rpc(chain, 'eth_getStorageAt', [address, EIP1967_IMPL_SLOT, 'latest']);
-        const a = typeof slot === 'string' ? decodeAddress('0x' + slot.replace(/^0x/i, '').padStart(64, '0')) : null;
-        if (a && !BURN_ADDRESSES.has(a)) impl = a;
-      } catch {
-        impl = null;
-      }
+  /** The address an address-holding storage slot holds (null when empty or a burn address); throws when unread. */
+  private async slotAddress(chain: ChainKey, address: string, slot: string): Promise<string | null> {
+    const v = await this.rpc(chain, 'eth_getStorageAt', [address, slot, 'latest']);
+    if (typeof v !== 'string') throw new Error('eth_getStorageAt answered without a value');
+    const a = decodeAddress('0x' + v.replace(/^0x/i, '').padStart(64, '0'));
+    return a && !BURN_ADDRESSES.has(a) ? a : null;
+  }
+
+  /**
+   * The logic contract behind a proxy, so selector scans see the real logic and an upgrade is visible: an EIP-1167
+   * minimal proxy's target, the EIP-1967 implementation slot, or the implementation() of the EIP-1967 beacon. null when
+   * the contract is none of those; undefined when it couldn't be read (recorded: an unread slot is never "no proxy").
+   */
+  private async implementationOf(chain: ChainKey, address: string, code: string): Promise<string | null | undefined> {
+    const minimal = minimalProxyTarget(code);
+    if (minimal) return minimal;
+    try {
+      const [impl, beacon] = await Promise.all([
+        this.slotAddress(chain, address, EIP1967_IMPL_SLOT),
+        this.slotAddress(chain, address, EIP1967_BEACON_SLOT),
+      ]);
+      if (impl) return impl;
+      if (!beacon) return null;
+      const r = await this.call(chain, beacon, SELECTORS.implementation);
+      if (r.kind === 'error') throw r.error;
+      const a = r.kind === 'value' ? decodeAddress(r.data) : null;
+      return a && !BURN_ADDRESSES.has(a) ? a : null;
+    } catch (e) {
+      this.errors.fail(`implementation ${chain}`, e);
+      return undefined;
     }
-    return impl ? this.getCode(chain, impl) : null;
   }
 
   async tokenBasics(chain: ChainKey, address: string): Promise<EvmTokenBasics | null> {
@@ -213,11 +275,20 @@ export class EvmAdapter implements EvmSource {
     }
 
     let scanCode: string | null = code;
+    let implementation: string | null = null;
+    let implUnread = false;
     if (code) {
-      const implCode = await this.implementationCode(chain, address, code);
-      if (implCode && implCode !== '0x') scanCode = code + implCode.replace(/^0x/, '');
+      const impl = await this.implementationOf(chain, address, code);
+      if (impl === undefined) implUnread = true;
+      else if (impl) {
+        implementation = impl;
+        const implCode = await this.getCode(chain, impl); // a failure is recorded by getCode
+        if (implCode == null) implUnread = true;
+        else if (implCode !== '0x') scanCode = code + implCode.replace(/^0x/, '');
+      }
     }
-    const hasMintFunction = scanCode ? hasAnySelector(scanCode, MINT_SELECTORS) : null;
+    // without the logic behind the proxy, "no mint selector" is unknown, not false
+    const hasMintFunction = !scanCode ? null : hasAnySelector(scanCode, MINT_SELECTORS) ? true : implUnread ? null : false;
 
     const val = (o: CallOutcome) => (o.kind === 'value' ? o.data : null);
     const dec = decodeUint(val(decimals));
@@ -226,9 +297,14 @@ export class EvmAdapter implements EvmSource {
     let ownerAddr: string | null = null;
     let ownerRenounced: boolean | null = null;
     const ownerHit = [owner, getOwner].find(o => o.kind === 'value' && decodeAddress(o.data));
+    const ownerFailed = ownerHit ? undefined : [owner, getOwner].find((o): o is Extract<CallOutcome, { kind: 'error' }> => o.kind === 'error');
     if (ownerHit) {
       ownerAddr = decodeAddress(val(ownerHit));
       ownerRenounced = ownerAddr != null && BURN_ADDRESSES.has(ownerAddr);
+    } else if (ownerFailed) {
+      // owner()/getOwner() not answered (a rate limit, a lagging node): who controls the token is unknown, and the
+      // failure is reported (never read as "no owner function")
+      this.errors.fail(`tokenBasics owner ${chain}`, ownerFailed.error);
     } else if (owner.kind === 'absent' && getOwner.kind === 'absent') {
       // no owner function: renounced only when nothing else (roles, a mint function) can control the supply
       ownerRenounced = ownerlessRenounced(scanCode, hasMintFunction);
@@ -242,6 +318,7 @@ export class EvmAdapter implements EvmSource {
       owner: ownerAddr,
       ownerRenounced,
       hasMintFunction,
+      implementation,
     };
   }
 
@@ -290,6 +367,56 @@ export class EvmAdapter implements EvmSource {
       this.errors.fail('creator', e);
       return null;
     }
+  }
+
+  /** decimals() of a token, cached; null (with the reason recorded) when it can't be read */
+  private async decimalsOf(chain: ChainKey, token: string): Promise<number | null> {
+    const key = `${chain}:${token.toLowerCase()}`;
+    const hit = this.decimalsCache.get(key);
+    if (hit != null) return hit;
+    const r = await this.call(chain, token, SELECTORS.decimals);
+    if (r.kind === 'error') {
+      this.errors.fail(`tokenBalance ${chain}`, r.error);
+      return null;
+    }
+    const dec = r.kind === 'value' ? decodeUint(r.data) : null;
+    if (dec == null || dec > 77n) {
+      // never guess 18: a wrong scale would put a wallet in the wrong tier
+      this.errors.fail(`tokenBalance ${chain}`, new Error('decimals() unreadable at the token address'));
+      return null;
+    }
+    this.decimalsCache.set(key, Number(dec));
+    return Number(dec);
+  }
+
+  async tokenBalance(chain: ChainKey, token: string, owner: string): Promise<number | null> {
+    if (!RE_EVM_ADDRESS.test(token) || !RE_EVM_ADDRESS.test(owner) || !this.rpcUrls[chain]) return null;
+    const [bal, decimals] = await Promise.all([
+      this.call(chain, token, SELECTORS.balanceOf + encodeAddressArg(owner)),
+      this.decimalsOf(chain, token),
+    ]);
+    if (bal.kind === 'error') {
+      this.errors.fail(`tokenBalance ${chain}`, bal.error);
+      return null;
+    }
+    const raw = bal.kind === 'value' ? decodeUint(bal.data) : null;
+    if (raw == null) {
+      this.errors.fail(`tokenBalance ${chain}`, new Error('balanceOf() unreadable at the token address'));
+      return null;
+    }
+    return decimals == null ? null : toUnits(raw, decimals);
+  }
+
+  async isValidSignature(chain: ChainKey, address: string, hash: string, signature: string, opts: { timeoutMs?: number } = {}): Promise<boolean | null> {
+    if (!RE_EVM_ADDRESS.test(address) || !RE_BYTES32.test(hash) || !RE_HEX_BYTES.test(signature) || !this.rpcUrls[chain]) return null;
+    if (RE_RESERVED_ADDRESS.test(address)) return false;
+    const r = await this.call(chain, address, encodeIsValidSignature(hash, signature), opts.timeoutMs ?? ERC1271_TIMEOUT_MS);
+    if (r.kind === 'error') {
+      this.errors.fail(`isValidSignature ${chain}`, r.error);
+      return null;
+    }
+    // the whole first word must be the magic value (at least 32 bytes back), never just its first 4 bytes
+    return r.kind === 'value' && r.data.length >= ERC1271_MAGIC_WORD.length && r.data.slice(0, ERC1271_MAGIC_WORD.length).toLowerCase() === ERC1271_MAGIC_WORD;
   }
 }
 

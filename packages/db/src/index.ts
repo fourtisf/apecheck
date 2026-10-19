@@ -19,3 +19,4 @@ export const num = (d: Prisma.Decimal | number | null | undefined): number | nul
   d == null ? null : typeof d === 'number' ? d : d.toNumber();
 
 export * from './checks';
+export * from './tiers';

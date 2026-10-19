@@ -47,11 +47,17 @@ export async function createCheck(deps: AppDeps, input: CreateInput, subject: Cr
   const d = detect(input.target);
   if (!d || d.kind === 'bad') throw new ApiError(400, 'bad_target', MSG.badTarget);
   // private checks are a Max feature (M3); never silently publish what was asked to be private
-  if (input.private) throw new ApiError(403, 'max_required', maxRequiredMessage(env));
+  const isPrivate = !!input.private;
+  if (isPrivate && !(subject.userId && subject.tier === 'max')) throw new ApiError(403, 'max_required', maxRequiredMessage(env));
 
   return withCreateLock(redis, createLockKey(d), async () => {
-    // a run in progress is as fresh as it gets, even for Re-check
-    const reuse = await findReusableCheck(prisma, d, { cacheHours: env.CACHE_HOURS, checkBudgetSeconds: env.CHECK_BUDGET_SECONDS, recheck: input.recheck });
+    // a run in progress is as fresh as it gets, even for Re-check; a private request also reuses its own private runs
+    const reuse = await findReusableCheck(prisma, d, {
+      cacheHours: env.CACHE_HOURS,
+      checkBudgetSeconds: env.CHECK_BUDGET_SECONDS,
+      recheck: input.recheck,
+      privateFor: isPrivate ? subject.userId : null,
+    });
     if (reuse) {
       const c = await getCredits(redis, env, subject);
       return reuse.reason === 'running'
@@ -62,9 +68,9 @@ export async function createCheck(deps: AppDeps, input: CreateInput, subject: Cr
     const spent = await consumeCredit(redis, env, subject);
     if (!spent.ok) throw new ApiError(402, 'no_credits', MSG.noCredits);
 
-    let check: { id: string; shortId: string; targetId: string };
+    let check: { id: string; shortId: string; targetId: string; isPrivate: boolean };
     try {
-      check = await createCheckRow(prisma, d, { raw: input.target, via: 'WEB', requesterId: subject.userId ?? null, requesterSid: subject.sid });
+      check = await createCheckRow(prisma, d, { raw: input.target, via: 'WEB', requesterId: subject.userId ?? null, requesterSid: subject.sid, isPrivate });
     } catch (err) {
       await refundCredit(redis, subject).catch(() => undefined);
       throw err;
@@ -85,8 +91,15 @@ export async function createCheck(deps: AppDeps, input: CreateInput, subject: Cr
 
 /* ---------------- read ---------------- */
 
-export function canView(check: { isPrivate: boolean; requesterSid: string | null }, viewer: Viewer): boolean {
-  return !check.isPrivate || (!!viewer.sid && check.requesterSid === viewer.sid);
+/**
+ * Private checks (Max) are visible only to the user who asked for them, on any device they are signed in on. Signing
+ * out ends a browser's access (a shared computer must not keep showing them to whoever uses it next). A private check
+ * with no requesting user (none can be created that way) is visible to the browser (cookie) that started it.
+ */
+export function canView(check: { isPrivate: boolean; requesterSid: string | null; requesterId: string | null }, viewer: Viewer): boolean {
+  if (!check.isPrivate) return true;
+  if (check.requesterId) return !!viewer.userId && check.requesterId === viewer.userId;
+  return !!viewer.sid && check.requesterSid === viewer.sid;
 }
 
 export async function readProgress(deps: AppDeps, checkIds: string[]): Promise<Map<string, number | null>> {
@@ -100,11 +113,23 @@ export async function readProgress(deps: AppDeps, checkIds: string[]): Promise<M
   return out;
 }
 
-/** Full report by internal id or shortId; null when missing or private to someone else. */
+/**
+ * Full report by internal id or shortId; null when missing or private to someone else. For a signed-in viewer it
+ * also says whether they watch the target and which notes they marked helpful.
+ */
 export async function loadReport(deps: AppDeps, where: { id: string } | { shortId: string }, viewer: Viewer): Promise<CheckReportDTO | null> {
   const row = await deps.prisma.check.findUnique({ where, include: reportInclude });
   if (!row || !canView(row, viewer)) return null;
   const running = row.status === 'RUNNING' || row.status === 'QUEUED';
-  const [series, progress] = await Promise.all([loadSeries(deps.prisma, [row]), running ? readProgress(deps, [row.id]) : undefined]);
-  return toReport(row, { env: deps.env, viewer, series, progress });
+  const userId = viewer.userId;
+  const [series, progress, watch, votes] = await Promise.all([
+    loadSeries(deps.prisma, [row]),
+    running ? readProgress(deps, [row.id]) : undefined,
+    userId ? deps.prisma.watch.findUnique({ where: { userId_targetId: { userId, targetId: row.targetId } }, select: { userId: true } }) : null,
+    userId && row.notes.length
+      ? deps.prisma.noteVote.findMany({ where: { userId, noteId: { in: row.notes.map(n => n.id) } }, select: { noteId: true } })
+      : [],
+  ]);
+  const report = toReport(row, { env: deps.env, viewer, series, progress, votes: new Set(votes.map(v => v.noteId)) });
+  return userId ? { ...report, watching: !!watch } : report;
 }

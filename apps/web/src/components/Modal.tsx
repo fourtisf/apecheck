@@ -26,6 +26,19 @@ interface ModalState {
 const ModalApiCtx = createContext<ModalApi>({ open() {}, close() {}, isOpen: false });
 const ModalStateCtx = createContext<ModalState | null>(null);
 
+/** The header's account control: "Connect wallet", or the account button once signed in. */
+export const ACCOUNT_CONTROL = '.top-r .acct-btn, .top-r > button.btn-primary';
+
+/** Focus fell to <body> (its element was removed or disabled): someone should take it back. */
+export const focusLost = () => !document.activeElement || document.activeElement === document.body;
+
+/** After the next paint, give focus to `el` if it fell to <body> meanwhile (a submit button that was disabled). */
+export function refocusIfLost(el: { current: HTMLElement | null }) {
+  requestAnimationFrame(() => {
+    if (focusLost()) el.current?.focus({ preventScroll: true });
+  });
+}
+
 /**
  * State for the prototype's single #modal. The dialog itself is drawn by <ModalRoot/>, which sits
  * inside every other provider so modal content can use any hook (useMe, useToast, ...).
@@ -33,24 +46,40 @@ const ModalStateCtx = createContext<ModalState | null>(null);
 export function ModalProvider({ children }: { children: ReactNode }) {
   const [modal, setModal] = useState<ModalState | null>(null);
   const opener = useRef<HTMLElement | null>(null);
+  /** set by close(): where focus goes once the dialog is gone (undefined: nothing to restore) */
+  const restore = useRef<HTMLElement | null | undefined>(undefined);
   const pathname = usePathname();
 
   const open = useCallback((content: ReactNode, opts: ModalOpts = {}) => {
     if (!opener.current) opener.current = document.activeElement as HTMLElement | null;
+    restore.current = undefined;
     setModal(m => ({ content, narrow: !!opts.narrow, label: opts.label, n: (m?.n ?? 0) + 1 }));
   }, []);
 
   const close = useCallback(() => {
     setModal(null);
-    const el = opener.current;
+    restore.current = opener.current;
     opener.current = null;
-    if (el && typeof el.focus === 'function' && document.contains(el)) el.focus();
   }, []);
+
+  // Focus goes back to the opener after React has committed the close: what closed the modal may have replaced the
+  // opener in the same render (signing in swaps "Connect wallet" for the account button), so a gone opener hands
+  // focus to the header's account control instead of leaving it on <body>.
+  useEffect(() => {
+    if (modal || restore.current === undefined) return;
+    const el = restore.current;
+    restore.current = undefined;
+    const inDialog = document.activeElement instanceof HTMLElement && !!document.activeElement.closest('#modal');
+    if (!focusLost() && !inDialog) return;
+    const target = el && el.isConnected && el !== document.body ? el : document.querySelector<HTMLElement>(ACCOUNT_CONTROL);
+    target?.focus();
+  }, [modal]);
 
   // route() in the prototype closes the modal on every navigation
   useEffect(() => {
     setModal(null);
     opener.current = null;
+    restore.current = undefined;
   }, [pathname]);
 
   const isOpen = !!modal;

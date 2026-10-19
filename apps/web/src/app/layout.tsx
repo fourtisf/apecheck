@@ -3,7 +3,9 @@ import type { ReactNode } from 'react';
 import { AppProvider } from '@/components/AppProvider';
 import { Footer } from '@/components/Footer';
 import { Header } from '@/components/Header';
+import { me } from '@/lib/api';
 import { APP_URL } from '@/lib/env';
+import { orNull, serverCall } from '@/lib/server-api';
 import { THEME_COLOR, THEME_SCRIPT } from '@/lib/theme';
 import './globals.css';
 
@@ -25,7 +27,11 @@ export const viewport: Viewport = {
   viewportFit: 'cover',
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+/** The header's viewer (tier, address, credits) on first paint; the browser asks again after hydration. */
+const ME_TIMEOUT_MS = 2500;
+
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const initialMe = await orNull(me(serverCall({ timeoutMs: ME_TIMEOUT_MS })));
   return (
     // the head script switches data-theme before paint, so the server's "light" may not match on hydration
     <html lang="en" data-theme="light" suppressHydrationWarning>
@@ -40,7 +46,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </head>
       <body>
-        <AppProvider>
+        <AppProvider initialMe={initialMe}>
           <Header />
           <main id="app">{children}</main>
           <Footer />

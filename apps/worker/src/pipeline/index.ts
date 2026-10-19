@@ -21,7 +21,7 @@ import { CheckRun, type PipelineDeps } from './context';
 import { coinAfterStage, coinFactsFor, evidenceStage } from './evidence';
 import { judgeStage, scoringStep } from './judge';
 import { UnrecoverableError, finishResolve, resolveStage, saveTarget } from './resolve';
-import { afterDone, announceEnd, enqueueBotReply, renderCard, saveStage, type SavedCheck } from './save';
+import { afterDone, afterFinish, announceEnd, renderCard, saveStage, type SavedCheck } from './save';
 import { runStage } from './stage';
 import { RunSuperseded, StepLogger } from './steps';
 
@@ -62,12 +62,12 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
   const owner = new Date(startedAt);
 
   // claim the check for this run; anything failing here must still end the check (or let the job retry)
-  let row: { id: string; shortId: string; targetId: string; targetRaw: string; postId: string | null; status: string } | null = null;
+  let row: { id: string; shortId: string; targetId: string; targetRaw: string; postId: string | null; isPrivate: boolean; status: string } | null = null;
   let firstIdx = 0;
   try {
     row = await prisma.check.findUnique({
       where: { id: checkId },
-      select: { id: true, shortId: true, targetId: true, targetRaw: true, postId: true, status: true },
+      select: { id: true, shortId: true, targetId: true, targetRaw: true, postId: true, isPrivate: true, status: true },
     });
     if (!row) {
       log.warn('check not found, job skipped');
@@ -76,8 +76,9 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
     if (row.status === 'DONE' || row.status === 'FAILED') {
       log.info(`check already ${row.status.toLowerCase()}, job skipped`);
       // a run that died between saving the check and enqueueing its bot replies: enqueue them now (a no-op for
-      // mentions already answered or already queued: jobId = mention id, and only QUEUED mentions are picked)
-      await enqueueBotReply(deps, checkId);
+      // mentions already answered or already queued: jobId = mention id, and only QUEUED mentions are picked); the
+      // same for the watchers' re-check notifications (idempotent)
+      await afterFinish(deps, checkId);
       return { status: 'skipped', checkId };
     }
     const d = detect(row.targetRaw);
@@ -114,7 +115,7 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
     const last = await prisma.checkStep.aggregate({ where: { checkId }, _max: { idx: true } }).catch(() => null);
     const steps = new StepLogger({ prisma, redis, screenshotDir: env.SCREENSHOT_DIR, log }, row, startedAt, { firstIdx: (last?._max.idx ?? -1) + 1 });
     await failCheck(deps, row, steps, startedAt, 'The check hit an error and could not finish', null);
-    await enqueueBotReply(deps, checkId);
+    await afterFinish(deps, checkId);
     return { status: 'failed', checkId, error: 'The check hit an error and could not finish' };
   }
 
@@ -217,7 +218,7 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
     // the raw error (paths, code frames, database messages) goes to the log only, never into the public Check.error
     log.error('check failed', e);
     const marked = await failCheck(deps, row, steps, startedAt, message, owner);
-    if (marked) await enqueueBotReply(deps, checkId);
+    if (marked) await afterFinish(deps, checkId);
     return { status: 'failed', checkId, error: message };
   } finally {
     clearTimeout(timer);
@@ -289,7 +290,8 @@ export async function endStuckCheck(
   });
   if (!ended) return false;
   await announceEnd(deps, c, 'failed');
-  if (deps.hooks?.enqueueBotReply) await enqueueBotReply(deps as PipelineDeps, c.id);
+  // the bot reply (when a bot queue is wired) and the watchers' re-check notifications
+  await afterFinish(deps, c.id);
   return true;
 }
 

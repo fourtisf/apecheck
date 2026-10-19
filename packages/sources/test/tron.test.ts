@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createTron, TRON_ZERO_ADDRESS } from '../src/adapters/tron';
 import { tronFromHex, tronToHex } from '../src/base58';
+import { captureErrors } from '../src/util';
 import { encString, encUint, fakeHttp, fixture, testEnv, word, type Handler } from './helpers';
 
 const USDT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
@@ -77,6 +78,37 @@ describe('Tron adapter', () => {
     expect(await createTron(testEnv(), fakeHttp(trongrid({}, minter))).tokenInfo(USDT)).toMatchObject({ owner: null, ownerRenounced: null, hasMintFunction: true });
     const roles = { ...base, bytecode: '6080604052' + '6391d14854' + '632f2ff15d' + '00' };
     expect(await createTron(testEnv(), fakeHttp(trongrid({}, roles))).tokenInfo(USDT)).toMatchObject({ owner: null, ownerRenounced: null, hasMintFunction: false });
+  });
+
+  describe('owner() TronGrid did not run is a failed read, never "no owner()"', () => {
+    const noOwnerCode = { ...fixture<Record<string, unknown>>('tron-getcontract.json'), bytecode: '6080604052636fdde0314' };
+    /** owner() answered by `reply`, the rest as a plain TRC-20 */
+    const grid = (reply: ReturnType<Handler>): Handler => {
+      const rest = trongrid({ 'symbol()': encString('Z') }, noOwnerCode);
+      return (url, req, body) => ((body as { function_selector?: string })?.function_selector === 'owner()' ? reply : rest(url, req, body));
+    };
+
+    it.each([
+      ['HTTP 429', { status: 429, json: { Error: 'request rate exceeded the allowed_rps' } }],
+      ['a 200 answer without a result', { json: { Error: 'request rate exceeded the allowed_rps' } }],
+      ['SERVER_BUSY', { json: { result: { code: 'SERVER_BUSY', message: '' } } }],
+      ['OTHER_ERROR', { json: { result: { code: 'OTHER_ERROR', message: 'class java.lang.NullPointerException : null' } } }],
+    ])('%s: reported, owner unknown (not renounced)', async (_label, reply) => {
+      const tron = createTron(testEnv(), fakeHttp(grid(reply as ReturnType<Handler>)));
+      const { value, errors } = await captureErrors(() => tron.tokenInfo(USDT));
+      expect(value).toMatchObject({ owner: null, ownerRenounced: null, symbol: 'Z' });
+      expect(errors).toEqual([expect.stringMatching(/^tron\.tokenInfo owner: /)]);
+    });
+
+    it.each([
+      ['CONTRACT_EXE_ERROR', { json: { result: { code: 'CONTRACT_EXE_ERROR', message: '5245564552542f6f70636f6465206578656375746564' } } }],
+      ['a run that reverted (transaction ret FAILED)', { json: { result: { result: true }, constant_result: ['08c379a0' + word('20')], transaction: { ret: [{ ret: 'FAILED' }] } } }],
+    ])('a revert (%s) is "no owner()"', async (_label, reply) => {
+      const tron = createTron(testEnv(), fakeHttp(grid(reply as ReturnType<Handler>)));
+      const { value, errors } = await captureErrors(() => tron.tokenInfo(USDT));
+      expect(errors).toEqual([]);
+      expect(value).toMatchObject({ owner: null, ownerRenounced: true });
+    });
   });
 
   it('unknown contract → null; HTTP failure → null with lastError; malformed address → no request', async () => {

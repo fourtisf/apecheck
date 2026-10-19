@@ -106,6 +106,54 @@ describe('price tick', () => {
     expect(await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger() }, now)).toEqual({ tracked: 1, due: 1, written: 1 });
   });
 
+  it('a check that got no price (DexScreener down) takes the first price read within 30 minutes as its price at check', async () => {
+    const g = '0xa200000000000000000000000000000000000008';
+    const h2 = '0xa300000000000000000000000000000000000009';
+    const fresh = await coin(g, 10 * MIN, null);
+    const late = await coin(h2, 45 * MIN, null);
+    const env = testEnv();
+    const sources = fakeSources(env, {
+      dexTokens: {
+        [g]: dexInfo({ chain: 'base', address: g, priceUsd: 0.25, mc: 250_000 }),
+        [h2]: dexInfo({ chain: 'base', address: h2, priceUsd: 0.5, mc: 500_000 }),
+      },
+    });
+    expect(await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger() }, now)).toEqual({ tracked: 2, due: 2, written: 2 });
+    const a = await prisma.check.findFirstOrThrow({ where: { targetId: fresh.id } });
+    expect(Number(a.priceAtCheck)).toBe(0.25);
+    expect(Number(a.mcAtCheck)).toBe(250_000);
+    // 45 minutes after the check is no longer "at check": left empty
+    expect((await prisma.check.findFirstOrThrow({ where: { targetId: late.id } })).priceAtCheck).toBeNull();
+    // a price at check that exists is never replaced
+    await prisma.check.update({ where: { id: a.id }, data: { priceAtCheck: 0.2 } });
+    await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger() }, now + 16 * MIN);
+    expect(Number((await prisma.check.findUniqueOrThrow({ where: { id: a.id } })).priceAtCheck)).toBe(0.2);
+  });
+
+  it("a private (Max) check never moves a public coin's schedule; a coin only private checks looked at is tracked on them", async () => {
+    const pubCa = '0xa400000000000000000000000000000000000010';
+    const privCa = '0xa500000000000000000000000000000000000011';
+    // public check 10 days ago (daily cadence), last point 3 h ago; a private check of it 10 minutes ago
+    const pub = await coin(pubCa, 10 * DAY, 3 * HOUR);
+    const privOfPub = await prisma.check.create({
+      data: { shortId: 'priv0001', targetId: pub.id, targetRaw: pubCa, status: 'DONE', isPrivate: true, finishedAt: ago(10 * MIN) },
+    });
+    // a coin only a private check looked at, 10 minutes ago (15-minute cadence, no point yet)
+    const onlyPriv = await prisma.target.create({ data: { key: `ca:base:${privCa}`, kind: 'COIN', chain: 'BASE', ca: privCa, name: 'priv' } });
+    const priv = await prisma.check.create({ data: { shortId: 'priv0002', targetId: onlyPriv.id, targetRaw: privCa, status: 'DONE', isPrivate: true, finishedAt: ago(10 * MIN) } });
+    const env = testEnv();
+    const sources = fakeSources(env, {
+      dexTokens: Object.fromEntries([pubCa, privCa].map(x => [x, dexInfo({ chain: 'base', address: x, priceUsd: 0.3, mc: 300_000 })])),
+    });
+    // the public coin is not due (daily cadence of its public check), whatever the private check did
+    expect(await runPriceTick({ prisma, dex: sources.dex, log: memoryLogger() }, now)).toEqual({ tracked: 2, due: 1, written: 1 });
+    expect(await prisma.pricePoint.count({ where: { targetId: pub.id } })).toBe(1);
+    expect(await prisma.pricePoint.count({ where: { targetId: onlyPriv.id } })).toBe(1);
+    // the private-only coin's check gets its price at check; the private check of the public coin is not its anchor
+    expect(Number((await prisma.check.findUniqueOrThrow({ where: { id: priv.id } })).priceAtCheck)).toBe(0.3);
+    expect((await prisma.check.findUniqueOrThrow({ where: { id: privOfPub.id } })).priceAtCheck).toBeNull();
+  });
+
   it('a coin DexScreener no longer knows is skipped without failing the tick', async () => {
     await coin('0xe000000000000000000000000000000000000005', HOUR, null);
     const env = testEnv();

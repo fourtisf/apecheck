@@ -368,10 +368,12 @@ export async function saveTarget(run: CheckRun): Promise<void> {
     }
     const owner = await prisma.target.findUnique({ where: { key }, select: { id: true } });
     if (owner && owner.id !== current.id) {
+      // a private check never counted towards the public checkCount (db createCheck)
+      const counted = !run.check.isPrivate;
       await prisma.$transaction([
         prisma.check.update({ where: { id: run.check.id }, data: { targetId: owner.id } }),
-        prisma.target.update({ where: { id: owner.id }, data: { ...data, checkCount: { increment: 1 } } }),
-        prisma.target.update({ where: { id: current.id }, data: { checkCount: { decrement: 1 } } }),
+        prisma.target.update({ where: { id: owner.id }, data: counted ? { ...data, checkCount: { increment: 1 } } : data }),
+        ...(counted ? [prisma.target.update({ where: { id: current.id }, data: { checkCount: { decrement: 1 } } })] : []),
       ]);
       run.targetId = owner.id;
       // the preliminary row (e.g. "ca:evm:…") is dropped once nothing points at it

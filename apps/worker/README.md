@@ -1,13 +1,13 @@
 # @apecheck/worker
 
-Node workers for ApeCheck (HANDOFF §4, §10, §11):
+Node workers for ApeCheck (HANDOFF §4, §7, §8, §10, §11):
 
 | Entry (tsx) | PM2 app | What it does |
 |---|---|---|
 | `src/checks.ts` | `worker-checks` | BullMQ worker on queue `checks`: the check pipeline and the browser agent. Concurrency `MAX_CONCURRENT_BROWSERS`, one Chromium per process. |
-| `src/prices.ts` | `worker-prices` | Repeatable jobs on queue `prices`: "since check" price points from DexScreener every 5 minutes, and the daily screenshot cleanup (03:20 UTC, see below). |
-| `src/bot.ts` | `worker-bot` | The X bot @ApeCheckBot (`src/bot/*`, below): polls the bot's mentions, starts or reuses checks, posts the replies queued on `bot-replies`. Without the X keys it logs one warning and idles, so PM2 keeps it `online`. |
-| `src/dev.ts` | — | `pnpm dev`: checks + prices in one process; the bot too only with `X_BOT_DEV=1` (use a test bot account: the one-bot lock only covers processes on the same Redis). |
+| `src/prices.ts` | `worker-prices` | The light periodic work, no browser. Queue `prices`: "since check" price points from DexScreener every 5 minutes, the daily screenshot cleanup (03:20 UTC). Queue `rechecks` (M3): re-check alerts for watched targets, every 15 minutes. Queue `maintenance` (M3): the daily deployer refresh from DevRadar (04:40 UTC) and the hourly tier refresh (:07). |
+| `src/bot.ts` | `worker-bot` | The X bot @ApeCheckBot (`src/bot/*`, below): polls the bot's mentions, starts or reuses checks, posts the replies queued on `bot-replies`. Without the X keys it logs one warning and idles, so PM2 keeps it `online`. It also answers the site's follow-up questions (queue `asks`, M3), with or without the X keys. |
+| `src/dev.ts` | — | `pnpm dev`: checks, prices, re-check alerts, maintenance and asks in one process; the bot too only with `X_BOT_DEV=1` (use a test bot account: the one-bot lock only covers processes on the same Redis). |
 
 Every process loads the repo-root `.env` (`loadEnv()` from `@apecheck/core/node`; `APECHECK_ENV_FILE` picks another file,
 and under `NODE_ENV=test` inherited variables win so a test can never be pointed at the dev database).
@@ -40,7 +40,7 @@ whose check another run took over, stops without writing, publishing or replying
 | C claims | `AI_MODEL_FAST` | Up to `TUNING.maxClaims` claims from the hero, footer, docs, post and X bio. `ClaimsOutZ` + `normaliseClaims`. |
 | D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin". |
 | E judge | `AI_MODEL_JUDGE` | Claim statuses with one-sentence evidence citing a step, `acct`/`git` (used only where Stage D could not decide, and never above `warn`), summary ≤ 180 chars, coin summary. `JudgeOutZ` + `normaliseJudge`. The model never sees or picks a score. A judge that times out, or a model that fails and is replaced by the stand-in (claims or judge), leaves a `warn` step ("Claim review timed out; used the simple rules"). |
-| F save | no | `scoreCheck()` from core. One transaction: signals, `CheckEvidence`, scores, bands, areas, claims (in extraction order, `Claim.idx` 0..n-1), `CoinFacts` (with `deployerAddress` whenever the wallet is known), Deployer upsert, `priceAtCheck`/`mcAtCheck`, first `PricePoint`, `Target.last*`, `isLatest` moved to this check. Then the share card (`GET WEB_INTERNAL_URL/card/<shortId>.png`, 5 s, skipped with a log line when the web app is down) → `SCREENSHOT_DIR/cards/<shortId>.png`, `done` on `check:{id}`, `end` on `live`, a `bot-replies` job for every X mention still waiting on the check (`BotMention` `QUEUED`, done or failed), and the webhooks hook (a no-op until M4). |
+| F save | no | `scoreCheck()` from core. One transaction: signals, `CheckEvidence`, scores, bands, areas, claims (in extraction order, `Claim.idx` 0..n-1), `CoinFacts` (with `deployerAddress` whenever the wallet is known), Deployer upsert (never from a private check: the deployers page lists every row, so a private check only links a row the public already knows), `priceAtCheck`/`mcAtCheck`, first `PricePoint`, `Target.last*`, `isLatest` moved to this check (a private check never takes or clears `isLatest` and leaves `Target.lastCheckedAt` / `checkCount` alone: the public verdict stays the public one). Then the share card (`GET WEB_INTERNAL_URL/card/<shortId>.png`, 5 s, skipped with a log line when the web app is down) → `SCREENSHOT_DIR/cards/<shortId>.png`, `done` on `check:{id}`, `end` on `live`, a `bot-replies` job for every X mention still waiting on the check (`BotMention` `QUEUED`, done or failed), the `rechecked` notifications of the watchers whose automatic re-check this is (see Re-check alerts; also after a failure), and the webhooks hook (a no-op until M4). |
 
 An unrecoverable error (e.g. input that isn't a target) marks the check `FAILED` with a final `fail` step and a
 `done` message. `Check.error` (public through the API) only ever holds that plain sentence ("The check hit an error
@@ -145,7 +145,7 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
      "@ApeCheckBot @project"): that is a check of it (rules 4–5). An @handle inside a question ("is the @orbitxyz team
      doxxed?") stays a question. Tagging the bot under its "Couldn't finish" post runs that check's target again. A Pro/Max author
      (`User.tier` through `User.xUserId`, linked in M3) gets an answer from that check's stored data only
-     (`loadAnswerData` + `ai.answer`, `AI_MODEL_JUDGE`), saved as an `Ask` (via `BOT`, `askerHandle`) with
+     (`answerFromCheck`: `loadAnswerData` + `ai.answer`, `AI_MODEL_JUDGE`, the same as site asks), saved as an `Ask` (via `BOT`, `askerHandle`) with
      `Check.asksCount + 1`. Anyone else gets one line pointing to the site ("Follow-up answers here are for Pro holders.
      The full report is on the ApeCheck site."), once per person per thread (`pointer_already_sent`), no URL unless
      `BOT_INCLUDE_LINK`. Empty questions (`empty_question`) and replies to a "Couldn't finish" post (`no_report`) get none;
@@ -214,6 +214,138 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
   job that failed for good); a finished job with that id is removed first. After 3 re-queues it is given up (`FAILED`).
   A check job that finds its check already finished also queues the replies of its waiting mentions.
 
+## Follow-up questions (`src/asks/*`, M3)
+
+`POST /v1/checks/:id/asks` (Pro/Max, the API checks tier and `ASKS_PER_HOUR`) enqueues an `AskJob` on queue `asks` and
+waits up to 45 s for the job's `AskJobResult` (`{ askId }`). worker-bot consumes it (`startAsksWorker`, concurrency 4,
+no browser), also while the bot itself idles without X keys.
+
+- `answerFromCheck()` (`asks/answer.ts`): `loadAnswerData(checkId)` — the check's stored record only, never the live
+  page — then `ai.answer()` (`AI_MODEL_JUDGE`, or the heuristic stand-in) with 30 s; a model that fails or runs over is
+  replaced by the stand-in's answer. The answer is model-written text built from untrusted pages (HANDOFF §11), so it
+  is made safe like the bot's: no @mention, no link (scheme URLs dropped, domains defanged `orbit[.]xyz`), one line,
+  ≤ 600 characters cut at a sentence (core `normaliseAnswer`), `pgText`; one in which anything could still be a link
+  falls back to the stand-in's answer, then to "This check has no answer for that.". The bot's Pro follow-ups use the
+  same function (then cut to fit 280).
+- One transaction: `Ask { question, answer, askerId, askerHandle, via }` (`via: 'web' → WEB`, `'bot' → BOT`; an unknown
+  `userId` is stored as null) and `Check.asksCount + 1`. A re-run of the same job (stalled worker) returns the Ask it
+  already saved (`asks:done:<jobId>`, 1 h).
+- `AskJob.checkId` is the internal `Check.id` (a shortId is accepted too). Jobs that can never be answered fail at once
+  with BullMQ's `UnrecoverableError` and a message starting with a code: `bad_request:` (malformed job, empty
+  question), `not_found:` (no such check), `no_report:` (the check isn't `DONE`), `expired:` (queued for more than
+  2 minutes: the API answered 504 long ago and the asker may have asked again).
+
+## Re-check alerts (`src/watch/*`, M3, HANDOFF §8)
+
+Pro: "re-check alerts when a site or contract changes"; Max: "watchlists that re-check on their own". Runs in
+worker-prices on queue `rechecks` (`startWatchWorker`).
+
+- **Scan** (repeatable job `scan`, every 15 minutes, `watch/recheck.ts` `scanWatched`): targets with at least one Pro or
+  Max watcher whose `Target.fingerprintAt` is missing or older than `WATCH_RECHECK_HOURS` (5 min of slack), oldest
+  first, at most 500 per scan, minus those backing off after a failed read (`watch:retry:<targetId>`). Each gets a
+  `RecheckJob { targetId }` (job name `target`, jobId `fp-<targetId>`, so it is never queued twice). Any job on the
+  queue that isn't `scan` is a `RecheckJob`; the API queues one when a Pro/Max user starts watching a target that was never fingerprinted.
+- **Fingerprints** (`watch/fingerprint.ts`, stored versioned as `<kind>:v2:<sha256>`; v2 added the proxy
+  implementation, Token-2022 extensions and more volatile page values, so v1 values were replaced silently):
+  - site → the root page of the address people checked (the latest check's input gives scheme and port; else
+    `https://<domain>/`), fetched with `sources.http` and `guard: true` (SSRF guard, 15 s, 1.5 MB). Hashed is the page's
+    title, meta / Open Graph description and visible text after `watch/normalise.ts`: scripts, styles, templates, SVG,
+    comments and the head out, tags to spaces, entities decoded, then every value that changes on its own → `#`:
+    numbers of any shape with their currency, sign, direction arrow (▲ ▼ ↑ ↓) and k/M/B/% unit (prices, market caps,
+    counters, holders, block numbers, years, versions; subscript and superscript digits as in `$0.0₄12`; `1e9`),
+    durations and countdowns (`1d 2h`, `23h 59m`), dates (month / weekday names next to a number), clock times with
+    am/pm/time zone, relative times ("5 minutes ago", "just now", "yesterday", "today"), transaction and block hashes
+    (0x + 64 hex, base58 signatures, an id after "block", "tx", "commit", "build"…), the plural after a number ("1
+    holder" / "2 holders"). A contract address (0x + 40 hex, a Solana or Tron base58 address) is kept whole: the site
+    swapping its token is a change. Words, buttons, headings and links' text are what count; a change
+    that is only a number (a new launch date, "v2" → "v3") is deliberately not one. A page rendered entirely by
+    JavaScript is compared by its title, description and whatever text the server sends;
+  - EVM coin → sha256(`eth_getCode` + `owner()` + whether a mint function exists + the implementation behind a proxy
+    and the hash of its code, `sources.evm.getCode/tokenBasics`): a proxy's own bytecode never changes, so an upgrade
+    (EIP-1967 slot, beacon, or new code at the same implementation address) is seen through the implementation;
+    Solana coin → sha256(mint authority + freeze authority + token program + the Token-2022 extension settings an
+    authority changes — transfer fee, transfer hook, permanent delegate, pause… — `sources.sol.mintInfo`); Tron →
+    owner + mint function; a coin whose chain is unknown is not watched;
+  - X post / profile → the profile's name, bio and link (`sources.x.getUser`), only with the X API configured (else
+    those targets are left out of the scan).
+- **Never alert on errors.** A fingerprint is only produced from a read that worked: an HTTP error, an SSRF refusal, a
+  timeout, a bot challenge (also a 200 "Just a moment..." page), a page with no text, any RPC error reported through
+  `captureErrors`, an account X can't read → not compared, nothing stored, retried in an hour (a day for a target that
+  can't be read at all: no RPC for its chain, not a page). On chain every part must be read definitively: an
+  `owner()` call the node didn't run (HTTP 429, -32005, "header not found"…), an unread proxy slot or implementation,
+  an `owner()` TronGrid didn't run are failed reads reported by the adapters (packages/sources README), never "no
+  owner" / "not a proxy" — a throttled RPC can't fake a change, twice in a row or ever.
+- **Compare.** The first fingerprint (or one from another method/version) is only stored. The same one moves
+  `fingerprintAt`. A different one is read **a second time**, 5 s later (`CONFIRM_DELAY_MS`): only when both reads
+  agree is it a change (a page that differs on every load — rotating tips, A/B tests — or a flaky RPC answer never
+  alerts; it is `unstable`).
+- **Whose baseline.** A change is news only to the watchers the stored fingerprint was kept for: those whose watch
+  started before the fingerprint was `COVER_INTERVALS` (2) × `WATCH_RECHECK_HOURS` old (one kept current by its
+  watchers is never older than an interval plus a late scan or a few failed reads). A fingerprint frozen while no
+  Pro/Max user watched (the last one left or was downgraded weeks ago) is no baseline for someone who just started
+  watching: the change may predate their watch, so with no watcher covered the new fingerprint simply replaces it
+  (`rebaselined`, no alert, no re-check), and their alerts start from there. Watchers not covered get no alert, no
+  `lastAlertAt` and no automatic re-check for that change. When a change alerts, the new
+  fingerprint is stored (compare-and-set on the old one) in the same transaction that writes the alerts: only one run
+  alerts for a change, and a failure leaves both as they were, so the next scan finds the change again. A job that
+  throws anyway (the database blinked) is logged, backs off an hour and completes, so its jobId is free again.
+- **A confirmed change:** one Notification `kind: 'changed'` per Pro and Max watcher ("orbitswap.xyz changed since its
+  last check", "$ORBIT's contract changed since its last check", "$ORBIT's mint or freeze authority changed since its
+  last check", "@kairolabs changed its X profile since its last check"), and `Watch.lastAlertAt`. Free watchers get
+  nothing (the watchlist only).
+- **Max: automatic re-check.** Max watchers whose watch wasn't re-checked in the last 12 h (`Watch.lastRecheckAt`) and
+  who got fewer than `MAX_AUTO_RECHECKS_PER_DAY` automatic re-checks today (UTC; counted from their `changed`
+  notifications that carry a `checkId`, and the slot reserved atomically in Redis — `watch:autorecheck:<userId>:<day>`,
+  seeded from that count, given back when no re-check comes of it — so targets changing at once, 4 jobs in parallel,
+  can't overrun the cap; a Redis failure falls back to the count) get **one** re-check of the target between them: the input of the latest
+  public verdict through the shared `findReusableCheck` (with `recheck: true`: a run of the same target already in
+  progress is joined) + `createCheck` of `@apecheck/db` under the same `lock:create:<key>` as the API and the bot, via
+  `WEB`, `requesterId` = the first of them, a `checks` job with `PRIORITY.recheck` (jobId = check id). No credits are
+  involved (credits are the API's, per request). Their `changed` notification then says "…; re-checking it now",
+  carries the re-check's `checkId`, and `Watch.lastRecheckAt` is set — before the job is queued. A target with only
+  private verdicts is never re-checked in public (its watchers still get the alert). A re-check that can't be queued is
+  marked `FAILED`, and the alerts go back to the plain text without `checkId`.
+- **The marker that links an automatic re-check to its watchers** is that `changed` Notification itself: it gets
+  `checkId` = the re-check (internal `Check.id`) *before* the check's job is queued (a joined run that is already
+  under way is linked the same way). Whenever a check ends
+  — Stage F (`afterDone`), a failure, the stuck-check recovery, or a job re-run that finds the check finished
+  (`pipeline/save.ts` `afterFinish`) — `completeAutoRechecks()` (`watch/notify.ts`) reads the watchers of the check's
+  target (and of any Target row of the same project, in case the run re-keyed it), looks for their `changed`
+  notifications with that `checkId`, and gives each of those users one `kind: 'rechecked'` notification: "Re-checked
+  orbitswap.xyz: Likely real 72, was Partly real 48" (narrative band and score; "was" = the newest public verdict that
+  finished before the re-check was created; without one just the new verdict), or "The re-check of orbitswap.xyz
+  couldn't finish; the last verdict stands" for a failed run. Idempotent (a Postgres advisory lock per check and an
+  existence check per user), durable (no Redis state to lose), and cheap for the checks nobody watches (three indexed
+  reads). A joined run that finished while the alerts were being written is completed right away by the scan job.
+- `Notification.checkId` holds the internal `Check.id`; the API maps it to the shortId of `NotificationDTO.checkId`
+  (null → the target's latest check).
+
+## Deployer records (`src/maintenance/deployers.ts`, M3)
+
+Daily (`deployers-refresh`, 04:40 UTC, queue `maintenance`): for the latest finished **public** check that assessed a
+coin (has `CoinFacts`) of every target with a chain and contract checked in the last 30 days — a coin checked by its
+contract, or one a website or X post check found (`saveTarget` puts its chain and contract on that target too) (private Max checks are never read, so a coin only they checked gets no row), `sources.fourtis.devRadar(chain, ca)` (4 at a time); each answer upserts `Deployer(chain, address)`
+(EVM lowercase) with `launched`, `dead`, `fundedFrom`, `firstSeen` and the record from core `deployerRecord(launched,
+dead)`, once per deployer per run. A coin whose latest report had no Deployer linked (its launch history was unknown at
+check time) is linked to the row when DevRadar names the wallet the check found (or the check found none), so it appears
+under its deployer on /deployers. Scores already given are never changed; no answer changes nothing. Without Fourtis
+(`FOURTIS_API_URL` + `FOURTIS_API_KEY`) the job logs one line and does nothing. Stage D still upserts on every check.
+
+## Tier refresh (`src/maintenance/tiers.ts`, M3, HANDOFF §8)
+
+Hourly (`tiers-refresh`, minute 7, queue `maintenance`): `refreshUserTier()` / `computeTier()` of `@apecheck/db` (the
+API's sign-in uses the same) for users seen in the last 7 days (`User.lastSeenAt`) whose tier is older than an hour,
+and for Pro/Max users not seen lately once a day (their watchlists run without visits; someone who sold doesn't keep a
+paid tier). Balances through `walletTokenBalance()` of `@apecheck/sources` (`sources.sol.tokenBalance` /
+`sources.evm.tokenBalance`), 4 users at a time. A failed read keeps the last tier (computeTier retries it soon) for at
+most 24 h after the last good read (`User.tierReadAt`), then drops the holding (Free unless overridden, logged); while
+`TOKEN_ADDRESS` is empty nothing is read and only `TIER_OVERRIDES` wallets are above Free. The bot marks an X-linked user
+as seen (`lastSeenAt`, at most once an hour) when they mention it, so bot limits and follow-ups read a current tier.
+The job runs for minutes while the API signs users in and links wallets, so it loads only the ids that are due and reads
+each user again just before refreshing them (skipped, and counted as `skipped`, when a sign-in stored their tier
+meanwhile); `refreshUserTier()` writes only while the row is still the one it computed from (same wallets, same stored
+tier), so a tier computed from an older copy never overwrites a newer one (`test/tier-refresh-race.test.ts`).
+
 ## Screenshot retention (`src/maintenance/shots.ts`, HANDOFF §12.6)
 
 A daily repeatable job (`shots-cleanup`, `20 3 * * *` UTC) on the `prices` queue deletes `SCREENSHOT_DIR/<checkId>/` and
@@ -241,10 +373,20 @@ before the DB is updated, in batches of 200; only plain `<id>` folder and card n
 
 ## Price tracker (`src/prices/*`)
 
-Coins whose latest finished check is ≤ 30 days old, on that check's cadence (a Re-check starts the schedule again, since
-"since check" compares with the latest check's `priceAtCheck`). Due when the newest `PricePoint` is older than: 15 min
-(first 24 h after the check), 1 h (to day 7), 1 day (to day 30). Batched `sources.dex.tokens(chain, addresses)`; each hit writes a
-`PricePoint` and refreshes `Target.lastPrice / lastMc / lastVol5m / lastCh24 / priceUpdatedAt`.
+Coins whose latest finished public check is ≤ 30 days old, on that check's cadence (a Re-check starts the schedule
+again, since "since check" compares with the latest check's `priceAtCheck`). A private (Max) check never moves a public
+coin's schedule (it would squeeze the public chart and sparkline into the last few hours); a coin only private checks
+looked at is tracked on the newest of them. Due when the newest `PricePoint` is older than: 15 min
+(first 24 h after the check), 1 h (to day 7), 1 day (to day 30), with one minute of slack on the 5-minute tick. Batched
+`sources.dex.tokens(chain, addresses)`; each hit writes a `PricePoint` and refreshes `Target.lastPrice / lastMc /
+lastVol5m / lastCh24 / priceUpdatedAt`. A check that finished while DexScreener didn't answer has no `priceAtCheck` (so no
+"since check" at all): the first price the tracker reads within 30 minutes of the check finishing becomes its
+`priceAtCheck` / `mcAtCheck`; a later one never does (a pair created hours after the check is not the price at check).
+
+The API turns these into what the site shows (`apps/api` `loadSeries` / insights): since % = `Target.lastPrice` vs the
+latest check's `priceAtCheck`; the feed sparkline and the report's "Price since check" chart = 0 at the check plus the
+newest 27 points after it (`TUNING.sparkPoints` = 28); "Since check, by verdict" = the average since % per narrative band
+of the latest public coin verdicts of the last 30 days. `test/e2e/since-check.test.ts` checks all of it end to end.
 
 ## Security model (HANDOFF §11)
 
@@ -282,7 +424,9 @@ Coins whose latest finished check is ≤ 30 days old, on that check's cadence (a
 
 ## Environment
 
-All from the repo-root `.env` (see `.env.example`). worker-bot: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
+All from the repo-root `.env` (see `.env.example`). M3: `WATCH_RECHECK_HOURS` (fingerprint cadence, default 6),
+`MAX_AUTO_RECHECKS_PER_DAY` (default 20), `TOKEN_CHAIN`, `TOKEN_ADDRESS`, `PRO_MIN_HOLD`, `MAX_MIN_HOLD`, `TIER_OVERRIDES`
+(tier refresh), `FOURTIS_API_URL` + `FOURTIS_API_KEY` (deployer refresh). worker-bot: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
 `X_ACCESS_SECRET`, `X_BEARER_TOKEN` (optional), `X_BOT_USER_ID`, `X_BOT_HANDLE`, `BOT_POLL_SECONDS`, `BOT_USER_HOURLY`,
 `BOT_PRO_USER_HOURLY`, `BOT_HOURLY_CAP`, `BOT_INCLUDE_LINK`, `APP_URL`, `CACHE_HOURS`. Used here: `DATABASE_URL`, `REDIS_URL`, `ANTHROPIC_API_KEY`,
 `AI_BASE_URL`, `AI_MODEL_JUDGE`, `AI_MODEL_FAST`, `CHECK_BUDGET_SECONDS`, `CHECK_MAX_AGENT_ACTIONS`,
@@ -336,6 +480,25 @@ never stored), retry under "Couldn't finish", answering the help line, @handles 
 verdict, mentions cut off by a crash or a transient error, the lost-reply sweep (also on the real queue), reply POSTs
 with an unknown outcome on the FakeX and on the real X adapter (one POST, the lookup's id), `findReply` on the X API
 emulator, and links in model-written text (reply and stored Ask).
+
+M3: `test/asks.test.ts` (answers from the stored check with asker and `asksCount`, shortId, once per job, failure
+codes, planted links / mentions made safe, model failure → stand-in, and the queue the way the API waits on it),
+`test/watch.test.ts` (normalising; a fixture site fingerprinted, its text changed → `changed` for Pro and Max but not
+Free; a timestamp / price-only change, HTTP errors, bot challenges, a refused connection, a page that differs on every
+load → no alert; automatic re-check limits — per day, 12 h per watch, private-only targets, joining a running check, a
+failed enqueue; `rechecked` once; a fingerprint frozen while nobody paid watched → `rebaselined` for new watchers, and
+only covered watchers alerted; the per-day cap with 4 targets changing at once; EVM fingerprints through the real
+adapter — a 429 / -32005 `owner()` or proxy slot never alerts, a proxy upgrade with the same owner does; Tron with a
+throttled `owner()`; Solana and Token-2022 extensions; the scan's selection),
+`test/watch-flow.test.ts` (acceptance through the real `checks` and `rechecks` queues and the pipeline: a Max user's
+watched site changes → one automatic re-check with `PRIORITY.recheck` → the `rechecked` notification with the new
+verdict next to the old one), `test/maintenance.test.ts` (deployer refresh from a fake DevRadar, coins found by a
+website or X post check included; tier refresh: who is
+due, holdings, overrides while the token isn't live, failed reads), `test/prices.test.ts` (+ the price-at-check backfill;
+a private check never moves a public coin's schedule)
+and `test/e2e/since-check.test.ts` (two coin checks through the queue and pipeline, 31 simulated days of price ticks on
+the 15 min / 1 h / 1 day schedule with moving fake DexScreener prices, then the real API from `apps/api` against the same
+database: report since % and chart series, feed since % and sparkline, the "Since check, by verdict" card).
 
 Tests use the database `apecheck_test_worker` (created and migrated by `test/global-setup.ts`) and Redis db 2, never
 the dev data. External data sources are replaced by `test/fakes.ts` (`FakeSources`, same `Sources` contract); fixture

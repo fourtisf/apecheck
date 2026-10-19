@@ -25,10 +25,19 @@ const DeployersQueryZ = z.object({
 
 type DeployerSort = 'real' | 'dead' | 'launched';
 
-/** Every deployer with the coins of theirs that are on the feed (latest public finished checks). */
+/**
+ * A deployer is public when a finished public check names it as a coin's deployer, or when no check names it at all
+ * (a wallet known from DevRadar alone). One that only private (Max) checks name never is: listing it, even with no
+ * coins, would publish that someone privately vetted a coin of that wallet, and the wallet leads to the coin.
+ */
+export const publicDeployerWhere: Prisma.DeployerWhereInput = {
+  OR: [{ coins: { some: { check: { status: 'DONE', isPrivate: false } } } }, { coins: { none: {} } }],
+};
+
+/** Every public deployer with the coins of theirs that are on the feed (latest public finished checks). */
 export async function deployerRows(prisma: PrismaClient, chain: ChainDb | null): Promise<DeployerRowDTO[]> {
   const rows = await prisma.deployer.findMany({
-    where: chain ? { chain } : {},
+    where: { AND: [chain ? { chain } : {}, publicDeployerWhere] },
     include: {
       coins: {
         where: { check: { isLatest: true, status: 'DONE', isPrivate: false } },
@@ -124,8 +133,9 @@ export function registerInsightRoutes(app: FastifyInstance, deps: AppDeps) {
 
     const [checked, todayCount, larp, byBand, deployers] = await Promise.all([
       // the two hero numbers count the same thing (finished checks), so "today" is a subset of "checked"
-      prisma.check.count({ where: { status: 'DONE' } }),
-      prisma.check.count({ where: { status: 'DONE', finishedAt: { gte: today } } }),
+      // private checks (Max) stay out of every public number
+      prisma.check.count({ where: { status: 'DONE', isPrivate: false } }),
+      prisma.check.count({ where: { status: 'DONE', isPrivate: false, finishedAt: { gte: today } } }),
       sinceByBand(prisma, { bands: ['llarp', 'larp'] }),
       sinceByBand(prisma, { since: windowStart }),
       deployerRows(prisma, null),

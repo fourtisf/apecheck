@@ -94,8 +94,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     headers: {
       'Content-Type': 'image/png',
       'Content-Length': String(png.byteLength),
-      // a finished verdict never changes (a re-check gets a new id); a running one does
-      'Cache-Control': testing ? 'no-store' : 'public, max-age=31536000, immutable',
+      // a finished verdict never changes (a re-check gets a new id); a running one does. A private check renders only
+      // for its owner (the server render forwards the API cookies): never let a shared cache keep it
+      'Cache-Control': r.isPrivate ? 'private, no-store' : testing ? 'no-store' : 'public, max-age=31536000, immutable',
     },
   });
 }

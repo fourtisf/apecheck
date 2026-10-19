@@ -5,8 +5,9 @@
  * and the IP. A check consumes from both; remaining = max − max(usedSid, usedIp). Clearing
  * cookies doesn't reset the IP counter and a shared IP doesn't let one cookie use more than max.
  *
- * Signed-in users (M3) are counted under their user id with their tier's limit: pass
- * `userId` and `tier` in the subject and nothing else changes.
+ * Signed-in users (M3) are counted under their user id with their tier's limit (`userId` + `tier` in the subject).
+ * A signed-in Free user also keeps counting under the cookie and the IP: wallets cost nothing to make, so signing in
+ * with a fresh one (or signing out) must not hand out another day of free checks. Pro and Max count per user only.
  */
 import type { Redis } from 'ioredis';
 import { creditsKeyIp, creditsKeySid, creditsKeyUser, nextUtcMidnight, utcDay, type Env, type TierS } from '@apecheck/core';
@@ -38,8 +39,10 @@ export function creditLimit(env: Env, tier: TierS = 'free'): number {
 
 export function creditKeys(subject: CreditSubject, now = new Date()): string[] {
   const day = utcDay(now);
-  if (subject.userId) return [creditsKeyUser(subject.userId, day)];
-  return [creditsKeySid(subject.sid, day), creditsKeyIp(subject.ip, day)];
+  const anon = [creditsKeySid(subject.sid, day), creditsKeyIp(subject.ip, day)];
+  if (!subject.userId) return anon;
+  const user = creditsKeyUser(subject.userId, day);
+  return subject.tier === 'pro' || subject.tier === 'max' ? [user] : [user, ...anon];
 }
 
 /** Counters live until the next 00:00 UTC plus an hour of slack for clock skew between processes. */

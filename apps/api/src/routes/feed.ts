@@ -89,10 +89,18 @@ export function registerFeedRoutes(app: FastifyInstance, deps: AppDeps) {
 
     const and: Prisma.CheckWhereInput[] = [FEED_BASE];
     const ids = (q.ids ?? '').split(',').map(s => s.trim()).filter(s => SHORT_ID_RE.test(s)).slice(0, IDS_MAX);
-    if (q.ids != null || q.tab === 'watch') {
+    const user = request.viewer?.user ?? null;
+    let watched: string[] | null = null;
+    if (q.tab === 'watch' && q.ids == null && user) {
+      // M3: signed in, no ids → the account's own watchlist (Watch rows)
+      watched = (await deps.prisma.watch.findMany({ where: { userId: user.id }, select: { targetId: true } })).map(w => w.targetId);
+      if (!watched.length) return { items: [], total: 0, nextCursor: null };
+      and.push({ targetId: { in: watched } });
+    } else if (q.ids != null || q.tab === 'watch') {
       if (!ids.length) return { items: [], total: 0, nextCursor: null };
       // a watched id keeps matching after a re-check: follow it to its target's latest check
-      and.push({ target: { checks: { some: { shortId: { in: ids } } } } });
+      // only public ids select a target: a private check's id must not reveal which project it was
+      and.push({ target: { checks: { some: { shortId: { in: ids }, isPrivate: false } } } });
     }
     if (q.via) and.push(viaWhere(q.via));
     if (q.tab === 'vol') and.push(hasCoinWhere);
@@ -111,6 +119,7 @@ export function registerFeedRoutes(app: FastifyInstance, deps: AppDeps) {
     const sig = querySig({
       tab: q.tab, type: q.type, nar: q.nar, coin: q.coin, chain, term: term ?? null,
       ids: q.ids != null || q.tab === 'watch' ? ids : null, via: q.via ?? null,
+      watchOf: watched ? user!.id : null,
     });
 
     /** the live order from `offset` (old cursors, an expired snapshot, rows past the snapshot) */
@@ -166,6 +175,7 @@ export function registerFeedRoutes(app: FastifyInstance, deps: AppDeps) {
         createdAt: true,
         startedAt: true,
         requesterSid: true,
+        requesterId: true,
         evidence: true,
         target: { select: { kind: true, name: true, ticker: true, chain: true, key: true } },
         _count: { select: { steps: true } },

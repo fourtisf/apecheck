@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createEvm, EVM_READ_METHODS, PUBLIC_EVM_RPC } from '../src/adapters/evm';
-import { bytecodeSelectors, decodeAbiString, decodeRevert, EIP1967_IMPL_SLOT, ownerlessRenounced } from '../src/abi';
+import { bytecodeSelectors, decodeAbiString, decodeRevert, EIP1967_BEACON_SLOT, EIP1967_IMPL_SLOT, ownerlessRenounced } from '../src/abi';
 import { jsonRpc } from '../src/rpc';
 import { captureErrors } from '../src/util';
-import { encAddress, encBytes32, encString, encUint, fakeHttp, rpcHandler, testEnv, word } from './helpers';
+import { encAddress, encBytes32, encString, encUint, fakeHttp, rpcHandler, testEnv, word, type Handler } from './helpers';
 
 const TOKEN = '0x4200000000000000000000000000000000000abc';
 const IMPL = '0x1111111111111111111111111111111111111111';
@@ -169,6 +169,7 @@ describe('EVM adapter: tokenBasics', () => {
       owner: '0x000000000000000000000000000000000000dead',
       ownerRenounced: true,
       hasMintFunction: true,
+      implementation: null,
     });
   });
 
@@ -253,6 +254,102 @@ describe('EVM adapter: tokenBasics', () => {
     const evm = createEvm(testEnv(), fakeHttp(() => ({ status: 502, text: 'bad gateway' })));
     expect(await evm.tokenBasics('base', TOKEN)).toBeNull();
     expect(evm.lastError).toMatch(/HTTP 502/);
+  });
+
+  describe('a call the node did not run is a failed read, never "no owner function"', () => {
+    const OWNER_SEL = '0x8da5cb5b';
+    const GET_OWNER_SEL = '0x893d20e8';
+    /** owner() (and getOwner()) answered by `answer`; everything else as a plain ERC-20 with an owner selector */
+    const node = (answer: (id: number) => ReturnType<Handler>, selectors = [...ERC20, '8da5cb5b']) =>
+      fakeHttp(
+        (url, _req, body) => {
+          const b = body as { id: number; method: string; params: [{ data?: string }] };
+          if (url.host !== 'mainnet.base.org' || b.method !== 'eth_call') return undefined;
+          return [OWNER_SEL, GET_OWNER_SEL].includes(b.params[0].data ?? '') ? answer(b.id) : undefined;
+        },
+        evmNode('mainnet.base.org', { code: bytecode(selectors), calls: { '0x313ce567': encUint(18) } }),
+      );
+
+    it.each([
+      ['HTTP 429 with a JSON-RPC body', (id: number) => ({ status: 429, json: { jsonrpc: '2.0', id, error: { code: -32005, message: 'rate limit exceeded' } } })],
+      ['a 200 -32005 envelope', (id: number) => ({ json: { jsonrpc: '2.0', id, error: { code: -32005, message: 'limit exceeded' } } })],
+      ['-32000 header not found', (id: number) => ({ json: { jsonrpc: '2.0', id, error: { code: -32000, message: 'header not found' } } })],
+      ['-32603 internal error', (id: number) => ({ json: { jsonrpc: '2.0', id, error: { code: -32603, message: 'internal error' } } })],
+      ['HTTP 503 without a body', () => ({ status: 503, text: 'busy' })],
+    ])('%s on owner(): reported, owner unknown', async (_label, answer) => {
+      const evm = createEvm(testEnv(), node(answer as (id: number) => ReturnType<Handler>));
+      const { value, errors } = await captureErrors(() => evm.tokenBasics('base', TOKEN));
+      expect(value).toMatchObject({ owner: null, ownerRenounced: null, decimals: 18 });
+      expect(errors).toEqual([expect.stringMatching(/^evm\.tokenBasics owner base: /)]);
+    });
+
+    it.each([
+      ['code 3', { code: 3, message: 'execution reverted' }],
+      ['-32000 execution reverted (geth without revert data)', { code: -32000, message: 'execution reverted' }],
+      ['-32015 VM execution error (Nethermind)', { code: -32015, message: 'VM execution error.', data: 'revert' }],
+      ['-32000 invalid opcode', { code: -32000, message: 'invalid opcode: INVALID' }],
+    ])('a genuine revert (%s) is still "no owner function"', async (_label, error) => {
+      // no owner selector in the bytecode: both reverts are answers, so the token counts as renounced
+      const evm = createEvm(testEnv(), node(id => ({ json: { jsonrpc: '2.0', id, error } }), ERC20));
+      const { value, errors } = await captureErrors(() => evm.tokenBasics('base', TOKEN));
+      expect(errors).toEqual([]);
+      expect(value).toMatchObject({ owner: null, ownerRenounced: true });
+    });
+
+    it('a failed EIP-1967 slot read is reported: no implementation, mint function unknown (not "none")', async () => {
+      const http = fakeHttp(
+        evmNode('mainnet.base.org', {
+          code: '0x363d3d37' + 'aa'.repeat(40),
+          extra: { eth_getStorageAt: () => ({ error: { code: -32005, message: 'rate limit exceeded' } }) },
+        }),
+      );
+      const evm = createEvm(testEnv(), http);
+      const { value, errors } = await captureErrors(() => evm.tokenBasics('base', TOKEN));
+      expect(value).toMatchObject({ implementation: null, hasMintFunction: null, ownerRenounced: null });
+      expect(errors).toEqual([expect.stringMatching(/^evm\.implementation base: rate limit exceeded/)]);
+    });
+
+    it("the implementation's code not read: reported, mint function unknown", async () => {
+      const http = fakeHttp(
+        evmNode('mainnet.base.org', {
+          code: '0x363d3d37' + 'aa'.repeat(40),
+          storage: encAddress(IMPL),
+          extra: { eth_getCode: p => ((p[0] as string).toLowerCase() === IMPL ? { error: { code: -32000, message: 'missing trie node' } } : '0x363d3d37' + 'aa'.repeat(40)) },
+        }),
+      );
+      const { value, errors } = await captureErrors(() => createEvm(testEnv(), http).tokenBasics('base', TOKEN));
+      expect(value).toMatchObject({ implementation: IMPL, hasMintFunction: null });
+      expect(errors).toEqual([expect.stringMatching(/^evm\.getCode base: missing trie node/)]);
+    });
+  });
+
+  it('the implementation behind a proxy is returned: EIP-1967 slot, EIP-1167 target, EIP-1967 beacon', async () => {
+    const proxy = '0x363d3d37' + 'aa'.repeat(40);
+    const slot = createEvm(testEnv(), fakeHttp(evmNode('mainnet.base.org', { code: proxy, storage: encAddress(IMPL), implCode: bytecode(ERC20) })));
+    expect(await slot.tokenBasics('base', TOKEN)).toMatchObject({ implementation: IMPL, hasMintFunction: false });
+
+    const minimal = '0x363d3d373d3d3d363d73' + IMPL.slice(2) + '5af43d82803e903d91602b57fd5bf3';
+    const clone = createEvm(testEnv(), fakeHttp(evmNode('mainnet.base.org', { code: minimal, implCode: bytecode(ERC20) })));
+    expect(await clone.tokenBasics('base', TOKEN)).toMatchObject({ implementation: IMPL });
+
+    // a beacon proxy: the implementation slot is empty, the beacon slot names the beacon, whose implementation() is the logic
+    const BEACON = '0x' + 'be'.repeat(20);
+    const http = fakeHttp(
+      rpcHandler('mainnet.base.org', {
+        eth_getCode: p => ((p[0] as string).toLowerCase() === IMPL ? bytecode([...ERC20, '40c10f19']) : proxy),
+        eth_getStorageAt: p => (p[1] === EIP1967_BEACON_SLOT ? encAddress(BEACON) : '0x' + '0'.repeat(64)),
+        eth_call: p => {
+          const { to, data } = p[0] as { to: string; data: string };
+          if (to.toLowerCase() === BEACON && data === '0x5c60da1b') return encAddress(IMPL);
+          return { error: { code: 3, message: 'execution reverted' } };
+        },
+      }),
+    );
+    const { value, errors } = await captureErrors(() => createEvm(testEnv(), http).tokenBasics('base', TOKEN));
+    expect(errors).toEqual([]);
+    expect(value).toMatchObject({ implementation: IMPL, hasMintFunction: true });
+    const slots = http.calls.filter(c => (c.body as { method: string }).method === 'eth_getStorageAt').map(c => (c.body as { params: unknown[] }).params[1]);
+    expect(slots.sort()).toEqual([EIP1967_IMPL_SLOT, EIP1967_BEACON_SLOT].sort());
   });
 
   it('chain without an RPC → null, no request', async () => {

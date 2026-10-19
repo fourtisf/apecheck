@@ -275,7 +275,7 @@ describe('GET /v1/checks/:id', () => {
         { id: s.ask.id, question: 'who funded the deployer?', answer: 'Binance hot wallet.', by: 'whalewatch', via: 'x', createdAt: s.ask.createdAt.toISOString() },
       ],
       notes: [
-        { id: s.note1.id, by: 'trench_ken', hold: null, text: 'Dev shipped two earlier tools.', helpful: 12, mine: false, createdAt: s.note1.createdAt.toISOString() },
+        { id: s.note1.id, by: '@trench_ken', hold: null, text: 'Dev shipped two earlier tools.', helpful: 12, mine: false, createdAt: s.note1.createdAt.toISOString() },
         { id: s.note2.id, by: 'So1an…xxxx', hold: null, text: 'Same template as a rug.', helpful: 3, mine: false, createdAt: s.note2.createdAt.toISOString() },
       ],
       links: { site: 'https://orbitswap.xyz', x: 'https://x.com/orbit_xyz', github: ['https://github.com/orbit/app'], docs: 'https://docs.orbitswap.xyz' },

@@ -20,7 +20,7 @@ import type { AppDeps } from '../context';
 import { canView, loadReport, readProgress } from '../checks';
 import { ApiError, MSG } from '../errors';
 import { SHORT_ID_RE } from '../ids';
-import { evidenceOf, shotUrl, toStep } from '../mappers';
+import { evidenceOf, shotUrl, toStep, type Viewer } from '../mappers';
 import { sidSetCookieHeader } from '../plugins/session';
 import { openSse, type SseRegistry, type SseStream } from '../sse';
 import { viewerOf } from './util';
@@ -60,7 +60,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps, registr
     const viewer = viewerOf(request);
     const head = await deps.prisma.check.findUnique({
       where: { shortId },
-      select: { id: true, isPrivate: true, requesterSid: true },
+      select: { id: true, isPrivate: true, requesterSid: true, requesterId: true },
     });
     if (!head || !canView(head, viewer)) throw new ApiError(404, 'not_found', MSG.notFound);
 
@@ -78,7 +78,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps, registr
   });
 }
 
-async function pump(deps: AppDeps, stream: SseStream, checkId: string, viewer: { sid: string | null }) {
+async function pump(deps: AppDeps, stream: SseStream, checkId: string, viewer: Viewer) {
   const buffered: CheckChannelMsg[] = [];
   let live = false;
   let finishing = false;

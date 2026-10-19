@@ -1,9 +1,11 @@
 'use client';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { KIND_LABEL, detect, short, type CheckReportDTO } from '@apecheck/core';
+import { NETWORK_ERROR } from '@/lib/api';
 import { useActions } from '../Actions';
 import { Avatar } from '../Avatar';
+import { useMe } from '../Me';
 import { ChainTag } from '../ChainTag';
 import { CopyIcon } from '../icons';
 import { postToX, shareText } from '../ShareModal';
@@ -44,14 +46,34 @@ function shareOnX(r: CheckReportDTO) {
   window.open(intent, '_blank', 'noopener,noreferrer');
 }
 
+/**
+ * The Watch toast, by what watching gets this viewer (HANDOFF §8): Max watchlists are re-checked on their own, Pro gets
+ * an alert when the site or contract changes, Free and a browser list get neither.
+ */
+export function watchToast(on: boolean, signedIn: boolean, tier: 'free' | 'pro' | 'max'): string {
+  if (!on) return 'Removed from your watchlist';
+  if (!signedIn) return 'Watching in this browser. Connect a wallet to keep it on your account; re-check alerts come with Pro.';
+  if (tier === 'free') return 'Added to your watchlist. Re-check alerts come with Pro.';
+  if (tier === 'pro') return "Watching. You'll get an alert when the site or contract changes.";
+  return "Watching. You'll get a re-check when the site or contract changes.";
+}
+
 /** Crumb, title, meta line and the Watch / Re-check / Share card actions. */
 export function ReportHeader({ report: r }: { report: CheckReportDTO }) {
   const { startCheck, openShare } = useActions();
   const toast = useToast();
   const watch = useWatchlist();
+  const { me } = useMe();
   const [rechecking, setRechecking] = useState(false);
+  const [watchBusy, setWatchBusy] = useState(false);
+  // the answer of this page's last toggle, until the watchlist store has caught up
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  useEffect(() => setToggled(null), [watch.version, watch.mode]);
   const running = isRunning(r);
-  const watching = watch.ready && watch.has(r.id);
+  const item = { id: r.id, targetId: r.targetId };
+  // signed in: the account's list once loaded, else the server render's `watching`; signed out: this browser's list
+  const known = watch.mode === 'account' ? (watch.list ? watch.isWatching(item) : null) : watch.ready ? watch.isWatching(item) : null;
+  const watching = toggled ?? known ?? !!r.watching;
   const site = siteLink(r);
   const handle = r.handle;
 
@@ -61,9 +83,18 @@ export function ReportHeader({ report: r }: { report: CheckReportDTO }) {
     toast('Contract address copied');
   };
 
-  const toggleWatch = () => {
-    const on = watch.toggle(r.id);
-    toast(on ? "Watching. You'll get a re-check when the site or contract changes." : 'Removed from your watchlist');
+  const toggleWatch = async () => {
+    if (watchBusy) return;
+    setWatchBusy(true);
+    try {
+      const on = await watch.setWatching(item, !watching);
+      setToggled(on);
+      toast(watchToast(on, watch.mode === 'account', me?.tier ?? 'free'));
+    } catch (e) {
+      toast(e instanceof Error && e.message ? e.message : NETWORK_ERROR);
+    } finally {
+      setWatchBusy(false);
+    }
   };
 
   const recheck = async () => {
@@ -71,7 +102,8 @@ export function ReportHeader({ report: r }: { report: CheckReportDTO }) {
     if (!target || rechecking) return;
     setRechecking(true);
     try {
-      await startCheck(target, { recheck: true });
+      // a private report is re-checked privately (Max)
+      await startCheck(target, { recheck: true, private: r.isPrivate || undefined });
     } finally {
       setRechecking(false);
     }
@@ -90,6 +122,11 @@ export function ReportHeader({ report: r }: { report: CheckReportDTO }) {
           <h1>{r.name}</h1>
           <div className="rh-meta">
             <span className="tag">{KIND_LABEL[r.kind]}</span>
+            {r.isPrivate ? (
+              <span className="lock" title="Only you can see this check">
+                Private
+              </span>
+            ) : null}
             <ChainTag chain={r.chain} />
             {r.ca ? (
               <button className="ca" type="button" onClick={copy} aria-label="Copy contract address" title={r.ca}>
@@ -110,7 +147,7 @@ export function ReportHeader({ report: r }: { report: CheckReportDTO }) {
           </div>
         </div>
         <div className="rh-act">
-          <button className="btn" type="button" aria-pressed={watching} onClick={toggleWatch}>
+          <button className="btn" type="button" aria-pressed={watching} aria-busy={watchBusy || undefined} onClick={() => void toggleWatch()}>
             {watching ? 'Watching' : 'Watch'}
           </button>
           <button className="btn" type="button" disabled={running || rechecking || !recheckTarget(r)} onClick={() => void recheck()}>
@@ -120,7 +157,8 @@ export function ReportHeader({ report: r }: { report: CheckReportDTO }) {
             className="btn btn-primary"
             type="button"
             disabled={running || r.narScore == null}
-            onClick={() => openShare(r, { onPost: () => shareOnX(r) })}
+            // a private report's link opens only for its owner: the card can be downloaded, not posted
+            onClick={() => openShare(r, r.isPrivate ? { postable: false } : { onPost: () => shareOnX(r) })}
           >
             Share card
           </button>

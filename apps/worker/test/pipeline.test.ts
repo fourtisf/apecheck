@@ -206,6 +206,27 @@ describe('pipeline run(checkId)', () => {
     expect(second.target.checkCount).toBe(2);
   });
 
+  it("a Max user's private check of a public target never takes or clears its public latest verdict", async () => {
+    const url = sites.get('working-app')!.url;
+    const pub = await createCheck(url);
+    expect((await runCheck(pub.id, deps(workingData()))).status).toBe('done');
+    const before = await stored(pub.id);
+    expect(before.isLatest).toBe(true);
+    const user = await prisma.user.create({ data: { evmAddress: '0x' + '7'.repeat(40), tier: 'MAX' } });
+    // db createCheck: a private check does not count towards the public checkCount
+    const priv = await prisma.check.create({
+      data: { shortId: 'priv001', targetId: pub.targetId, targetRaw: url, status: 'QUEUED', isPrivate: true, requesterId: user.id },
+    });
+    expect((await runCheck(priv.id, deps(workingData()))).status).toBe('done');
+    const [a, b] = await Promise.all([stored(pub.id), stored(priv.id)]);
+    expect(b.status).toBe('DONE');
+    expect(b.isLatest).toBe(false);
+    expect(a.isLatest).toBe(true);
+    expect(b.target.lastCheckedAt?.toISOString()).toBe(before.target.lastCheckedAt?.toISOString());
+    expect(b.target.checkCount).toBe(before.target.checkCount);
+    expect(await prisma.check.count({ where: { targetId: pub.targetId, isLatest: true } })).toBe(1);
+  });
+
   it('EVM coin: chain detected, site from token info, coin facts, Deployer upsert, PricePoint, re-keyed Target', async () => {
     const url = sites.get('working-app')!.url;
     // an earlier check already owns the canonical key: the new check is re-pointed to it
@@ -295,6 +316,40 @@ describe('pipeline run(checkId)', () => {
     expect(c.coinFacts?.sigDeployer).toBe('WARN');
     expect(await prisma.deployer.count()).toBe(0);
     expect(c.steps.some(s => s.text === 'DevRadar unavailable, deployer history unknown (0xAbC…Ef02)')).toBe(true);
+  });
+
+  it("a Max user's private coin check never creates or refreshes a Deployer row; it links one the public already knows", async () => {
+    const user = await prisma.user.create({ data: { evmAddress: '0x' + '8'.repeat(40), tier: 'MAX' } });
+    const wallet = '0xabcd00000000000000000000000000000000ef03';
+    const data: FakeData = {
+      evmChains: { [COIN]: 'base' },
+      coinFacts: {
+        [COIN]: {
+          chain: 'base', address: COIN, token: { name: 'Orbit', symbol: 'ORBIT', decimals: 18, supply: '1000000000' },
+          deployer: { address: wallet, fundedFrom: 'Binance', launched: 7, dead: 6, firstSeen: '2025-01-02T00:00:00Z', source: 'DevRadar' },
+          bundle: null, holders: null, lp: null,
+          authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Mint renounced', source: 'On-chain' },
+          market: null, stubbed: [], errors: [],
+        },
+      },
+    };
+    const privately = async () => {
+      const c = await createCheck(COIN);
+      await prisma.check.update({ where: { id: c.id }, data: { isPrivate: true, requesterId: user.id } });
+      expect((await runCheck(c.id, deps(data))).status).toBe('done');
+      return stored(c.id);
+    };
+    // nobody has seen this wallet in public: no Deployer row (the deployers page would list it), the report keeps it
+    const first = await privately();
+    expect(await prisma.deployer.count()).toBe(0);
+    expect(first.coinFacts).toMatchObject({ deployerId: null, deployerAddress: wallet });
+    expect(first.steps.map(s => s.text)).toContain('Deployer: 7 earlier tokens, 6 dead');
+    // the public knows the wallet: a private check links that row and leaves its counts alone
+    const known = await prisma.deployer.create({ data: { chain: 'BASE', address: wallet, record: 'BUILDER', launched: 1, dead: 0, fundedFrom: 'Coinbase' } });
+    const second = await privately();
+    expect(second.coinFacts?.deployerId).toBe(known.id);
+    expect(await prisma.deployer.findUniqueOrThrow({ where: { id: known.id } })).toMatchObject({ record: 'BUILDER', launched: 1, dead: 0, fundedFrom: 'Coinbase' });
+    expect(await prisma.deployer.count()).toBe(1);
   });
 
   it('M1 acceptance: waitlist and dead-button sites cannot score above Partly real, a wallet connect button included', async () => {

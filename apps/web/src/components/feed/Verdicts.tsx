@@ -2,15 +2,30 @@
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CHAINS, CHAIN_ORDER, COIN_BANDS, NAR_BANDS, type FeedResponse } from '@apecheck/core';
-import { feed, isAbortError, type FeedParams, type FeedTab, type FeedType } from '@/lib/api';
+import { feed, isAbortError, watchlist as fetchWatchlist, type FeedParams, type FeedTab, type FeedType } from '@/lib/api';
 import { GridIcon, ListIcon, SearchIcon } from '../icons';
 import { useLive } from '../Live';
+import { useMe } from '../Me';
 import { useFeedSearchRequest } from '../Actions';
-import { FEED_Q_MAX, NO_FILTERS, feedKey, feedParams, restoreFeed, serverFeedKey, startRows, urlQuery, useFeedState, type FeedFilters, type FeedLayout } from '../FeedState';
+import {
+  FEED_Q_MAX,
+  NO_FILTERS,
+  accountWatchKey,
+  feedKey,
+  feedParams,
+  filterRows,
+  restoreFeed,
+  serverFeedKey,
+  startRows,
+  urlQuery,
+  useFeedState,
+  type FeedFilters,
+  type FeedLayout,
+} from '../FeedState';
 import { useToast } from '../Toast';
 import { VerdictCard } from '../VerdictCard';
 import { VerdictTable } from '../VerdictTable';
-import { WATCH_MAX_IDS, useWatchlist } from '../Watchlist';
+import { WATCH_MAX_IDS, useWatchlist, watchEmptyText } from '../Watchlist';
 
 const TABS: [FeedTab, string][] = [
   ['latest', 'Latest'],
@@ -60,6 +75,7 @@ const dedupe = (items: FeedResponse['items']) => {
  */
 export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse | null; initialQ: string; command: VerdictsCommand | null }) {
   const watch = useWatchlist();
+  const { me } = useMe();
   const { onFinished } = useLive();
   const toast = useToast();
   const searchReq = useFeedSearchRequest();
@@ -74,10 +90,12 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
   const [qInput, setQInput] = useState(start.f.q);
   const [f, setF] = useState<Filters>(start.f);
 
-  // the Watchlist tab asks for the watched ids (newest first); other tabs ignore them
-  const watchKey = tab === 'watch' ? watch.ids.slice(0, WATCH_MAX_IDS).join(',') : '';
+  // signed in, the Watchlist tab shows the account's list (GET /v1/watchlist, filtered here); signed out it asks the
+  // feed for this browser's watched ids (newest first). Other tabs ignore both.
+  const accountWatch = tab === 'watch' && watch.mode === 'account';
+  const watchKey = tab === 'watch' && !accountWatch ? watch.ids.slice(0, WATCH_MAX_IDS).join(',') : '';
   const params = useMemo<FeedParams>(() => feedParams(tab, f, watchKey ? watchKey.split(',') : []), [tab, f, watchKey]);
-  const key = feedKey(params);
+  const key = accountWatch ? accountWatchKey(f) : feedKey(params);
 
   // rows to start with: the server's page when it was rendered for these params, else the rows of the last visit
   const [boot] = useState(() => startRows(key, serverFeedKey(initialQ), initial, start.rows));
@@ -88,6 +106,10 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
 
   const paramsRef = useRef(params);
   paramsRef.current = params;
+  const accountRef = useRef(accountWatch);
+  accountRef.current = accountWatch;
+  const fRef = useRef(f);
+  fRef.current = f;
   const dataRef = useRef(data);
   dataRef.current = data;
   /** the params `data` was loaded for (null: nothing loaded yet) */
@@ -102,8 +124,9 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
    */
   const load = useCallback(async (mode: 'replace' | 'refresh' | 'sync') => {
     const p = paramsRef.current;
-    const k = JSON.stringify(p);
-    if (p.tab === 'watch' && !p.ids?.length) {
+    const account = accountRef.current;
+    const k = account ? accountWatchKey(fRef.current) : feedKey(p);
+    if (p.tab === 'watch' && !account && !p.ids?.length) {
       seq.current++;
       abort.current?.abort();
       loadedKey.current = k;
@@ -118,7 +141,13 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
     const shown = dataRef.current?.items.length ?? 0;
     const limit = mode === 'replace' ? PAGE : Math.min(MAX_LIMIT, Math.max(PAGE, shown));
     try {
-      const res = await feed({ ...p, limit }, { signal: ac.signal });
+      let res: FeedResponse;
+      if (account) {
+        const items = filterRows((await fetchWatchlist({ signal: ac.signal })).items, fRef.current);
+        res = { items, total: items.length, nextCursor: null };
+      } else {
+        res = await feed({ ...p, limit }, { signal: ac.signal });
+      }
       if (my !== seq.current) return;
       if (mode === 'refresh' && dataRef.current) {
         const before = new Set(dataRef.current.items.map(i => i.id));
@@ -142,12 +171,19 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
     }
   }, []);
 
-  // filters, tab or watchlist changed
+  // filters, tab or watchlist changed (signed out, the Watchlist tab waits until this browser's list was read)
   useEffect(() => {
-    if (tab === 'watch' && !watch.ready) return;
+    if (tab === 'watch' && !accountWatch && !watch.ready) return;
     if (key === loadedKey.current) return;
     void load('replace');
-  }, [key, tab, watch.ready, load]);
+  }, [key, tab, accountWatch, watch.ready, load]);
+
+  // signed in: the account's watchlist changed (a sign-in moved this browser's list there): show it
+  const watchVersion = watch.version;
+  useEffect(() => {
+    if (accountRef.current && loadedKey.current === key) void load('sync');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchVersion]);
 
   // the saved rows of the last visit are on screen: bring them up to date
   useEffect(() => {
@@ -246,9 +282,8 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
     );
   } else if (data && !items.length) {
     let body: ReactNode;
-    if (tab === 'watch' && watch.ids.length === 0) {
-      body =
-        'Nothing on your watchlist yet. Open any verdict and press Watch to keep it here and get a re-check when the site or contract changes.';
+    if (tab === 'watch' && (accountWatch ? watch.count === 0 && !filtersActive : watch.ids.length === 0)) {
+      body = watchEmptyText(me);
     } else if (!filtersActive && tab !== 'watch') {
       body = 'No verdicts yet. Paste a contract address, an X post or a link above to run the first check.';
     } else {
@@ -289,7 +324,7 @@ export function Verdicts({ initial, initialQ, command }: { initial: FeedResponse
           {TABS.map(([k, l]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
               {l}
-              {k === 'watch' ? <small>{watch.ids.length}</small> : null}
+              {k === 'watch' ? <small>{watch.count}</small> : null}
             </button>
           ))}
         </div>

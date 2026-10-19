@@ -190,7 +190,16 @@ async function accountAgeDays(deps: BotDeps, post: XPost, now: number): Promise<
 }
 
 async function linkedUser(deps: BotDeps, authorId: string) {
-  return deps.prisma.user.findUnique({ where: { xUserId: authorId }, select: { id: true, tier: true } }).catch(() => null);
+  const user = await deps.prisma.user.findUnique({ where: { xUserId: authorId }, select: { id: true, tier: true } }).catch(() => null);
+  if (user) {
+    // an X-linked user who uses the bot is "seen" (at most one write an hour): the hourly tier refresh
+    // (maintenance/tiers.ts) then keeps the tier these limits and follow-ups read current
+    const now = nowOf(deps);
+    await deps.prisma.user
+      .updateMany({ where: { id: user.id, OR: [{ lastSeenAt: null }, { lastSeenAt: { lt: new Date(now - 3600_000) } }] }, data: { lastSeenAt: new Date(now) } })
+      .catch(() => undefined);
+  }
+  return user;
 }
 
 /** Count the reply against the hourly limits; false (and the mention ignored) when over. */

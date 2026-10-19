@@ -1,8 +1,9 @@
 'use client';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CheckReportDTO, StepDTO } from '@apecheck/core';
-import { report as fetchReport } from '@/lib/api';
+import { isApiError, report as fetchReport } from '@/lib/api';
+import { useMe } from '../Me';
 import { AsksTab } from './AsksTab';
 import { ClaimsTab } from './ClaimsTab';
 import { CoinTab } from './CoinTab';
@@ -47,6 +48,8 @@ export function ReportView({ initial }: { initial: CheckReportDTO }) {
   const [gone, setGone] = useState(false);
   const running = isRunning(r);
   const [tab, setTab] = useState<TabKey>(() => initialTab(initial));
+  /** the Asks / Notes tabs opened so far (kept mounted from then on) */
+  const [opened, setOpened] = useState<ReadonlySet<TabKey>>(() => new Set());
   // local clock estimate of the run's start, for the ticking timer
   const [startAt, setStartAt] = useState<number | null>(() => parseTime(initial.startedAt));
 
@@ -81,7 +84,8 @@ export function ReportView({ initial }: { initial: CheckReportDTO }) {
     },
   });
 
-  // The server render can't see the visitor's API cookie: ask once from the browser so "requested by you" is right.
+  // The server render sees the visitor's API cookies only when they are shared with this site (COOKIE_DOMAIN): ask
+  // once from the browser so "requested by you" is right either way.
   useEffect(() => {
     if (initial.via !== 'web' || isRunning(initial)) return;
     const ctrl = new AbortController();
@@ -90,6 +94,23 @@ export function ReportView({ initial }: { initial: CheckReportDTO }) {
       .catch(() => {});
     return () => ctrl.abort();
   }, [initial]);
+
+  // signing in or out on the page: ask again, so the Helpful marks, Watch and "mine" follow the new viewer (and a
+  // private report goes away when its owner signs out)
+  const { me } = useMe();
+  const viewer = me?.user?.id ?? null;
+  const lastViewer = useRef(viewer);
+  useEffect(() => {
+    if (lastViewer.current === viewer) return;
+    lastViewer.current = viewer;
+    const ctrl = new AbortController();
+    fetchReport(initial.id, { signal: ctrl.signal })
+      .then(fresh => setR(prev => (prev.id === fresh.id && prev.status === fresh.status ? fresh : prev)))
+      .catch(e => {
+        if (isApiError(e, 'not_found')) setGone(true);
+      });
+    return () => ctrl.abort();
+  }, [viewer, initial.id]);
 
   if (gone) {
     return (
@@ -105,7 +126,7 @@ export function ReportView({ initial }: { initial: CheckReportDTO }) {
   }
 
   const shown: TabKey = running ? 'run' : tab;
-  let panel;
+  let panel = null;
   switch (shown) {
     case 'run':
       panel = (
@@ -121,20 +142,30 @@ export function ReportView({ initial }: { initial: CheckReportDTO }) {
     case 'people':
       panel = <PeopleTab report={r} />;
       break;
-    case 'asks':
-      panel = (
-        <AsksTab
-          checkId={r.id}
-          list={r.asksList}
-          count={r.asks}
-          onAsked={a => setR(prev => ({ ...prev, asksList: [a, ...prev.asksList], asks: prev.asks + 1 }))}
-        />
-      );
-      break;
-    case 'notes':
-      panel = <NotesTab checkId={r.id} list={r.notes} onChange={notes => setR(prev => ({ ...prev, notes }))} />;
-      break;
   }
+  // Asks and Notes stay mounted once opened (hidden while another tab shows): a question waiting for its answer, its
+  // error, and a half-written note survive a look at another tab
+  const keep = (k: 'asks' | 'notes') => !running && (shown === k || opened.has(k));
+  const asksPanel = keep('asks') ? (
+    <div hidden={shown !== 'asks'}>
+      <AsksTab
+        checkId={r.id}
+        list={r.asksList}
+        count={r.asks}
+        onAsked={a =>
+          setR(prev =>
+            // the same question again within a minute returns the first answer: show it once
+            prev.asksList.some(x => x.id === a.id) ? prev : { ...prev, asksList: [a, ...prev.asksList], asks: prev.asks + 1 },
+          )
+        }
+      />
+    </div>
+  ) : null;
+  const notesPanel = keep('notes') ? (
+    <div hidden={shown !== 'notes'}>
+      <NotesTab checkId={r.id} list={r.notes} onChange={update => setR(prev => ({ ...prev, notes: update(prev.notes) }))} />
+    </div>
+  ) : null;
 
   return (
     // scanned text (URLs in steps, claims, evidence) can hold long unbroken words: wrap them instead of widening the page
@@ -156,7 +187,10 @@ export function ReportView({ initial }: { initial: CheckReportDTO }) {
                   aria-controls="tp"
                   disabled={off}
                   title={off ? 'Available when the check finishes' : undefined}
-                  onClick={() => setTab(k)}
+                  onClick={() => {
+                    setTab(k);
+                    if (k === 'asks' || k === 'notes') setOpened(o => (o.has(k) ? o : new Set(o).add(k)));
+                  }}
                 >
                   {label}
                   {k === 'asks' ? <small>{r.asks}</small> : k === 'notes' ? <small>{r.notes.length}</small> : null}
@@ -166,6 +200,8 @@ export function ReportView({ initial }: { initial: CheckReportDTO }) {
           </div>
           <div id="tp" role="tabpanel" aria-labelledby={`rt-${shown}`}>
             {panel}
+            {asksPanel}
+            {notesPanel}
           </div>
         </div>
         <Side report={r} />

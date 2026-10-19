@@ -34,6 +34,39 @@ describe('Solana adapter: mintInfo', () => {
     });
   });
 
+  it('Token-2022 extensions: the settings an authority changes, never the counters that move on their own', async () => {
+    const base = fixture<{ value: { data: { parsed: { info: Record<string, unknown> } } } }>('solana-mint-2022.json');
+    const withExt = (transferFee: { bps: number; withheld: string }, hook: string) => {
+      const doc = JSON.parse(JSON.stringify(base)) as typeof base;
+      doc.value.data.parsed.info.extensions = [
+        { extension: 'transferHook', state: { authority: 'H00kAuth1111111111111111111111111111111111', programId: hook } },
+        {
+          extension: 'transferFeeConfig',
+          state: {
+            transferFeeConfigAuthority: 'FeeAuth111111111111111111111111111111111111', withdrawWithheldAuthority: null,
+            withheldAmount: transferFee.withheld, olderTransferFee: { epoch: 600, maximumFee: 0, transferFeeBasisPoints: 0 },
+            newerTransferFee: { epoch: 700, maximumFee: 5000, transferFeeBasisPoints: transferFee.bps },
+          },
+        },
+        { extension: 'nonTransferable' },
+        { extension: 'metadataPointer', state: { authority: null, metadataAddress: MINT } },
+      ];
+      return doc;
+    };
+    const info = async (doc: unknown) => (await createSolana(testEnv(), fakeHttp(rpcHandler(HOST, { getAccountInfo: () => doc }))).mintInfo(MINT))!;
+    const a = await info(withExt({ bps: 100, withheld: '10' }, 'Hook111111111111111111111111111111111111111'));
+    expect(a.extensions).toEqual([
+      `metadataPointer authority=none metadataAddress=${MINT}`,
+      'nonTransferable',
+      'transferFeeConfig transferFeeConfigAuthority=FeeAuth111111111111111111111111111111111111 withdrawWithheldAuthority=none newerTransferFee.transferFeeBasisPoints=100 newerTransferFee.maximumFee=5000',
+      'transferHook authority=H00kAuth1111111111111111111111111111111111 programId=Hook111111111111111111111111111111111111111',
+    ]);
+    // withheld fees grow with every transfer: not a setting
+    expect((await info(withExt({ bps: 100, withheld: '99999' }, 'Hook111111111111111111111111111111111111111'))).extensions).toEqual(a.extensions);
+    expect((await info(withExt({ bps: 9900, withheld: '10' }, 'Hook111111111111111111111111111111111111111'))).extensions).not.toEqual(a.extensions);
+    expect((await info(withExt({ bps: 100, withheld: '10' }, 'Hook222222222222222222222222222222222222222'))).extensions).not.toEqual(a.extensions);
+  });
+
   it('missing account or a non-mint account → exists:false', async () => {
     const none = fakeHttp(rpcHandler(HOST, { getAccountInfo: () => ({ context: { slot: 1 }, value: null }) }));
     expect(await createSolana(testEnv(), none).mintInfo(MINT)).toMatchObject({ exists: false, mintAuthority: null });

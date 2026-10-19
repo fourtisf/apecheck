@@ -18,7 +18,8 @@ import { RetryReplyError, isRetryable, processReply, replyBackoff } from '../src
 import { FAILED_TEXT, HELP_TEXT, PRO_POINTER_TEXT } from '../src/bot/compose';
 import { FakeX, post, replyTo, tweetId } from './fake-x';
 import { createCheck, heuristicAi, prisma, resetDb, testEnv } from './helpers';
-import { xUser } from './fakes';
+import { fakeSources, xUser } from './fakes';
+import { balanceReader, refreshTiers } from '../src/maintenance/index';
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('fake card image')]);
 const CA = '0x1111111111111111111111111111111111111111';
@@ -463,6 +464,63 @@ describe('follow-ups', () => {
   it('an empty follow-up is ignored', async () => {
     const { deps, verdict } = await verdictThread();
     expect(await handleMention(deps, replyTo(verdict, '', { authorId: '779', authorHandle: 'x1' }))).toEqual({ action: 'ignored', reason: 'empty_question' });
+  });
+});
+
+describe('tiers of X-linked users (M3)', () => {
+  const TOKEN = 'ApeCheckMint11111111111111111111111111111111';
+  const SOL = 'So1Linked1111111111111111111111111111111111';
+
+  it('the bot marks the linked user seen; the hourly refresh then gives the bot the new tier (limits and follow-ups)', async () => {
+    const env = { BOT_USER_HOURLY: '1', BOT_PRO_USER_HOURLY: '3' };
+    const user = await prisma.user.create({
+      data: { xUserId: '777', xHandle: 'pro_holder', solAddress: SOL, tier: 'FREE', holding: 0, tierCheckedAt: new Date(Date.now() - 2 * 3600_000) },
+    });
+    // Free: BOT_USER_HOURLY
+    const { deps } = harness({ env });
+    const from777 = (text: string) => post({ text, authorId: '777', authorHandle: 'pro_holder' });
+    expect(await handleMention(deps, from777('@ApeCheckBot one'))).toEqual({ action: 'help' });
+    expect(await handleMention(deps, from777('@ApeCheckBot two'))).toEqual({ action: 'ignored', reason: 'user_limit' });
+    // using the bot counts as being seen (that is what puts bot-only users in the hourly tier refresh)
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).lastSeenAt).toBeInstanceOf(Date);
+
+    // they bought $APECHECK: worker-prices' hourly refresh reads the balance of their linked wallet
+    const live = testEnv({ TOKEN_CHAIN: 'sol', TOKEN_ADDRESS: TOKEN, PRO_MIN_HOLD: '250000', MAX_MIN_HOLD: '2500000' });
+    const res = await refreshTiers({ env: live, prisma, readBalance: balanceReader(fakeSources(live, { balances: { [SOL]: 400_000 } })), log: memoryLogger() });
+    expect(res).toMatchObject({ users: 1, read: 1, changed: 1 });
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).toMatchObject({ tier: 'PRO' });
+
+    // the bot reads that tier: BOT_PRO_USER_HOURLY (the ignored mention was not counted) ...
+    expect(await handleMention(deps, from777('@ApeCheckBot three'))).toEqual({ action: 'help' });
+    expect(await handleMention(deps, from777('@ApeCheckBot four'))).toEqual({ action: 'help' });
+    expect(await handleMention(deps, from777('@ApeCheckBot five'))).toEqual({ action: 'ignored', reason: 'user_limit' });
+  });
+
+  it('a follow-up under the verdict is answered for a user the refresh made Pro (TIER_OVERRIDES before launch), not before', async () => {
+    const h = harness();
+    const parent = projectPost();
+    await handleMention(h.deps, replyTo(parent, '@ApeCheckBot real or larp?'));
+    const check = await prisma.check.findFirstOrThrow();
+    await finish(check.id);
+    const [id] = await stageFReplies(check.id);
+    await processReply(h.deps, id);
+    const verdict = post({
+      id: h.x.replies[0].id,
+      text: `@degen_rina ${h.x.replies[0].text}`,
+      authorHandle: 'ApeCheckBot',
+      authorId: '1000',
+      conversationId: parent.id,
+      displayTextRange: [12, 12 + h.x.replies[0].text.length],
+    });
+    const evm = '0x' + 'ab'.repeat(20);
+    const user = await prisma.user.create({ data: { xUserId: '888', xHandle: 'team_wallet', evmAddress: evm, tier: 'FREE', lastSeenAt: new Date() } });
+    const ask = (text: string) => replyTo(verdict, text, { authorId: '888', authorHandle: 'team_wallet' });
+    expect(await handleMention(h.deps, ask('who funded the deployer?'))).toEqual({ action: 'followup', pro: false });
+
+    const notLive = testEnv({ TIER_OVERRIDES: `${evm.toUpperCase().replace('0X', '0x')}:pro` });
+    await refreshTiers({ env: notLive, prisma, readBalance: balanceReader(fakeSources(notLive)), log: memoryLogger() });
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).toMatchObject({ tier: 'PRO' });
+    expect(await handleMention(h.deps, ask('and who holds the LP?'))).toEqual({ action: 'followup', pro: true });
   });
 });
 

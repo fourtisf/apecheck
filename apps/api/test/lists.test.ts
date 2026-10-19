@@ -382,6 +382,47 @@ describe('GET /v1/deployers', () => {
   });
 });
 
+describe('deployers named only by private checks (M3)', () => {
+  beforeAll(seedFeed);
+
+  it('are never listed on /v1/deployers or among the insights builders; a public check of their coin makes them public', async () => {
+    const PRIV = 'PrivDeployer111111111111111111111111111111111'.slice(0, 44);
+    const maxUser = await h.prisma.user.create({ data: { solAddress: 'MaxUserWa11et1111111111111111111111111111111', tier: 'MAX' } });
+    const dPriv = await seedDeployer(h.prisma, { chain: 'SOL', address: PRIV, record: 'SERIAL', launched: 7, dead: 6, fundedFrom: 'FixedFloat' });
+    const ca = 'PrivMint11111111111111111111111111111111111';
+    const tP = await seedTarget(h.prisma, { kind: 'COIN', chain: 'SOL', ca, ticker: 'PRIV', name: '$PRIV', key: `ca:sol:${ca}`, checkCount: 0 });
+    // a Max user's private check: the worker never makes it isLatest
+    const p = await seedCheck(h.prisma, {
+      targetId: tP.id, shortId: 'priv001', isPrivate: true, isLatest: false, requesterId: maxUser.id, totalScore: 90, coinScore: 90, coinBand: 'clean',
+    });
+    await seedCoinFacts(h.prisma, p.id, { deployerId: dPriv.id, deployerAddress: PRIV });
+    // M1: a deployer whose public coin check is not the latest one stays listed (with no coins on the feed)
+    const OLD = 'OldPublicDep1oyer1111111111111111111111111';
+    const dOld = await seedDeployer(h.prisma, { chain: 'SOL', address: OLD, record: 'MIXED', launched: 3, dead: 1 });
+    const older = await h.prisma.check.findUniqueOrThrow({ where: { shortId: ids.E } });
+    await seedCoinFacts(h.prisma, older.id, { deployerId: dOld.id });
+
+    const anon = new Client(h.app, '203.0.113.77');
+    for (const c of [anon, viewer]) {
+      for (const qs of ['', '?sort=dead', '?sort=launched', '?chain=sol']) {
+        const listed = (await c.get(`/v1/deployers${qs}`)).json<DeployersResponse>().items.map(d => d.address);
+        expect(listed, qs).not.toContain(PRIV);
+        expect(listed, qs).toContain(OLD);
+      }
+      expect((await c.get('/v1/insights')).json<InsightsDTO>().builders.map(b => b.address)).not.toContain(PRIV);
+    }
+    const old = (await anon.get('/v1/deployers?chain=sol')).json<DeployersResponse>().items.find(d => d.address === OLD);
+    expect(old).toMatchObject({ checked: 0, coins: [] });
+
+    // the same coin checked publicly afterwards: its deployer is now public, with that coin
+    const q = await seedCheck(h.prisma, { targetId: tP.id, shortId: 'pub0001', totalScore: 70, coinScore: 72, coinBand: 'ok' });
+    await seedCoinFacts(h.prisma, q.id, { deployerId: dPriv.id, deployerAddress: PRIV });
+    const now = (await anon.get('/v1/deployers')).json<DeployersResponse>().items.find(d => d.address === PRIV);
+    expect(now).toMatchObject({ record: 'serial', launched: 7, dead: 6, checked: 1 });
+    expect(now!.coins.map(c => c.id)).toEqual(['pub0001']);
+  });
+});
+
 describe('GET /v1/insights', () => {
   beforeAll(seedFeed);
 
@@ -394,11 +435,11 @@ describe('GET /v1/insights', () => {
     });
 
     const r = (await viewer.get('/v1/insights')).json<InsightsDTO>();
-    // DONE: A, E, B, B2, B3, C, D, private, old
-    expect(r.stats.checked).toBe(9);
-    // DONE and finished today: A, E, B, B2, B3, C, D (created yesterday), private (minutes ago, so in the first
-    // hour of a UTC day some of them finished yesterday). Not the running check started today.
-    const finishedMinAgo = [10, 45, 20, 39, 59, 5, 30, 30];
+    // DONE: A, E, B, B2, B3, C, D, old (the private check stays out of every public number, M3)
+    expect(r.stats.checked).toBe(8);
+    // DONE and finished today: A, E, B, B2, B3, C, D (created yesterday) (minutes ago, so in the first
+    // hour of a UTC day some of them finished yesterday). Not the running check started today, not the private one.
+    const finishedMinAgo = [10, 45, 20, 39, 59, 5, 30];
     expect(r.stats.today).toBe(finishedMinAgo.filter(m => Date.now() - min(m) >= startOfToday().getTime()).length);
     expect(r.stats.today).toBeLessThanOrEqual(r.stats.checked);
     expect(r.stats.larpSince).toBe(-60);
@@ -433,7 +474,7 @@ describe('GET /v1/insights stats', () => {
     await seedCheck(h.prisma, { targetId: t.id, shortId: 'tday002', createdAt: yesterday(), finishedAt: today(min(5)) });
     // finished yesterday: all time only
     await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday003', createdAt: yesterday(), finishedAt: yesterday() });
-    // private and finished today: counted like any finished check, in both numbers
+    // private and finished today: in neither number (private checks stay out of public stats, M3)
     await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday004', isPrivate: true, isLatest: false, createdAt: today(min(4)), finishedAt: today(min(3)) });
     // started today but no verdict: in neither number
     await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday005', status: 'RUNNING', createdAt: today(min(2)) });
@@ -441,7 +482,7 @@ describe('GET /v1/insights stats', () => {
     await seedCheck(h.prisma, { targetId: t2.id, shortId: 'tday007', status: 'FAILED', isLatest: false, createdAt: today(min(3)), finishedAt: today(min(2)) });
 
     const r = (await new Client(h.app).get('/v1/insights')).json<InsightsDTO>();
-    expect(r.stats).toMatchObject({ checked: 4, today: 3 });
+    expect(r.stats).toMatchObject({ checked: 3, today: 2 });
   });
 });
 

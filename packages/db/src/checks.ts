@@ -89,6 +89,8 @@ export interface ReuseOptions {
   checkBudgetSeconds: number;
   /** Re-check: skip the cache (a run in progress is still returned: it is as fresh as it gets) */
   recheck?: boolean;
+  /** M3: a private request by this user: their own private checks count too */
+  privateFor?: string | null;
   now?: number;
 }
 
@@ -96,21 +98,26 @@ export interface ReuseOptions {
  * The check that already answers this target, or null when a new one has to run:
  *  1. a public check of the same target that is queued or running (also for Re-check), else
  *  2. unless `recheck`, the newest public DONE check of the same target that finished less than CACHE_HOURS ago.
- * Private checks are never reused.
+ * Other people's private checks are never reused. A private request (`privateFor` = the requesting user, M3) also
+ * reuses that user's own private checks by the same rules (a double submit doesn't start two); returning a public
+ * check to it is harmless: it is public already.
  */
 export async function findReusableCheck(prisma: PrismaClient | Prisma.TransactionClient, d: CheckTarget, opts: ReuseOptions): Promise<ReusableCheck | null> {
   const now = opts.now ?? Date.now();
   const same = sameCheckWhere(d);
+  const visible: Prisma.CheckWhereInput = opts.privateFor
+    ? { OR: [{ isPrivate: false }, { isPrivate: true, requesterId: opts.privateFor }] }
+    : { isPrivate: false };
   const select = { id: true, shortId: true, status: true, finishedAt: true } as const;
   const active = await prisma.check.findFirst({
-    where: { AND: [same, activeCheckWhere({ CHECK_BUDGET_SECONDS: opts.checkBudgetSeconds }, now), { isPrivate: false }] },
+    where: { AND: [same, activeCheckWhere({ CHECK_BUDGET_SECONDS: opts.checkBudgetSeconds }, now), visible] },
     orderBy: { createdAt: 'desc' },
     select,
   });
   if (active) return { ...active, reason: 'running' };
   if (opts.recheck) return null;
   const fresh = await prisma.check.findFirst({
-    where: { AND: [same, { status: 'DONE', isPrivate: false, finishedAt: { gte: new Date(now - opts.cacheHours * 3600_000) } }] },
+    where: { AND: [same, visible, { status: 'DONE', finishedAt: { gte: new Date(now - opts.cacheHours * 3600_000) } }] },
     orderBy: { finishedAt: 'desc' },
     select,
   });
@@ -146,22 +153,30 @@ export interface CreateCheckInput {
   requesterSid?: string | null;
   /** X handle without "@" (bot) */
   requesterHandle?: string | null;
+  /**
+   * M3: a Max user's private check: visible only to its requester and kept out of every public list. It doesn't
+   * count towards Target.checkCount ("Most checked"), which would reveal it.
+   */
+  isPrivate?: boolean;
 }
 
 export interface CreatedCheck {
   id: string;
   shortId: string;
   targetId: string;
+  isPrivate: boolean;
 }
 
 /**
- * A QUEUED public Check of `d`, on the project's existing Target when there is one (e.g. an EVM coin the worker
- * already re-keyed to its chain), else on a new Target with preliminary fields. Target.checkCount +1. One
- * transaction. `postId` is set whenever the input is an X post.
+ * A QUEUED Check of `d` (public unless `input.isPrivate`), on the project's existing Target when there is one (e.g. an
+ * EVM coin the worker already re-keyed to its chain), else on a new Target with preliminary fields. Target.checkCount
+ * +1 for a public check. One transaction. `postId` is set whenever the input is an X post.
  */
 export async function createCheck(prisma: PrismaClient, d: CheckTarget, input: CreateCheckInput): Promise<CreatedCheck> {
   const shortId = await uniqueShortId(prisma);
   const seed = targetSeed(d);
+  const isPrivate = !!input.isPrivate;
+  const bump = isPrivate ? 0 : 1;
   return prisma.$transaction(async tx => {
     const existing = await tx.target.findFirst({
       where: sameTargetWhere(d),
@@ -169,11 +184,11 @@ export async function createCheck(prisma: PrismaClient, d: CheckTarget, input: C
       select: { id: true },
     });
     const target = existing
-      ? await tx.target.update({ where: { id: existing.id }, data: { checkCount: { increment: 1 } }, select: { id: true } })
+      ? await tx.target.update({ where: { id: existing.id }, data: { checkCount: { increment: bump } }, select: { id: true } })
       : await tx.target.upsert({
           where: { key: seed.key },
-          create: { ...seed, checkCount: 1 },
-          update: { checkCount: { increment: 1 } },
+          create: { ...seed, checkCount: bump },
+          update: { checkCount: { increment: bump } },
           select: { id: true },
         });
     return tx.check.create({
@@ -187,18 +202,22 @@ export async function createCheck(prisma: PrismaClient, d: CheckTarget, input: C
         requesterId: input.requesterId ?? null,
         requesterSid: input.requesterSid ?? null,
         requesterHandle: input.requesterHandle ?? null,
-        isPrivate: false,
+        isPrivate,
       },
-      select: { id: true, shortId: true, targetId: true },
+      select: { id: true, shortId: true, targetId: true, isPrivate: true },
     });
   });
 }
 
-/** A check whose job could not be queued: FAILED with a plain reason, and its Target's checkCount given back. */
-export async function failUnqueuedCheck(prisma: PrismaClient, check: { id: string; targetId: string }, error = 'Could not queue the check'): Promise<void> {
+/** A check whose job could not be queued: FAILED with a plain reason, and its Target's checkCount given back (public checks only counted). */
+export async function failUnqueuedCheck(
+  prisma: PrismaClient,
+  check: { id: string; targetId: string; isPrivate?: boolean },
+  error = 'Could not queue the check',
+): Promise<void> {
   await prisma.$transaction([
     prisma.check.update({ where: { id: check.id }, data: { status: 'FAILED', error, finishedAt: new Date() } }),
-    prisma.target.update({ where: { id: check.targetId }, data: { checkCount: { decrement: 1 } } }),
+    ...(check.isPrivate ? [] : [prisma.target.update({ where: { id: check.targetId }, data: { checkCount: { decrement: 1 } } })]),
   ]);
 }
 

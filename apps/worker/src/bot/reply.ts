@@ -6,7 +6,7 @@
  *  - help → HELP_TEXT; check → composeReply() (verdict, or the "Couldn't finish" line for a FAILED check) with the
  *    share card PNG (SCREENSHOT_DIR/cards/<shortId>.png, else WEB_INTERNAL_URL/card/<shortId>.png, else text only);
  *    follow-up → the pointer line stored by handle.ts, or for a Pro author an answer from the check's stored data
- *    (loadAnswerData + ai.answer), saved as an Ask (via BOT) with Check.asksCount + 1, once even across retries.
+ *    (asks/answer.ts answerFromCheck, the same answer site asks get), saved as an Ask (via BOT) with Check.asksCount + 1, once even across retries.
  *  - success → REPLIED, replyTweetId, replyText, repliedAt, and the hourly reply counter. A Redis marker written right
  *    after X accepted the post makes a retry record it instead of posting again when the database update failed.
  *  - Nothing is answered twice: a "posting" marker is written right before the POST. A POST that failed with an
@@ -22,11 +22,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { captureErrors } from '@apecheck/sources';
-import { loadAnswerData } from '../ai/answer-data';
+import { answerFromCheck, cleanQuestion } from '../asks/answer';
 import { errText } from '../log';
 import { webCardFetcher } from '../pipeline/save';
 import { pgText } from '../pipeline/pgsafe';
-import { FAILED_TEXT, HELP_TEXT, composeFollowUp, composeReply, fitsX, onlyReportLink, reportLink, sanitizeModelText, type ReplyCheck } from './compose';
+import { FAILED_TEXT, HELP_TEXT, composeFollowUp, composeReply, fitsX, onlyReportLink, reportLink, type ReplyCheck } from './compose';
 import { botIdentity, composeOpts, type BotDeps } from './handle';
 import { countReplied } from './limits';
 import { questionText } from './mention';
@@ -190,17 +190,17 @@ async function lookUpReply(deps: BotDeps, m: MentionRow): Promise<{ id: string |
 async function followUpText(deps: BotDeps, m: MentionRow): Promise<string | null> {
   if (m.replyText) return m.replyText;
   if (!m.checkId || !m.check) return null;
-  const data = await loadAnswerData(deps.prisma, m.checkId);
-  if (!data) return null;
-  const question = questionText(m.text, botIdentity(deps.env)).slice(0, 1000);
-  const answer = await deps.ai.answer(question, data);
-  const text = composeFollowUp(answer, m.check.shortId, composeOpts(deps.env));
+  const question = cleanQuestion(questionText(m.text, botIdentity(deps.env)));
+  // the same answer the site's asks get (asks/answer.ts): stored data only, made safe, clamped
+  const res = await answerFromCheck(deps, m.checkId, question);
+  if (!res) return null;
+  const text = composeFollowUp(res.answer, m.check.shortId, composeOpts(deps.env));
   const checkId = m.checkId;
   await deps.prisma.$transaction(async tx => {
     const set = await tx.botMention.updateMany({ where: { id: m.id, replyText: null }, data: { replyText: pgText(text) } });
     if (!set.count) return; // an earlier attempt already answered
     await tx.ask.create({
-      data: { checkId, question: pgText(question), answer: pgText(sanitizeModelText(answer)).slice(0, 2000), askerHandle: m.authorHandle.replace(/^@+/, '') || null, via: 'BOT' },
+      data: { checkId, question, answer: res.answer, askerHandle: m.authorHandle.replace(/^@+/, '') || null, via: 'BOT' },
     });
     await tx.check.update({ where: { id: checkId }, data: { asksCount: { increment: 1 } } });
   });

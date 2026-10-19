@@ -68,6 +68,8 @@ export interface CheckRow {
   targetId: string;
   targetRaw: string;
   postId: string | null;
+  /** a Max user's private check: never takes or clears the target's public isLatest, never touches lastCheckedAt or checkCount */
+  isPrivate?: boolean;
 }
 
 export interface Links {

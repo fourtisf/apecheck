@@ -3,8 +3,11 @@
  * 1. database apecheck_test_web (created and migrated) with the seed, Redis db 3 emptied;
  * 2. the API (apps/api, as PM2 runs it) on 127.0.0.1:4611;
  * 3. the web app built with `next build` into .next-e2e and served by `next start` on 127.0.0.1:3611
- *    (production, like the reported bugs: e.g. notFound() under /c/[id] is a client-rendered shell there).
- * E2E_SKIP_BUILD=1 reuses an existing .next-e2e build. Logs (api.log, web.log, build.log) go to a new apecheck-web-e2e- folder in the OS temp dir.
+ *    (production, like the reported bugs: e.g. notFound() under /c/[id] is a client-rendered shell there);
+ * 4. worker-bot (apps/worker src/bot.ts) for the follow-up questions on queue "asks" (no X keys: the bot itself idles,
+ *    no ANTHROPIC_API_KEY: answers come from the heuristic stand-in).
+ * The test wallets (wallets.ts) get Pro / Max through TIER_OVERRIDES; X_OAUTH2_CLIENT_ID is a dummy so "Link your X" shows.
+ * E2E_SKIP_BUILD=1 reuses an existing .next-e2e build. Logs (api.log, worker.log, web.log, build.log) go to a new apecheck-web-e2e- folder in the OS temp dir.
  * Teardown stops the processes it started (by their own process group), nothing else.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
@@ -15,6 +18,7 @@ import path from 'node:path';
 import type { TestProject } from 'vitest/node';
 import { API_PORT, API_URL, DB_URL, DIST_DIR, REDIS_URL, REPO_ROOT, WEB_DIR, WEB_PORT, WEB_URL, flushRedis, openDb } from './env';
 import { seed } from './seed';
+import { EVM_MAX_KEY, EVM_PRO_KEY, evmAddressOf } from './wallets';
 
 declare module 'vitest' {
   export interface ProvidedContext {
@@ -56,6 +60,15 @@ async function waitFor(url: string, child: ChildProcess, log: string, timeoutMs 
     await new Promise(r => setTimeout(r, 300));
   }
   throw new Error(`${url} did not come up; see ${log}:\n${tail(log)}`);
+}
+
+async function waitForLog(log: string, re: RegExp, child: ChildProcess, timeoutMs = 60_000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end && child.exitCode == null) {
+    if (fs.existsSync(log) && re.test(fs.readFileSync(log, 'utf8'))) return;
+    await new Promise(r => setTimeout(r, 300));
+  }
+  throw new Error(`${log} never said ${re}:\n${tail(log)}`);
 }
 
 const tail = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').slice(-30).join('\n') : '');
@@ -125,6 +138,15 @@ export default async function setup(project: TestProject) {
     SCREENSHOT_DIR: path.join(dir, 'shots'),
     X_BOT_HANDLE: 'ApeCheckBot',
     LOG_LEVEL: 'warn',
+    TIER_OVERRIDES: `${evmAddressOf(EVM_PRO_KEY)}:pro,${evmAddressOf(EVM_MAX_KEY)}:max`,
+    X_OAUTH2_CLIENT_ID: 'e2e-dummy-client',
+    // the bot worker must never talk to X from a test
+    X_API_KEY: '',
+    X_API_SECRET: '',
+    X_ACCESS_TOKEN: '',
+    X_ACCESS_SECRET: '',
+    X_BEARER_TOKEN: '',
+    ANTHROPIC_API_KEY: '',
   };
   fs.writeFileSync(envFile, Object.entries(vars).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
   // children read this file (loadEnv / next.config.mjs) and get the same values in their environment
@@ -138,11 +160,14 @@ export default async function setup(project: TestProject) {
 
   const apiLog = path.join(dir, 'api.log');
   const api = start(process.execPath, ['--import', 'tsx', 'src/index.ts'], path.join(REPO_ROOT, 'apps/api'), env, apiLog);
+  const workerLog = path.join(dir, 'worker.log');
+  const worker = start(process.execPath, ['--import', 'tsx', 'src/bot.ts'], path.join(REPO_ROOT, 'apps/worker'), env, workerLog);
   const webLog = path.join(dir, 'web.log');
   const web = start(path.join(WEB_DIR, 'node_modules/.bin/next'), ['start', '-p', String(WEB_PORT), '-H', '127.0.0.1'], WEB_DIR, { ...env, NODE_ENV: 'production' }, webLog);
   try {
     await waitFor(`${API_URL}/health`, api, apiLog);
     await waitFor(`${WEB_URL}/api`, web, webLog);
+    await waitForLog(workerLog, /answering follow-up questions/, worker);
   } catch (e) {
     stopAll();
     throw e;

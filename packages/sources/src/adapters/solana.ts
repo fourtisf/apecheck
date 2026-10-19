@@ -5,9 +5,9 @@
 import { z } from 'zod';
 import type { Env } from '@apecheck/core';
 import { warnOnce } from '@apecheck/core/node';
-import type { Http, SimResult, SolMintInfo, SolanaSource } from '../types';
+import type { Http, SimResult, SolMintInfo, SolanaWalletSource } from '../types';
 import { jsonRpc } from '../rpc';
-import { ErrorState, RE_SOL_ADDRESS, errMsg } from '../util';
+import { ErrorState, RE_SOL_ADDRESS, errMsg, toUnits } from '../util';
 
 const TIMEOUT_MS = 8_000;
 
@@ -17,7 +17,7 @@ export const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 
 /** The only methods this adapter may send. No sendTransaction, ever. */
 export const SOL_READ_METHODS: ReadonlySet<string> = new Set([
-  'getAccountInfo', 'getMultipleAccounts', 'getTokenLargestAccounts', 'getTokenSupply', 'simulateTransaction',
+  'getAccountInfo', 'getMultipleAccounts', 'getTokenLargestAccounts', 'getTokenSupply', 'simulateTransaction', 'getTokenAccountsByOwner',
 ]);
 
 const AccountZ = z.object({ value: z.object({ owner: z.string(), data: z.unknown() }).nullable() });
@@ -29,15 +29,81 @@ const ParsedMintZ = z.object({
       supply: z.string().nullish(),
       mintAuthority: z.string().nullish(),
       freezeAuthority: z.string().nullish(),
+      /** Token-2022: [{ extension, state }] (read leniently by mintExtensions: an unknown shape never hides the mint) */
+      extensions: z.unknown().optional(),
     }),
   }),
 });
+
+/**
+ * The Token-2022 extension settings that change only when an authority acts: who can tax, hook, move, pause or freeze
+ * holders' tokens. Counters that move on their own (withheld fees, the older fee, timestamps) are left out. An
+ * extension not listed here counts by its presence (extensions are fixed when the mint is created).
+ */
+const EXTENSION_FIELDS: Record<string, string[]> = {
+  transferFeeConfig: ['transferFeeConfigAuthority', 'withdrawWithheldAuthority', 'newerTransferFee.transferFeeBasisPoints', 'newerTransferFee.maximumFee'],
+  transferHook: ['authority', 'programId'],
+  permanentDelegate: ['delegate'],
+  pausableConfig: ['authority', 'paused'],
+  mintCloseAuthority: ['closeAuthority'],
+  defaultAccountState: ['accountState'],
+  interestBearingConfig: ['rateAuthority', 'currentRate'],
+  scaledUiAmountConfig: ['authority', 'multiplier', 'newMultiplier'],
+  confidentialTransferMint: ['authority', 'autoApproveNewAccounts'],
+  metadataPointer: ['authority', 'metadataAddress'],
+  tokenMetadata: ['updateAuthority'],
+};
+
+/** jsonParsed `info.extensions` of a Token-2022 mint → sorted "<extension> <field>=<value> …" (see SolMintInfo.extensions) */
+export function mintExtensions(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const show = (v: unknown) => (v == null ? 'none' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  const out: string[] = [];
+  for (const e of raw) {
+    const name = (e as { extension?: unknown } | null)?.extension;
+    if (typeof name !== 'string' || !name) continue;
+    const state = (e as { state?: unknown }).state;
+    const fields = EXTENSION_FIELDS[name] ?? [];
+    const values = fields.map(f => {
+      let v: unknown = state;
+      for (const k of f.split('.')) v = v && typeof v === 'object' ? (v as Record<string, unknown>)[k] : undefined;
+      return `${f}=${show(v)}`;
+    });
+    out.push([name, ...values].join(' '));
+  }
+  return out.sort();
+}
 const LargestZ = z.object({
   value: z.array(z.object({ address: z.string(), amount: z.string() })),
 });
 const SupplyZ = z.object({ value: z.object({ amount: z.string() }) });
 const MultipleZ = z.object({ value: z.array(z.object({ data: z.unknown() }).nullable()) });
 const ParsedTokenAccountZ = z.object({ parsed: z.object({ info: z.object({ owner: z.string() }) }) });
+/** getTokenAccountsByOwner (jsonParsed): the token accounts of one owner for one mint */
+const OwnerAccountsZ = z.object({
+  value: z.array(
+    z.object({
+      pubkey: z.string(),
+      account: z.object({
+        owner: z.string(),
+        data: z.unknown(),
+      }),
+    }),
+  ),
+});
+const ParsedHoldingZ = z.object({
+  parsed: z.object({
+    info: z.object({
+      mint: z.string(),
+      tokenAmount: z.object({
+        amount: z.string().regex(/^\d+$/),
+        decimals: z.number().int().min(0).max(255),
+        uiAmountString: z.string().nullish(),
+      }),
+    }),
+  }),
+});
+
 const SimZ = z.object({
   value: z.object({
     err: z.unknown().nullable(),
@@ -64,7 +130,7 @@ export function describeSolanaError(err: unknown, logs: string[]): string {
   return logLine ? `${base} (${logLine.replace(/^Program log:\s*/, '').slice(0, 200)})` : base;
 }
 
-export class SolanaAdapter implements SolanaSource {
+export class SolanaAdapter implements SolanaWalletSource {
   readonly configured = true;
   private readonly errors = new ErrorState('solana');
   private readonly url: string;
@@ -100,6 +166,7 @@ export class SolanaAdapter implements SolanaSource {
         mintAuthority: info.mintAuthority ?? null,
         freezeAuthority: info.freezeAuthority ?? null,
         token2022: v.owner === TOKEN_2022_PROGRAM,
+        ...(v.owner === TOKEN_2022_PROGRAM ? { extensions: mintExtensions(info.extensions) } : {}),
       };
     } catch (e) {
       this.errors.fail('mintInfo', e);
@@ -138,6 +205,34 @@ export class SolanaAdapter implements SolanaSource {
     } catch (e) {
       this.errors.fail('largestHolders', e);
       return [];
+    }
+  }
+
+  /**
+   * Whole `mint` tokens held by `owner`: one getTokenAccountsByOwner (jsonParsed) filtered by the mint, so the RPC
+   * resolves the mint's program (SPL Token or Token-2022) and answers with that token's accounts only, summed here.
+   * Never a programId-wide scan: its size is set by the owner (every spam token account adds ~500 bytes), and a reply
+   * past the RPC's size cap or timeout would make the read fail at will. A failed query → null (never a partial sum).
+   */
+  async tokenBalance(owner: string, mint: string): Promise<number | null> {
+    if (!RE_SOL_ADDRESS.test(owner) || !RE_SOL_ADDRESS.test(mint)) return null;
+    try {
+      const accounts = OwnerAccountsZ.parse(
+        await this.rpc('getTokenAccountsByOwner', [owner, { mint }, { encoding: 'jsonParsed', commitment: 'confirmed' }]),
+      ).value;
+      let raw = 0n;
+      let decimals: number | null = null;
+      for (const acc of accounts) {
+        if (acc.account.owner !== SPL_TOKEN_PROGRAM && acc.account.owner !== TOKEN_2022_PROGRAM) continue;
+        const d = ParsedHoldingZ.safeParse(acc.account.data);
+        if (!d.success || d.data.parsed.info.mint !== mint) continue;
+        raw += BigInt(d.data.parsed.info.tokenAmount.amount);
+        decimals = d.data.parsed.info.tokenAmount.decimals;
+      }
+      return decimals == null ? 0 : toUnits(raw, decimals);
+    } catch (e) {
+      this.errors.fail('tokenBalance', e);
+      return null;
     }
   }
 

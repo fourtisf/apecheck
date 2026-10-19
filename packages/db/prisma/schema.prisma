@@ -274,6 +274,9 @@ model User {
   createdAt  DateTime @default(now())
   // added (M3): $APECHECK held across the user's linked wallets at tierCheckedAt (null = never read / token not live)
   holding    Decimal? @db.Decimal(38, 9)
+  // added (M3 fix): the last successful balance read. tierCheckedAt also moves on a failed read (to schedule the retry),
+  // so this is what bounds how long failed reads may keep a paid tier (packages/db tiers.ts TIER_STALE_MAX_MS)
+  tierReadAt DateTime?
   lastSeenAt DateTime?
 
   checks     Check[]

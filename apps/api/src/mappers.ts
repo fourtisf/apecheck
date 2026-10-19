@@ -19,6 +19,7 @@ import {
   coinVerdictEnum,
   deployerLine,
   fmtAge,
+  fmtAmount,
   fmtCount,
   hueOf,
   kindFromDb,
@@ -69,11 +70,11 @@ export const reportInclude = {
   steps: { orderBy: { idx: 'asc' } },
   // Claim.idx is the position the worker wrote (0..n-1); id breaks ties for rows from before the column existed
   claims: { orderBy: [{ idx: 'asc' }, { id: 'asc' }] },
-  asks: { orderBy: { createdAt: 'desc' } },
+  asks: { orderBy: { createdAt: 'desc' }, include: { asker: { select: { evmAddress: true, solAddress: true } } } },
   notes: {
     where: { hidden: false },
     orderBy: [{ helpful: 'desc' }, { createdAt: 'desc' }],
-    include: { author: { select: { xHandle: true, evmAddress: true, solAddress: true } } },
+    include: { author: { select: { xHandle: true, evmAddress: true, solAddress: true, holding: true } } },
   },
   // the first verdict reply the bot posted about this check (M2), for CheckReportDTO.botReply
   mentions: {
@@ -91,7 +92,13 @@ type DeployerRow = NonNullable<NonNullable<CheckSummaryRow['coinFacts']>['deploy
 
 export interface Viewer {
   sid: string | null;
+  /** M3: the signed-in user */
+  userId?: string | null;
 }
+
+/** the viewer started this check: same signed-in user, or the same browser (anonymous cookie) */
+export const isMine = (c: { requesterSid: string | null; requesterId?: string | null }, viewer: Viewer) =>
+  (!!viewer.sid && c.requesterSid === viewer.sid) || (!!viewer.userId && c.requesterId === viewer.userId);
 
 export interface SeriesPoint {
   t: string;
@@ -105,6 +112,8 @@ export interface MapCtx {
   series?: Map<string, SeriesPoint[] | null>;
   /** 0–1 progress per check id read from Redis while running */
   progress?: Map<string, number | null>;
+  /** M3: ids of the notes the signed-in viewer marked helpful */
+  votes?: Set<string>;
 }
 
 /* ---------------- small helpers ---------------- */
@@ -297,7 +306,7 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
     asks: c.asksCount,
     via: viaFromDb(c.via),
     by: c.requesterHandle,
-    mine: !!ctx.viewer.sid && c.requesterSid === ctx.viewer.sid,
+    mine: isMine(c, ctx.viewer),
     createdAt: c.createdAt.toISOString(),
     checkedAt: iso(c.finishedAt),
     deployer: dep
@@ -404,9 +413,47 @@ function toMarket(c: CheckReportRow, ev: CheckEvidence, summary: CheckSummaryDTO
   };
 }
 
-function authorName(a: { xHandle: string | null; evmAddress: string | null; solAddress: string | null }): string {
+/** NoteDTO.by: "@handle" when the author linked X, else the short wallet ("0xabc…ef01"). */
+export function authorName(a: { xHandle: string | null; evmAddress: string | null; solAddress: string | null }): string {
   const wallet = a.evmAddress ?? a.solAddress;
-  return a.xHandle ?? (wallet ? short(wallet) : 'holder');
+  return a.xHandle ? `@${a.xHandle}` : wallet ? short(wallet) : 'holder';
+}
+
+/** NoteDTO.hold: "3.1M" while the token is live and the author holds some, else null. */
+export function holdText(env: Env, holding: { toString(): string } | number | null | undefined): string | null {
+  if (!env.TOKEN_ADDRESS || holding == null) return null;
+  const n = typeof holding === 'number' ? holding : Number(holding.toString());
+  return Number.isFinite(n) && n > 0 ? fmtAmount(n) : null;
+}
+
+type NoteRow = CheckReportRow['notes'][number];
+export function toNote(n: Pick<NoteRow, 'id' | 'text' | 'helpful' | 'createdAt' | 'author'>, env: Env, mine: boolean): NoteDTO {
+  return {
+    id: n.id,
+    by: authorName(n.author),
+    hold: holdText(env, n.author.holding),
+    text: n.text,
+    helpful: n.helpful,
+    mine,
+    createdAt: n.createdAt.toISOString(),
+  };
+}
+
+type AskRow = CheckReportRow['asks'][number];
+/**
+ * AskDTO.by: the asker's X handle without "@" (bot asks, and site askers who linked X), else the site asker's short
+ * wallet ("0xabc…ef01"), else null.
+ */
+export function toAsk(a: Pick<AskRow, 'id' | 'question' | 'answer' | 'askerHandle' | 'via' | 'createdAt'> & { asker?: AskRow['asker'] }): AskDTO {
+  const wallet = a.asker ? a.asker.evmAddress ?? a.asker.solAddress : null;
+  return {
+    id: a.id,
+    question: a.question,
+    answer: a.answer,
+    by: a.askerHandle ?? (wallet ? short(wallet) : null),
+    via: a.via === 'BOT' ? 'x' : 'site',
+    createdAt: a.createdAt.toISOString(),
+  };
 }
 
 export function toReport(c: CheckReportRow, ctx: MapCtx): CheckReportDTO {
@@ -419,23 +466,8 @@ export function toReport(c: CheckReportRow, ctx: MapCtx): CheckReportDTO {
   const reportUrl = `${appUrl}/c/${c.shortId}`;
   const links = ev.links ?? {};
 
-  const asksList: AskDTO[] = c.asks.map(a => ({
-    id: a.id,
-    question: a.question,
-    answer: a.answer,
-    by: a.askerHandle,
-    via: a.via === 'BOT' ? 'x' : 'site',
-    createdAt: a.createdAt.toISOString(),
-  }));
-  const notes: NoteDTO[] = c.notes.map(n => ({
-    id: n.id,
-    by: authorName(n.author),
-    hold: null,
-    text: n.text,
-    helpful: n.helpful,
-    mine: false,
-    createdAt: n.createdAt.toISOString(),
-  }));
+  const asksList: AskDTO[] = c.asks.map(toAsk);
+  const notes: NoteDTO[] = c.notes.map(n => toNote(n, ctx.env, !!ctx.votes?.has(n.id)));
 
   return {
     ...summary,
@@ -559,6 +591,7 @@ export interface LiveRow {
   createdAt: Date;
   startedAt: Date | null;
   requesterSid: string | null;
+  requesterId?: string | null;
   evidence: unknown;
   target: Pick<TargetRow, 'kind' | 'name' | 'ticker' | 'chain' | 'key'>;
   _count: { steps: number };
@@ -586,6 +619,6 @@ export function toLive(c: LiveRow, ctx: MapCtx & { now: number }): LiveCheckDTO 
     stepsExpected,
     progress: progressOf(c.status, ctx.progress?.get(c.id), stepCount, stepsExpected),
     lastText: c.steps[0]?.text ?? null,
-    mine: !!ctx.viewer.sid && c.requesterSid === ctx.viewer.sid,
+    mine: isMine(c, ctx.viewer),
   };
 }

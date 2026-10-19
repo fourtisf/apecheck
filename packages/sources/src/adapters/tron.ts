@@ -23,7 +23,13 @@ const ContractZ = z.object({
 const ConstantZ = z.object({
   result: z.object({ result: z.boolean().optional(), code: z.string().optional(), message: z.string().optional() }).partial().optional(),
   constant_result: z.array(z.string()).optional(),
+  transaction: z.object({ ret: z.array(z.object({ ret: z.string().optional() }).partial()).optional() }).partial().optional(),
 });
+/**
+ * TronGrid result codes for a call it did not run (a busy or unsynced node, an internal exception): a failed read,
+ * never "the function isn't there". CONTRACT_EXE_ERROR / CONTRACT_VALIDATE_ERROR are the contract's answer (a revert).
+ */
+const TRON_NOT_RUN = new Set(['SERVER_BUSY', 'NO_CONNECTION', 'NOT_ENOUGH_EFFECTIVE_CONNECTION', 'BLOCK_UNSOLIDIFIED', 'OTHER_ERROR']);
 
 type TronTokenInfo = NonNullable<Awaited<ReturnType<TronSource['tokenInfo']>>>;
 
@@ -51,7 +57,10 @@ export class TronAdapter implements TronSource {
     });
   }
 
-  /** constant call → return data hex, or null when it reverted / returned nothing */
+  /**
+   * constant call → return data hex, or null when the contract reverted / returned nothing. A call TronGrid did not
+   * run throws (an HTTP error such as a 429, a busy node, an answer without a result): that is not a revert.
+   */
   private async constant(address: string, signature: string): Promise<string | null> {
     const res = ConstantZ.parse(
       await this.post('/wallet/triggerconstantcontract', {
@@ -62,7 +71,13 @@ export class TronAdapter implements TronSource {
         visible: true,
       }),
     );
-    if (res.result?.result !== true) return null;
+    if (res.result?.result !== true) {
+      const code = res.result?.code;
+      if (!code || TRON_NOT_RUN.has(code)) throw new Error(`TronGrid did not run ${signature} (${code ?? 'no result'})`);
+      return null;
+    }
+    // the call ran but reverted: its return data is the revert reason, not a value
+    if (res.transaction?.ret?.[0]?.ret === 'FAILED') return null;
     const hex = res.constant_result?.[0];
     return hex ? '0x' + hex : null;
   }
@@ -73,9 +88,17 @@ export class TronAdapter implements TronSource {
       const contract = ContractZ.parse(await this.post('/wallet/getcontract', { value: address, visible: true }));
       if (!contract.contract_address) return null;
       const safe = (sig: string) => this.constant(address, sig).catch(() => null);
-      const [name, symbol, decimals, totalSupply, owner] = await Promise.all([
-        safe('name()'), safe('symbol()'), safe('decimals()'), safe('totalSupply()'), safe('owner()'),
+      // owner() decides "renounced" (and the re-check alerts' contract fingerprint): a call TronGrid didn't run is
+      // reported and leaves who controls the token unknown, never "no owner function"
+      const ownerRead = this.constant(address, 'owner()').then(
+        value => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      const [name, symbol, decimals, totalSupply, ownerRes] = await Promise.all([
+        safe('name()'), safe('symbol()'), safe('decimals()'), safe('totalSupply()'), ownerRead,
       ]);
+      if (!ownerRes.ok) this.errors.fail('tokenInfo owner', ownerRes.error);
+      const owner = ownerRes.ok ? ownerRes.value : null;
       const code = contract.bytecode ? '0x' + contract.bytecode : null;
       const hasMintFunction = code ? hasAnySelector(code, MINT_SELECTORS) : null;
       const ownerHex = decodeAddress(owner);
@@ -83,7 +106,7 @@ export class TronAdapter implements TronSource {
       let ownerRenounced: boolean | null = null;
       if (ownerAddr) ownerRenounced = ownerAddr === TRON_ZERO_ADDRESS;
       // no owner(): renounced only when nothing else (roles, a mint function) can control the supply
-      else ownerRenounced = ownerlessRenounced(code, hasMintFunction);
+      else if (ownerRes.ok) ownerRenounced = ownerlessRenounced(code, hasMintFunction);
       const dec = decodeUint(decimals);
       const supply = decodeUint(totalSupply);
       return {

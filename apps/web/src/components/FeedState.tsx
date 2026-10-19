@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
-import type { ChainKey, CoinKey, FeedResponse, NarKey } from '@apecheck/core';
+import type { ChainKey, CheckSummaryDTO, CoinKey, FeedResponse, NarKey } from '@apecheck/core';
 import type { FeedParams, FeedTab, FeedType } from '@/lib/api';
 
 /**
@@ -51,6 +51,26 @@ export function feedParams(tab: FeedTab, f: FeedFilters, watchIds: readonly stri
 
 /** Identity of a list: two params with the same key show the same rows. */
 export const feedKey = (p: FeedParams): string => JSON.stringify(p);
+
+/** Identity of the signed-in Watchlist tab's rows (GET /v1/watchlist, filtered here). */
+export const accountWatchKey = (f: FeedFilters): string => JSON.stringify({ tab: 'watch', account: true, f });
+
+/**
+ * The feed's filters applied in the browser, as GET /v1/feed applies them: type, narrative band, coin band, chain,
+ * and `q` (a leading $ or @ dropped) in the name, ticker, domain, handle, contract or deployer wallet. For the
+ * signed-in Watchlist tab, whose rows come from GET /v1/watchlist.
+ */
+export function filterRows(items: CheckSummaryDTO[], f: FeedFilters): CheckSummaryDTO[] {
+  const q = f.q.trim().replace(/^[$@]+/, '').toLowerCase();
+  return items.filter(it => {
+    if (f.type !== 'all' && it.kind !== f.type) return false;
+    if (f.nar !== 'any' && it.narBand !== f.nar) return false;
+    if (f.coin !== 'any' && it.coinBand !== f.coin) return false;
+    if (f.chain !== 'any' && it.chain !== f.chain) return false;
+    if (!q) return true;
+    return [it.name, it.title, it.ticker, it.domain, it.handle, it.ca, it.deployer?.address].some(v => !!v && v.toLowerCase().includes(q));
+  });
+}
 
 /** The params the page's server render loaded its first page with (app/page.tsx): latest, `?q=` only. */
 export const serverFeedKey = (initialQ: string) => feedKey(feedParams('latest', { ...NO_FILTERS, q: initialQ }, []));

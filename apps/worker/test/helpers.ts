@@ -38,7 +38,7 @@ export function testEnv(over: Record<string, string> = {}): Env {
 
 export async function resetDb(db: PrismaClient = prisma) {
   await db.$executeRawUnsafe(
-    'TRUNCATE "CheckStep","Claim","CoinFacts","PricePoint","BotMention","Ask","NoteVote","Note","Watch","Check","Deployer","Target","User" CASCADE',
+    'TRUNCATE "CheckStep","Claim","CoinFacts","PricePoint","BotMention","Ask","NoteVote","Note","Notification","Watch","Check","Deployer","Target","User" CASCADE',
   );
 }
 

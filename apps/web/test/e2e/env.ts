@@ -1,6 +1,6 @@
 /**
  * Settings of the browser suite: its own database, Redis db and ports, so it never touches dev data or another
- * suite. Override with E2E_DATABASE_URL, E2E_REDIS_URL, E2E_API_PORT, E2E_WEB_PORT.
+ * suite. Override with E2E_DATABASE_URL, E2E_REDIS_URL, E2E_API_PORT, E2E_WEB_PORT, E2E_DIST_DIR.
  */
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -18,8 +18,8 @@ export const API_PORT = Number(process.env.E2E_API_PORT ?? 4611);
 export const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 3611);
 export const API_URL = `http://127.0.0.1:${API_PORT}`;
 export const WEB_URL = `http://127.0.0.1:${WEB_PORT}`;
-/** `next build` output of this suite (git-ignored, like every .next-* folder) */
-export const DIST_DIR = '.next-e2e';
+/** `next build` output of this suite (git-ignored, like every .next-* folder); E2E_DIST_DIR for a second copy */
+export const DIST_DIR = process.env.E2E_DIST_DIR ?? '.next-e2e';
 
 /**
  * Playwright comes from @apecheck/worker (its browser agent depends on it, with Chromium in PLAYWRIGHT_BROWSERS_PATH),

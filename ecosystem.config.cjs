@@ -61,6 +61,8 @@ module.exports = {
       // the X bot (M2): polls @ApeCheckBot's mentions, starts/reuses checks, posts the replies queued on bot-replies.
       // One instance: a Redis lock (bot:lock) keeps any second copy on standby. Without the X OAuth 1.0a keys in .env
       // it logs one warning and idles, so PM2 keeps it online (DEPLOY.md §14).
+      // M3: it also answers the site's follow-up questions (queue "asks"), with or without X keys: when it is down,
+      // POST /v1/checks/:id/asks answers 504 after 45 s.
       script: 'src/bot.ts',
       instances: 1,
       max_memory_restart: '512M',
@@ -72,6 +74,8 @@ module.exports = {
       ...tsx,
       name: 'worker-prices',
       cwd: path.join(root, 'apps/worker'),
+      // price tracking and the daily screenshot cleanup; M3: re-check alerts for watchlists (queue "rechecks"; Max
+      // watchers' automatic re-checks go to worker-checks), the daily deployer refresh and the hourly tier refresh
       script: 'src/prices.ts',
       max_memory_restart: '512M',
     },

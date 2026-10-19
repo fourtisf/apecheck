@@ -3,16 +3,19 @@
  * tests. No external network: http only reaches *.test fixture hosts on 127.0.0.1.
  */
 import http from 'node:http';
-import { SsrfError } from '@apecheck/sources';
+import { SsrfError, reportError } from '@apecheck/sources';
 import type {
   CoinRawFacts,
+  DevRadarFacts,
   DexTokenInfo,
+  EvmTokenBasics,
   EvmTxRequest,
   Http,
   HttpRequest,
   HttpResponse,
   RepoFacts,
   SimResult,
+  SolMintInfo,
   Sources,
   XPost,
   XUser,
@@ -72,6 +75,18 @@ export interface FakeData {
   simulate?: SimResult;
   /** X adapter configured (defaults to true when posts/users are given) */
   xConfigured?: boolean;
+  /** eth_getCode by lowercase address; null = the RPC failed (reported like the real adapter) */
+  evmCode?: Record<string, string | null>;
+  /** tokenBasics by lowercase address; null = the RPC failed */
+  evmBasics?: Record<string, EvmTokenBasics | null>;
+  /** Solana mintInfo by mint; null = the RPC failed */
+  solMints?: Record<string, SolMintInfo | null>;
+  /** DevRadar answers by coin address (lowercase for EVM); a missing key = no data (404) */
+  devRadar?: Record<string, DevRadarFacts | 'error'>;
+  /** Fourtis configured (default false) */
+  fourtisConfigured?: boolean;
+  /** wallet token balances by owner (EVM lowercase); null = unreadable */
+  balances?: Record<string, number | null>;
 }
 
 export type FakeSources = Sources & { calls: string[]; simulated: EvmTxRequest[]; data: FakeData };
@@ -118,11 +133,25 @@ export function fakeSources(env: Env, data: FakeData = {}): FakeSources {
         calls.push(`evm.detectChain ${address}`);
         return data.evmChains?.[address.toLowerCase()] ?? null;
       },
-      async getCode() {
-        return null;
+      async getCode(chain, address) {
+        calls.push(`evm.getCode ${chain} ${address}`);
+        const a = address.toLowerCase();
+        if (!data.evmCode || !(a in data.evmCode)) return null;
+        const code = data.evmCode[a];
+        if (code == null) reportError(`evm.getCode ${chain}: RPC unavailable`);
+        return code;
       },
-      async tokenBasics() {
-        return null;
+      async tokenBasics(chain, address) {
+        calls.push(`evm.tokenBasics ${chain} ${address}`);
+        const a = address.toLowerCase();
+        if (!data.evmBasics || !(a in data.evmBasics)) return null;
+        const b = data.evmBasics[a];
+        if (b == null) reportError(`evm.tokenBasics ${chain}: RPC unavailable`);
+        return b;
+      },
+      async tokenBalance(_chain, _token, owner) {
+        calls.push(`evm.tokenBalance ${owner}`);
+        return data.balances?.[owner.toLowerCase()] ?? null;
       },
       async simulate(chain, tx) {
         calls.push(`evm.simulate ${chain}`);
@@ -136,8 +165,16 @@ export function fakeSources(env: Env, data: FakeData = {}): FakeSources {
     sol: {
       configured: true,
       lastError: null,
-      async mintInfo() {
-        return null;
+      async mintInfo(mint) {
+        calls.push(`sol.mintInfo ${mint}`);
+        if (!data.solMints || !(mint in data.solMints)) return null;
+        const m = data.solMints[mint];
+        if (m == null) reportError('sol.mintInfo: RPC unavailable');
+        return m;
+      },
+      async tokenBalance(owner) {
+        calls.push(`sol.tokenBalance ${owner}`);
+        return data.balances?.[owner] ?? null;
       },
       async largestHolders() {
         return [];
@@ -183,9 +220,18 @@ export function fakeSources(env: Env, data: FakeData = {}): FakeSources {
       },
     },
     fourtis: {
-      configured: false,
+      configured: data.fourtisConfigured ?? false,
       lastError: null,
-      async devRadar() { return null; },
+      async devRadar(chain, address) {
+        calls.push(`fourtis.devRadar ${chain} ${address}`);
+        if (!(data.fourtisConfigured ?? false)) return null;
+        const hit = data.devRadar?.[chain === 'sol' || chain === 'trx' ? address : address.toLowerCase()];
+        if (hit === 'error') {
+          reportError('fourtis.devRadar: timeout');
+          return null;
+        }
+        return hit ?? null;
+      },
       async bundleScan() { return null; },
       async whaleFlow() { return null; },
     },

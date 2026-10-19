@@ -27,6 +27,7 @@ import { saveTarget } from './resolve';
 import { buildEvidence } from './record';
 import { pgSafe } from './pgsafe';
 import { RunSuperseded } from './steps';
+import { completeAutoRechecks } from '../watch/notify';
 import type { CheckEvidence } from '@apecheck/core';
 
 export interface SavedCheck {
@@ -78,6 +79,7 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
   const summary = judged.summary || standIn?.summary || null;
   const coinSummary = run.coin ? judged.coinSummary || standIn?.coinSummary || null : null;
   const checkId = run.check.id;
+  const isPrivate = !!run.check.isPrivate;
   const owner = new Date(run.startedAt);
 
   await saveTarget(run).catch(e => run.log.warn('target update failed', e));
@@ -95,7 +97,10 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
       const d = run.coin.raw.deployer;
       const chain = chainToDb(run.chain)!;
       if (d?.address) deployerAddress = addrKey(run.chain, d.address);
-      if (d && run.coin.signals.historyKnown) {
+      // a private check (Max) never creates or refreshes a Deployer row: the deployers page lists every row, and one
+      // only it wrote would publish that someone privately vetted a coin of that wallet. It links a row the public
+      // already knows, like a check whose history is unknown; its own report keeps the wallet and the deployer line.
+      if (d && run.coin.signals.historyKnown && !isPrivate) {
         const address = addrKey(run.chain, d.address);
         const fields = {
           record: recordToDb(run.coin.signals.record),
@@ -112,7 +117,7 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
         });
         deployerId = dep.id;
       } else if (d) {
-        // history unknown: link a deployer we already know, never write made-up counts
+        // history unknown (or a private check): link a deployer we already know, never write made-up counts
         const dep = await tx.deployer.findUnique({ where: { chain_address: { chain, address: addrKey(run.chain, d.address) } }, select: { id: true } });
         deployerId = dep?.id ?? null;
       }
@@ -157,7 +162,9 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
       await tx.coinFacts.upsert({ where: { checkId }, create: pgSafe({ checkId, ...data }), update: pgSafe(data) });
     }
 
-    await tx.check.updateMany({ where: { targetId: run.targetId, isLatest: true, id: { not: checkId } }, data: { isLatest: false } });
+    // a private check (Max) is the requester's alone: the target's public latest verdict (feed, coins, deployers,
+    // insights) and its public fields stay as they were
+    if (!isPrivate) await tx.check.updateMany({ where: { targetId: run.targetId, isLatest: true, id: { not: checkId } }, data: { isLatest: false } });
     await tx.check.update({
       where: { id: checkId },
       data: pgSafe({
@@ -179,7 +186,7 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
         coinSummary,
         durationMs,
         finishedAt,
-        isLatest: true,
+        isLatest: !isPrivate,
         error: null,
         priceAtCheck: price,
         mcAtCheck: mc,
@@ -191,7 +198,7 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
     await tx.target.update({
       where: { id: run.targetId },
       data: {
-        lastCheckedAt: finishedAt,
+        ...(isPrivate ? {} : { lastCheckedAt: finishedAt }),
         ...(price != null
           ? { lastPrice: price, lastMc: mc, lastVol5m: finite(m?.vol5m), lastCh24: finite(m?.ch24), priceUpdatedAt: finishedAt }
           : {}),
@@ -282,7 +289,7 @@ export async function announceEnd(deps: Pick<PipelineDeps, 'redis' | 'log'>, che
  * re-tag in the thread, another user's tag of the same project) gets its reply job, done or failed. worker-bot
  * consumes QUEUES.botReplies; the job id is the mention id, so a second enqueue of the same mention is a no-op.
  */
-export async function enqueueBotReply(deps: PipelineDeps, checkId: string) {
+export async function enqueueBotReply(deps: Pick<PipelineDeps, 'prisma' | 'log' | 'hooks'>, checkId: string) {
   if (!deps.hooks?.enqueueBotReply) return;
   const mentions = await deps.prisma.botMention
     .findMany({ where: { checkId, status: 'QUEUED' }, select: { id: true }, orderBy: { createdAt: 'asc' } })
@@ -293,9 +300,19 @@ export async function enqueueBotReply(deps: PipelineDeps, checkId: string) {
   for (const m of mentions) await deps.hooks.enqueueBotReply(m.id).catch(e => deps.log.warn('could not enqueue the bot reply', e));
 }
 
-/** After a finished check: the bot reply job and the webhooks hook (M4). */
-export async function afterDone(deps: PipelineDeps, checkId: string) {
+/**
+ * Every finished check (done or failed, also one ended by the stuck-check recovery or found finished by a re-run of
+ * its job): the bot replies still waiting on it, and the "rechecked" notifications of the watchers whose automatic
+ * re-check it is (watch/notify.ts; idempotent, a no-op for checks nobody watches).
+ */
+export async function afterFinish(deps: Pick<PipelineDeps, 'prisma' | 'log' | 'hooks'>, checkId: string) {
   await enqueueBotReply(deps, checkId);
+  await completeAutoRechecks(deps, checkId).catch(e => deps.log.warn('could not complete the re-check notifications', e));
+}
+
+/** After a finished check: the bot reply job, the re-check notifications and the webhooks hook (M4). */
+export async function afterDone(deps: PipelineDeps, checkId: string) {
+  await afterFinish(deps, checkId);
   await (deps.hooks?.fireWebhooks ?? fireWebhooksNoop)(checkId).catch(e => deps.log.warn('webhooks failed', e));
 }
 

@@ -67,6 +67,13 @@ export function num(v: unknown): number | null {
   return null;
 }
 
+/** Raw integer token amount → whole tokens (exact integer part, the fraction as a float). */
+export function toUnits(raw: bigint, decimals: number): number {
+  if (decimals <= 0) return Number(raw);
+  const base = 10n ** BigInt(decimals);
+  return Number(raw / base) + Number(raw % base) / Number(base);
+}
+
 export function isoFromMs(ms: unknown): string | null {
   const n = num(ms);
   if (n == null || n <= 0) return null;

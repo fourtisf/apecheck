@@ -11,6 +11,8 @@
 import type {
   ApiErrorBody,
   AskDTO,
+  AuthNonceResponse,
+  AuthVerifyBody,
   BotStatsDTO,
   ChainKey,
   CheckReportDTO,
@@ -20,13 +22,18 @@ import type {
   CreateCheckResponse,
   DeployersResponse,
   FeedResponse,
+  HelpfulResponse,
   InsightsDTO,
   LiveResponse,
   MeDTO,
   NarKey,
   NoteDTO,
+  NotificationsResponse,
   TargetKindS,
   ViaS,
+  WalletChain,
+  WatchResponse,
+  WatchlistResponse,
 } from '@apecheck/core';
 import { PUBLIC_API_URL } from './env';
 
@@ -85,7 +92,7 @@ function isErrorBody(v: unknown): v is ApiErrorBody {
   return !!v && typeof v === 'object' && typeof (v as ApiErrorBody).error === 'string' && typeof (v as ApiErrorBody).code === 'string';
 }
 
-async function request<T>(method: 'GET' | 'POST', path: string, query?: Query, body?: unknown, opts: CallOpts = {}): Promise<T> {
+async function request<T>(method: 'GET' | 'POST' | 'DELETE', path: string, query?: Query, body?: unknown, opts: CallOpts = {}): Promise<T> {
   const url = new URL(apiBase() + path);
   if (query) {
     for (const [k, v] of Object.entries(query)) {
@@ -166,17 +173,7 @@ export interface DeployersParams {
   limit?: number;
 }
 
-/**
- * POST /v1/notes/:id/helpful and POST /v1/watch/:targetId are M3 endpoints (they answer 403/401 today).
- * dto.ts has no shape for their success bodies yet; these are what the web expects.
- */
-export interface HelpfulResponse {
-  helpful: number;
-  mine: boolean;
-}
-export interface WatchResponse {
-  watching: boolean;
-}
+export type { HelpfulResponse, WatchResponse };
 
 /* ---------- endpoints ---------- */
 
@@ -231,21 +228,54 @@ export const deployers = (p: DeployersParams = {}, o?: CallOpts) =>
 /** GET /v1/bot/stats — numbers on the /bot page */
 export const botStats = (o?: CallOpts) => request<BotStatsDTO>('GET', '/v1/bot/stats', undefined, undefined, o);
 
-/** POST /v1/checks/:id/asks — Pro follow-up (403 pro_required until M3) */
+/** POST /v1/checks/:id/asks — Pro/Max follow-up; the API waits for the answer (403 pro_required, 429, 504 ask_timeout) */
 export const asks = (id: string, question: string, o?: CallOpts) =>
   request<AskDTO>('POST', `/v1/checks/${enc(id)}/asks`, undefined, { question }, o);
 
-/** POST /v1/checks/:id/notes — holders only (403 holders_only until M3) */
+/** POST /v1/checks/:id/notes — holders only (403 holders_only), 10–500 characters */
 export const notes = (id: string, text: string, o?: CallOpts) =>
   request<NoteDTO>('POST', `/v1/checks/${enc(id)}/notes`, undefined, { text }, o);
 
-/** POST /v1/notes/:id/helpful — toggles the viewer's "helpful" mark */
+/** POST /v1/notes/:id/helpful — toggles the viewer's "helpful" mark (holders; not on your own note) */
 export const helpful = (noteId: string, o?: CallOpts) =>
   request<HelpfulResponse>('POST', `/v1/notes/${enc(noteId)}/helpful`, undefined, {}, o);
 
-/** POST /v1/watch/:targetId — signed-in watchlist (401 sign_in_required until M3; M1 keeps the watchlist in localStorage) */
+/* ---------- M3: signed-in viewer ---------- */
+
+/** POST /v1/watch/:targetId — add to the signed-in viewer's watchlist (401 sign_in_required) */
 export const watch = (targetId: string, o?: CallOpts) =>
   request<WatchResponse>('POST', `/v1/watch/${enc(targetId)}`, undefined, {}, o);
+
+/** DELETE /v1/watch/:targetId */
+export const unwatch = (targetId: string, o?: CallOpts) =>
+  request<WatchResponse>('DELETE', `/v1/watch/${enc(targetId)}`, undefined, undefined, o);
+
+/** GET /v1/watchlist — latest check of every watched target, newest first, and every watched target id */
+export const watchlist = (o?: CallOpts) => request<WatchlistResponse>('GET', '/v1/watchlist', undefined, undefined, o);
+
+/** GET /v1/notifications — re-check alerts, newest first */
+export const notifications = (limit?: number, o?: CallOpts) =>
+  request<NotificationsResponse>('GET', '/v1/notifications', { limit }, undefined, o);
+
+/** POST /v1/notifications/read — mark these alerts read (all of them without ids) */
+export const readNotifications = (ids?: string[], o?: CallOpts) =>
+  request<{ unread: number }>('POST', '/v1/notifications/read', undefined, ids ? { ids } : {}, o);
+
+/** GET /v1/auth/nonce — the exact sign-in message (EIP-4361 / Sign-In With Solana) for this wallet */
+export const authNonce = (chain: WalletChain, address: string, chainId?: number | null, o?: CallOpts) =>
+  request<AuthNonceResponse>('GET', '/v1/auth/nonce', { chain, address, chainId: chainId ?? undefined }, undefined, o);
+
+/** POST /v1/auth/verify — signs in (or links the wallet to the signed-in user); 409 wallet_taken */
+export const authVerify = (body: AuthVerifyBody, o?: CallOpts) => request<MeDTO>('POST', '/v1/auth/verify', undefined, body, o);
+
+/** POST /v1/auth/logout */
+export const logout = (o?: CallOpts) => request<{ ok: boolean }>('POST', '/v1/auth/logout', undefined, {}, o);
+
+/** Where "Link your X" sends the browser: the API redirects to X (OAuth 2.0 + PKCE) and back to /?x=linked|error. */
+export const xLinkUrl = () => `${PUBLIC_API_URL}/v1/auth/x/start`;
+
+/** POST /v1/auth/x/unlink */
+export const xUnlink = (o?: CallOpts) => request<MeDTO>('POST', '/v1/auth/x/unlink', undefined, {}, o);
 
 /**
  * Screenshot paths come back as "/shots/<checkId>/3.jpg" on the API origin; the browser needs the public URL.
@@ -259,4 +289,29 @@ export function shotUrl(path: string | null | undefined): string | null {
 }
 
 /** Everything above as one object, for `import { api } from '@/lib/api'`. */
-export const api = { me, createCheck, report, eventsUrl, feed, live, insights, coins, deployers, botStats, asks, notes, helpful, watch, shotUrl };
+export const api = {
+  me,
+  createCheck,
+  report,
+  eventsUrl,
+  feed,
+  live,
+  insights,
+  coins,
+  deployers,
+  botStats,
+  asks,
+  notes,
+  helpful,
+  watch,
+  unwatch,
+  watchlist,
+  notifications,
+  readNotifications,
+  authNonce,
+  authVerify,
+  logout,
+  xLinkUrl,
+  xUnlink,
+  shotUrl,
+};

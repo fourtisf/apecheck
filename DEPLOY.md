@@ -9,8 +9,8 @@ Processes (PM2, `ecosystem.config.cjs`):
 | `web` | Next.js 14 site (`apps/web`) | 3000 (localhost only) |
 | `api` | Fastify REST + SSE (`apps/api`) | 4000 (localhost only) |
 | `worker-checks` | check pipeline; drives the browser agent | — |
-| `worker-bot` | @ApeCheckBot mentions + replies (§14) | — |
-| `worker-prices` | price tracking, screenshot cleanup | — |
+| `worker-bot` | @ApeCheckBot mentions + replies (§14); answers the site's follow-up questions (M3, queue `asks`), so it must run even before the bot has X keys | — |
+| `worker-prices` | price tracking, screenshot cleanup; M3: re-check alerts for watchlists (queue `rechecks`), daily deployer refresh, hourly tier refresh | — |
 
 Plus one systemd unit, `apecheck-browser.service` (`deploy/browser`): Chromium itself, as a separate user with no access
 to the app's secrets (§6). Its Playwright endpoint is `127.0.0.1:9223` (localhost only); worker-checks' SSRF guard proxy is `127.0.0.1:9224`.
@@ -87,6 +87,17 @@ To run a second configuration from the same checkout, point `APECHECK_ENV_FILE` 
 `NEXT_PUBLIC_APP_URL=https://apecheck.io`, `NEXT_PUBLIC_API_URL=https://api.apecheck.io`, a random `SESSION_SECRET`
 (`openssl rand -hex 32`), `DATABASE_URL`, `REDIS_URL=redis://localhost:6379`, `SCREENSHOT_DIR=/var/apecheck/shots`.
 `BROWSER_WS_ENDPOINT` is filled in by §6; leave `BROWSER_GUARD_PORT=9224`.
+
+Accounts (M3):
+
+- `COOKIE_DOMAIN=.apecheck.io`, so the session cookies the API sets also reach the site and a page renders signed in on
+  the first paint (without it the header shows "Connect wallet" for a moment until the browser asks the API itself).
+- `TOKEN_ADDRESS` stays empty until the token launches: everyone is Free and the site hides holding amounts ("Pro and
+  Max open at token launch"). `TIER_OVERRIDES=<wallet>:pro,<wallet>:max` gives team wallets a tier before that (applied
+  at sign-in; `pm2 restart api worker-prices` after changing it).
+- "Link your X" (bot limits follow the wallet's tier): set `X_OAUTH2_CLIENT_ID` / `X_OAUTH2_CLIENT_SECRET` from an X
+  app with OAuth 2.0 and register `https://api.apecheck.io/v1/auth/x/callback` as its callback URL. Without them the
+  link is simply not offered.
 
 > The paths below assume the repo lives in `/srv/apecheck/app`. `deploy/backup.sh` defaults to `APP_DIR=/srv/apecheck`; set `APP_DIR=/srv/apecheck/app` in its cron line (step 10).
 

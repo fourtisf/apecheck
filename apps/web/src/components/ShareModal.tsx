@@ -10,6 +10,8 @@ export interface ShareModalProps {
   onDownload?: () => void;
   /** default: opens an X post with the verdict line and the report link */
   onPost?: () => void;
+  /** false: no "Post to X" (a private check: its link opens only for its owner); the image can still be downloaded */
+  postable?: boolean;
 }
 
 /** Text of a shared verdict, in the bot's format: "LIKELY LARP (37/100) · Coin: SKETCHY (37)", the summary, the disclaimer. */
@@ -41,7 +43,7 @@ export function postToX(it: VCardItem) {
 }
 
 /** openShare(it): the share card with Close / Download image / Post to X. Open it with useActions().openShare(item). */
-export function ShareModal({ item, onDownload, onPost }: ShareModalProps) {
+export function ShareModal({ item, onDownload, onPost, postable = true }: ShareModalProps) {
   const { close } = useModal();
   return (
     <>
@@ -53,9 +55,11 @@ export function ShareModal({ item, onDownload, onPost }: ShareModalProps) {
         <button className="btn" type="button" onClick={onDownload ?? (() => downloadCard(item.id))}>
           Download image
         </button>
-        <button className="btn btn-primary" type="button" onClick={onPost ?? (() => postToX(item))}>
-          Post to X
-        </button>
+        {postable ? (
+          <button className="btn btn-primary" type="button" onClick={onPost ?? (() => postToX(item))}>
+            Post to X
+          </button>
+        ) : null}
       </div>
     </>
   );
