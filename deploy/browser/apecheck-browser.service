@@ -1,0 +1,71 @@
+# ApeCheck isolated browser host (DEPLOY.md §6, HANDOFF §11). Installed by deploy/browser/install.sh as
+# /etc/systemd/system/apecheck-browser.service.
+#
+# Chromium opens attacker-chosen pages, so it runs here and not inside worker-checks: as the apecheck-browser user
+# (owns no code, cannot read /srv/apecheck, .env, the PM2 home or the backup credentials), from a root-owned copy
+# in /opt/apecheck-browser, with Chromium's own sandbox on, a read-only filesystem except a private /tmp, and an
+# egress firewall that lets it reach only worker-checks' SSRF guard proxy. worker-checks connects to it at
+# BROWSER_WS_ENDPOINT. browser-host.cjs verifies the sandbox, the unreadable paths and the firewall at startup and
+# exits otherwise; after 10 failed starts in 5 minutes the unit stays failed (journalctl -u apecheck-browser).
+
+[Unit]
+Description=ApeCheck isolated Chromium host (Playwright browser server)
+After=network.target nftables.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=apecheck-browser
+Group=apecheck-browser
+# BROWSER_WS_PATH, BROWSER_PORT, BROWSER_FORBIDDEN_PATHS, BROWSER_FORBIDDEN_PORTS (root-only file, read by systemd)
+EnvironmentFile=/etc/apecheck/browser.env
+Environment=NODE_ENV=production HOME=/tmp PLAYWRIGHT_BROWSERS_PATH=/opt/apecheck-browser/browsers
+WorkingDirectory=/
+# "+": runs as root. Egress firewall for this user (only the guard proxy port), replaced on every start.
+ExecStartPre=+/usr/sbin/nft -f /etc/apecheck/browser-firewall.nft
+ExecStart=/usr/bin/node /opt/apecheck-browser/browser-host.cjs
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+
+# Resources: Chromium lives here now (worker-checks only drives it)
+MemoryMax=4G
+TasksMax=2048
+LimitCORE=0
+
+# Filesystem: everything read-only, a private /tmp (Chromium's profile and HOME), the app's data unreachable
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+InaccessiblePaths=-/srv/apecheck -/var/apecheck -/var/backups/apecheck -/var/log/apecheck
+UMask=0077
+
+# Network: loopback only (the firewall narrows it to the guard proxy port and replies to worker-checks)
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Privileges. Chromium's sandbox needs exactly user, pid and net namespaces (plus chroot inside them) and no setuid
+# helper, so NoNewPrivileges is fine; MemoryDenyWriteExecute is not (V8's JIT).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=user pid net
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+KeyringMode=private
+RemoveIPC=yes
+
+[Install]
+WantedBy=multi-user.target

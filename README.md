@@ -19,7 +19,7 @@ packages/
   db/       Prisma schema + client (PostgreSQL)
   sources/  data adapters (DexScreener, EVM/Solana/Tron RPC, Etherscan, GitHub, X, Fourtis) + SSRF guard
 reference/  scoring.ts as handed off (the port in packages/core is tested against it)
-deploy/     Nginx config, backup script
+deploy/     Nginx config, backup script, browser/ (the isolated Chromium host: systemd unit, firewall, AppArmor, installer)
 ecosystem.config.cjs   PM2 processes
 ```
 
@@ -35,7 +35,15 @@ pnpm --filter db prisma migrate deploy
 pnpm dev                    # web :3000, api :4000, worker (checks + prices)
 ```
 
-Chromium for the agent: `pnpm --filter @apecheck/worker exec playwright install chromium`.
+Chromium for the agent: `pnpm --filter @apecheck/worker exec playwright install chromium`. In development the worker launches
+it in-process (with a minimal environment, never the `.env` secrets). In production it never does: Chromium runs as a separate
+user with its sandbox on, behind a firewall, in `apecheck-browser.service` (`deploy/browser`, DEPLOY.md §6), and worker-checks
+connects to it at `BROWSER_WS_ENDPOINT`; with `NODE_ENV=production` and no endpoint, worker-checks refuses to start.
+
+Every Node process reads the repo-root `.env` and lets it win over inherited variables (a deploy is configured by its `.env`
+only). `APECHECK_ENV_FILE=<path>` (absolute, or relative to the repo root) selects another file for every process, the Prisma
+CLI and the web build, e.g. `APECHECK_ENV_FILE=deploy/staging.env pm2 start ecosystem.config.cjs`. Under `NODE_ENV=test`
+(set by every vitest config) inherited variables win instead, so tests always use their own `DATABASE_URL` / `REDIS_URL`.
 
 Empty API keys are fine: each adapter runs as a stub, logs one warning, and the check still finishes
 (missing signals are scored `warn`). Without `ANTHROPIC_API_KEY` the AI stages use a heuristic stand-in with the same interface.
@@ -46,6 +54,7 @@ Empty API keys are fine: each adapter runs as a stub, logs one warning, and the 
 pnpm test                   # unit + integration tests in every package (needs Postgres + Redis running)
 pnpm typecheck
 pnpm e2e                    # full pipeline against local fixture sites
+pnpm test:deploy            # deploy artifacts: browser host unit, firewall, installer (some checks need root)
 E2E=1 pnpm e2e              # plus one real check against a public site (needs open internet)
 ```
 

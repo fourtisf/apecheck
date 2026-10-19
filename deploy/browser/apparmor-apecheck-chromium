@@ -1,0 +1,18 @@
+# AppArmor profile for the Chromium builds the browser host runs (DEPLOY.md §6). Installed by
+# deploy/browser/install.sh as /etc/apparmor.d/apecheck-chromium.
+#
+# Ubuntu 24.04 restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1), and
+# Chromium's sandbox needs one. Like the profile Google's chrome .deb installs for /opt/google/chrome/chrome, this
+# grants `userns` to these binaries only and leaves them otherwise unconfined. Do not turn the sysctl off host-wide
+# instead. It covers every file of the Chromium builds under PLAYWRIGHT_BROWSERS_PATH=/opt/apecheck-browser/browsers
+# (root-owned; the glob survives the layout changes of Playwright bumps).
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile apecheck-chromium /opt/apecheck-browser/browsers/chromium{,_headless_shell}-[0-9]*/** flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/apecheck-chromium>
+}

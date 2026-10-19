@@ -1,0 +1,29 @@
+#!/usr/sbin/nft -f
+# Egress firewall for the apecheck-browser user (DEPLOY.md §6). Installed by deploy/browser/install.sh as
+# /etc/apecheck/browser-firewall.nft and loaded by apecheck-browser.service before the host starts (it replaces
+# itself on every load and leaves every other table, ufw's included, alone).
+#
+# Chromium, and anything that escapes its sandbox, may only:
+#   - talk to worker-checks' SSRF guard proxy on 127.0.0.1:9224 (BROWSER_GUARD_PORT in the app's .env must match),
+#     which vets every destination and refuses private, loopback and metadata addresses;
+#   - answer worker-checks' own connection to the browser host (established traffic).
+# Everything else (Redis, Postgres, the API, DNS, the internet directly) is refused for this user only.
+# browser-host.cjs checks at startup that 127.0.0.1:5432 and :6379 are unreachable (BROWSER_FORBIDDEN_PORTS).
+
+table inet apecheck_browser
+delete table inet apecheck_browser
+
+table inet apecheck_browser {
+	chain output {
+		type filter hook output priority filter; policy accept;
+		# packets of any other user (and those without a socket) are not this table's business
+		meta skuid "apecheck-browser" jump browser
+	}
+
+	chain browser {
+		ct state established,related accept
+		oifname "lo" ip daddr 127.0.0.1 tcp dport 9224 accept
+		meta l4proto tcp reject with tcp reset
+		reject
+	}
+}
