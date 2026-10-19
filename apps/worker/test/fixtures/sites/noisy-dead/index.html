@@ -1,0 +1,21 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hype Protocol</title>
+<style>body{font-family:sans-serif}.btn{padding:12px 20px;background:#222;color:#fff;border:0;border-radius:8px}</style></head>
+<body>
+<h1>The fastest chain-abstracted DEX</h1>
+<p>Live now with real users.</p>
+<div id="ticker">TVL $<span id="tvl">1000</span></div>
+<ul id="feed"></ul>
+<button class="btn">Launch app</button>
+<script>
+  // a busy landing page: counters and a scrolling feed that never stop changing
+  let n = 1000;
+  setInterval(() => {
+    document.getElementById('tvl').textContent = String(n += 37);
+    const feed = document.getElementById('feed');
+    const li = document.createElement('li');
+    li.textContent = 'Swap ' + n + ' USDC';
+    feed.prepend(li);
+    if (feed.children.length > 5) feed.lastElementChild.remove();
+  }, 150);
+</script>
+</body></html>

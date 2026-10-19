@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Vanta app</title><style>body{font-family:sans-serif;margin:0}header,main,footer{padding:24px}nav a{margin-right:16px}.btn{display:inline-block;padding:12px 20px;background:#222;color:#fff;border-radius:8px;text-decoration:none;border:0;font-size:16px;cursor:pointer}.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center}.modal.open{display:flex}.modal .box{background:#fff;padding:32px;border-radius:12px}footer{margin-top:900px;border-top:1px solid #ddd}</style></head>
+<body>
+<header><nav><a href="/">Vanta</a><button class="btn" id="connect">Connect wallet</button></nav></header>
+<main>
+  <h2>Open a position</h2>
+  <button class="btn" id="trade">Trade</button>
+  <div id="overlay" role="dialog" style="display:none"><h3>Coming soon</h3><p>Agent strategies unlock after TGE.</p></div>
+</main>
+<script>
+  document.getElementById('connect').addEventListener('click', async () => {
+    const a = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    document.getElementById('connect').textContent = a[0].slice(0, 6) + '…';
+  });
+  document.getElementById('trade').addEventListener('click', () => { document.getElementById('overlay').style.display = 'block'; });
+</script>
+</body></html>

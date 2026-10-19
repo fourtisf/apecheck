@@ -1,0 +1,37 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Picker Swap</title>
+<style>body{font-family:sans-serif}.btn{padding:10px 16px;background:#222;color:#fff;border:0;border-radius:8px;margin:4px}
+#picker{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5)}#picker.open{display:flex;align-items:center;justify-content:center}
+#picker .box{background:#fff;padding:24px;border-radius:12px;width:320px}</style></head>
+<body>
+<header><button class="btn" id="connect">Connect Wallet</button></header>
+<main><h1>Swap</h1><input id="amt" inputmode="decimal" placeholder="0.0"><button class="btn" id="swap" disabled>Enter an amount</button><p id="msg"></p></main>
+<div id="picker" class="wallet-modal"><div class="box"><h3>Connect a wallet</h3>
+  <button class="btn" id="wc">WalletConnect</button><button class="btn" id="cb">Coinbase Wallet</button><div id="injected"></div>
+</div></div>
+<script>
+  const providers = [];
+  window.addEventListener('eip6963:announceProvider', e => {
+    providers.push(e.detail);
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.textContent = e.detail.info.name;
+    b.onclick = async () => {
+      const [a] = await e.detail.provider.request({ method: 'eth_requestAccounts' });
+      await e.detail.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x2105' }] });
+      window.account = a; window.provider = e.detail.provider;
+      document.getElementById('picker').classList.remove('open');
+      document.getElementById('connect').textContent = a.slice(0, 6);
+    };
+    document.getElementById('injected').appendChild(b);
+  });
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  document.getElementById('connect').onclick = () => document.getElementById('picker').classList.add('open');
+  const amt = document.getElementById('amt'), swap = document.getElementById('swap');
+  amt.addEventListener('input', () => { const ok = Number(amt.value) > 0; swap.disabled = !ok; swap.textContent = ok ? 'Swap' : 'Enter an amount'; });
+  swap.onclick = async () => {
+    try {
+      await window.provider.request({ method: 'eth_sendTransaction', params: [{ from: window.account, to: '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad', data: '0x3593564c', value: '0x38d7ea4c68000' }] });
+    } catch (e) { document.getElementById('msg').textContent = 'Rejected: ' + e.code; }
+  };
+</script>
+</body></html>
