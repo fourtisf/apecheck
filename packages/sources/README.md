@@ -83,7 +83,8 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
 ## X bot (M2)
 
 The bot (`apps/worker` bot queue) talks to X only through `sources.x.mentions()` and `sources.x.reply()`.
-Both never throw: failures resolve to empty / `null` and the reason is in `x.lastError` (and the current
+`createX()` and `createSources().x` are typed `XBotSource` (the `XSource` contract with both methods present; they stay
+optional on `XSource` itself so read-only fakes need not stub them). Both never throw: failures resolve to empty / `null` and the reason is in `x.lastError` (and the current
 `captureErrors()` scope).
 
 **Keys.** All four OAuth 1.0a user keys of the bot account (`X_API_KEY` = consumer key, `X_API_SECRET` = consumer
@@ -113,13 +114,27 @@ given), `max_results=100`, `expansions=author_id,referenced_tweets.id,referenced
   `start`, so a mention typed by the author is at or after it), `inReplyToUserId`, and `repliedTo`: the parent
   post from `includes.tweets` with its author (null when it is not a reply or X didn't include it — deleted or
   protected; use `replyToId` + `getPost()` then). Long posts use `note_tweet` text and entities.
+- `mentionUserIds` (every `XPost`, `getPost()` too): the numeric ids of the accounts the post @mentions, X's reply
+  prefix included — `entities.mentions[].id`, else the user `entities.mentions.username` expanded into
+  `includes.users`; a handle that resolves to neither is left out. The bot stores them (minus the asker) and passes
+  them back to `reply()` as `excludeUserIds`.
 - `newestId` = `meta.newest_id` of the first page: the next `since_id`. It is `null` when nothing new arrived **or**
   the walk stopped on a later page (429 / error): keep the old `since_id`; the posts that did arrive are returned,
   and reading them again is harmless because `BotMention` is unique on the tweet id.
 - 429: `lastError = "x.mentions: rate limited until <x-rate-limit-reset>"`, and calls before that time return
   empty without a request.
 
-**`reply(inReplyToId, text, mediaPng?)`** — returns the new post id or `null`.
+**`reply(inReplyToId, text, mediaPng?, { excludeUserIds }?)`** — returns the new post id or `null`.
+
+X fills a v2 reply's "Replying to" list by itself: the author of `inReplyToId` plus every account that post
+@mentions (its own reply prefix included), and each of them is notified. `excludeUserIds` takes them out
+(`reply.exclude_reply_user_ids`): worker-bot passes everyone the mention names except its author, so a reply
+notifies the asker only (HANDOFF §7; a project's account in the reply prefix is no longer notified by the verdict
+under its post). Never pass the author of `inReplyToId`: X keeps that leading mention. Non-numeric ids and the bot's
+own id (`X_BOT_USER_ID` or the looked-up one) are dropped and duplicates sent once; an empty list sends no key. More
+than `X_REPLY_EXCLUDE_MAX` (100; X carries at most 50 accounts into a reply) → nothing is posted (`null`,
+`x.reply: not posted: more than 100 accounts to leave out of the reply`, no request): the list is never cut, so
+nobody left over gets notified.
 
 1. With a PNG: the v2 chunked upload (the endpoints `twitter-api-v2@1.29.1` uses), all signed, no body params in
    the signature:
@@ -128,13 +143,20 @@ given), `max_results=100`, `expansions=author_id,referenced_tweets.id,referenced
    `POST /2/media/upload/{id}/finalize`; when `data.processing_info` is set, `GET /2/media/upload?command=STATUS&media_id={id}`
    after `check_after_secs` (clamped 1–10 s, at most 10 polls / 60 s) until `succeeded`.
    **If any of that fails, the text is posted without the card** (`lastError = "x.uploadMedia: …"`, one warning line).
-2. `POST /2/tweets` JSON `{ text, reply: { in_reply_to_tweet_id }, media?: { media_ids: [id] } }` → `data.id`.
+2. `POST /2/tweets` JSON `{ text, reply: { in_reply_to_tweet_id, exclude_reply_user_ids? }, media?: { media_ids: [id] } }` → `data.id`.
 
 Failures → `null` + `lastError`: `x.reply: duplicate content (HTTP 403)`, other 403s with X's reason (e.g. the reply
 restriction when the author never mentioned the bot), `x.reply: rate limited until …` (the latest exhausted window
 of `x-rate-limit-*`, `x-user-limit-24hour-*`, `x-app-limit-24hour-*`; later replies inside it fail fast), 5xx,
 invalid id / empty text (no request). The caller marks the mention FAILED and may retry. The adapter does not
 count characters: the caller keeps `text` within 280.
+
+**`findReply(inReplyToId)`** — the id of the bot's own reply to `inReplyToId`, or `null` when it has none:
+`GET /2/users/{bot id}/tweets?since_id={inReplyToId}&max_results=100&tweet.fields=referenced_tweets` (OAuth 1.0a,
+an owned read; up to `FIND_REPLY_MAX_PAGES` = 3 pages), matching `referenced_tweets` `replied_to` = `inReplyToId`.
+A timeout or 5xx on `POST /2/tweets` does not mean X refused the post (it may have created it and the answer was
+lost), so worker-bot calls this before posting again. Unlike the other methods it **throws** when the lookup fails
+or could not read every post since (`lastError = "x.findReply: …"` too): a failed lookup is never "not posted".
 
 ### Fourtis endpoints (placeholders)
 

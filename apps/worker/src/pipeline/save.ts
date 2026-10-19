@@ -277,11 +277,20 @@ export async function announceEnd(deps: Pick<PipelineDeps, 'redis' | 'log'>, che
   await redis.publish(LIVE_CHANNEL, JSON.stringify(msg)).catch(e => log.warn('publish failed', e));
 }
 
-/** A bot-triggered check (BotMention.checkId) gets its reply job, done or failed; M2 consumes QUEUES.botReplies. */
+/**
+ * Every X mention linked to the check that still waits for its reply (BotMention.status QUEUED: the first tag, a
+ * re-tag in the thread, another user's tag of the same project) gets its reply job, done or failed. worker-bot
+ * consumes QUEUES.botReplies; the job id is the mention id, so a second enqueue of the same mention is a no-op.
+ */
 export async function enqueueBotReply(deps: PipelineDeps, checkId: string) {
   if (!deps.hooks?.enqueueBotReply) return;
-  const mention = await deps.prisma.botMention.findUnique({ where: { checkId }, select: { id: true } }).catch(() => null);
-  if (mention) await deps.hooks.enqueueBotReply(mention.id).catch(e => deps.log.warn('could not enqueue the bot reply', e));
+  const mentions = await deps.prisma.botMention
+    .findMany({ where: { checkId, status: 'QUEUED' }, select: { id: true }, orderBy: { createdAt: 'asc' } })
+    .catch(e => {
+      deps.log.warn('could not read the bot mentions of the check', e);
+      return [];
+    });
+  for (const m of mentions) await deps.hooks.enqueueBotReply(m.id).catch(e => deps.log.warn('could not enqueue the bot reply', e));
 }
 
 /** After a finished check: the bot reply job and the webhooks hook (M4). */

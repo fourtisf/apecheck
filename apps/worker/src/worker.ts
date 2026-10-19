@@ -4,7 +4,7 @@
  */
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
-import { QUEUES, type BotReplyJob, type CheckJob, type Env } from '@apecheck/core';
+import { BOT_REPLY_JOB_OPTIONS, QUEUES, type BotReplyJob, type CheckJob, type Env } from '@apecheck/core';
 import { prisma as defaultPrisma, type PrismaClient } from '@apecheck/db';
 import { createSources, type Sources } from '@apecheck/sources';
 import { createAi } from './ai';
@@ -111,7 +111,7 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
     limits: opts.limits,
     hooks: {
       enqueueBotReply: async mentionId => {
-        await botQueue.add('reply', { mentionId }, { jobId: mentionId, removeOnComplete: 1000, removeOnFail: 1000 });
+        await botQueue.add('reply', { mentionId }, { jobId: mentionId, ...BOT_REPLY_JOB_OPTIONS });
       },
       fireWebhooks: fireWebhooksNoop,
     },

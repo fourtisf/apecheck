@@ -32,7 +32,7 @@ pnpm install
 cp .env.example .env        # then set local values: DATABASE_URL, REDIS_URL, APP_URL=http://localhost:3000,
                             # API_URL / NEXT_PUBLIC_API_URL=http://localhost:4000, SCREENSHOT_DIR=./.data/shots
 pnpm --filter db prisma migrate deploy
-pnpm dev                    # web :3000, api :4000, worker (checks + prices)
+pnpm dev                    # web :3000, api :4000, worker (checks + prices; the X bot only with X_BOT_DEV=1)
 ```
 
 Chromium for the agent: `pnpm --filter @apecheck/worker exec playwright install chromium`. In development the worker launches

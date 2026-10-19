@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createX, MEDIA_CHUNK_BYTES, MENTION_MAX_PAGES, multipartBody, rateLimitUntil, X_MENTION_EXPANSIONS, X_MENTION_TWEET_FIELDS,
-  X_MENTION_USER_FIELDS, type XOptions,
+  X_MENTION_USER_FIELDS, X_REPLY_EXCLUDE_MAX, type XOptions,
 } from '../src/adapters/x';
 import { hmacSha1, parseOAuthHeader, signatureBaseString, type OAuth1Credentials, type ParamList } from '../src/oauth1';
-import type { XPost } from '../src/types';
+import type { XBotSource, XPost } from '../src/types';
+import { createSources } from '../src/index';
 import { fakeHttp, fixture, testEnv, type FakeHttp, type Handler } from './helpers';
 
 const CREDS: OAuth1Credentials = { consumerKey: 'ck-123', consumerSecret: 'cs-456', token: '1800000000000000000-tok', tokenSecret: 'ts-789' };
@@ -31,6 +32,10 @@ function setup(env: Record<string, string>, handlers: Handler[], opts: XOptions 
 
 /** Recompute the OAuth 1.0a signature from the URL query + oauth_* params only (never the body). */
 function expectSigned(call: FakeHttp['calls'][number]) {
+  expectSignedSince(call, NOW);
+}
+/** expectSigned for a clock that started at `clockStart` (epoch ms) */
+function expectSignedSince(call: FakeHttp['calls'][number], clockStart: number) {
   const header = call.req.headers?.authorization ?? '';
   expect(header).toMatch(/^OAuth /);
   const { oauth_signature, ...oauth } = parseOAuthHeader(header);
@@ -42,8 +47,8 @@ function expectSigned(call: FakeHttp['calls'][number]) {
   });
   expect(oauth.oauth_nonce).toMatch(/^[A-Za-z0-9]{32}$/);
   // seconds at send time (the fake clock starts at NOW and moves with the fake sleep)
-  expect(Number(oauth.oauth_timestamp)).toBeGreaterThanOrEqual(Math.floor(NOW / 1000));
-  expect(Number(oauth.oauth_timestamp)).toBeLessThan(Math.floor(NOW / 1000) + 3600);
+  expect(Number(oauth.oauth_timestamp)).toBeGreaterThanOrEqual(Math.floor(clockStart / 1000));
+  expect(Number(oauth.oauth_timestamp)).toBeLessThan(Math.floor(clockStart / 1000) + 3600);
   const params: ParamList = [...new URL(call.url).searchParams.entries(), ...Object.entries(oauth)];
   const base = signatureBaseString(call.req.method ?? 'GET', call.url, params);
   expect(oauth_signature).toBe(hmacSha1(base, CREDS.consumerSecret, CREDS.tokenSecret));
@@ -99,6 +104,8 @@ describe('X bot: mentions()', () => {
       authorHandle: 'degenfren',
       conversationId: '1846629381234567890',
       mentions: ['kairolabs', 'ApeCheckBot'],
+      // X's reply prefix (@kairolabs) included: the bot's reply has to leave them out
+      mentionUserIds: ['1500000000000000001', BOT_ID],
       urls: [], // the post's own photo link is not a project link
       replyToId: '1846629381234567890',
       inReplyToUserId: '1500000000000000001',
@@ -118,6 +125,7 @@ describe('X bot: mentions()', () => {
       conversationId: '1846629381234567890',
       urls: ['https://app.kairo.xyz/trade'],
       mentions: [],
+      mentionUserIds: [],
       cashtags: ['KAIRO'],
       replyToId: null,
       quotedId: null,
@@ -175,9 +183,50 @@ describe('X bot: mentions()', () => {
     expect(m.text.slice(0, 11)).toBe('@ghostproj ');
     expect(m.urls).toEqual(['https://ghostproj.io']);
     expect(m.cashtags).toEqual(['GHOST']);
+    // note_tweet entities carry no ids: the same accounts, once each
+    expect(m.mentionUserIds).toEqual(['1650000000000000009', BOT_ID]);
     expect(m.replyToId).toBe('1846800000000000000');
     expect(m.repliedTo).toBeNull();
     expect(m.inReplyToUserId).toBe('1650000000000000009');
+    expect(x.lastError).toBeNull();
+  });
+
+  it('mentionUserIds: entity ids, else the user expanded by entities.mentions.username; unknown handles and odd ids left out', async () => {
+    const { x } = setup(BOT, [
+      mentionsRoute({
+        first: {
+          data: [
+            {
+              id: '1847000000000000400',
+              text: '@ApeCheckBot @Alpha @beta @ghost @gamma evil.xyz',
+              author_id: '1700000000000000003',
+              entities: {
+                mentions: [
+                  { start: 0, end: 12, username: 'ApeCheckBot', id: BOT_ID },
+                  { start: 13, end: 19, username: 'Alpha' },
+                  { start: 20, end: 25, username: 'beta', id: 'not-an-id' },
+                  { start: 26, end: 32, username: 'ghost' },
+                  { start: 33, end: 39, username: 'gamma', id: 1900000000000000004 },
+                ],
+              },
+            },
+          ],
+          includes: {
+            users: [
+              { id: '1700000000000000003', username: 'oldwhale', name: 'Old Whale' },
+              { id: '1900000000000000001', username: 'alpha', name: 'A' },
+              { id: '1900000000000000002', username: 'Beta', name: 'B' },
+              { id: '1900000000000000004', username: 'gamma', name: 'G' },
+            ],
+          },
+          meta: { result_count: 1, newest_id: '1847000000000000400' },
+        },
+      }),
+    ]);
+    const [m] = (await x.mentions!('1')).posts;
+    expect(m.mentions).toEqual(['ApeCheckBot', 'Alpha', 'beta', 'ghost', 'gamma']);
+    // @ghost is in no entity id and not expanded (suspended / deleted): nobody to leave out
+    expect(m.mentionUserIds).toEqual([BOT_ID, '1900000000000000001', '1900000000000000002', '1900000000000000004']);
     expect(x.lastError).toBeNull();
   });
 
@@ -517,6 +566,73 @@ describe('X bot: reply()', () => {
     expect(slow.sleeps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(60_000);
   });
 
+  it('exclude_reply_user_ids: X’s auto-filled reply mentions are taken out, numeric ids once each, never the bot', async () => {
+    const { x, http } = setup(BOT, [xWrite()]);
+    const ids = ['1500000000000000001', '1900000000000000002', BOT_ID, '1500000000000000001', '@evil', '', 'abc', '1900000000000000003'];
+    expect(await x.reply!('1847000000000000300', TEXT, fakePng(5000), { excludeUserIds: ids })).toBe('1847000000000000999');
+    expect(http.calls.at(-1)!.body).toEqual({
+      text: TEXT,
+      reply: { in_reply_to_tweet_id: '1847000000000000300', exclude_reply_user_ids: ['1500000000000000001', '1900000000000000002', '1900000000000000003'] },
+      media: { media_ids: [MEDIA_ID] },
+    });
+    expectSigned(http.calls.at(-1)!);
+    // nothing to leave out (or only the bot / junk): no exclude_reply_user_ids key at all
+    for (const excludeUserIds of [[], [BOT_ID], ['x'], null, undefined]) {
+      expect(await x.reply!('1847000000000000300', `t ${String(excludeUserIds)}`, null, { excludeUserIds })).toBe('1847000000000000999');
+      expect(http.calls.at(-1)!.body).toEqual({ text: `t ${String(excludeUserIds)}`, reply: { in_reply_to_tweet_id: '1847000000000000300' } });
+    }
+  });
+
+  it('a mention naming many accounts: the reply leaves out every one of them but its author (mentions() → reply())', async () => {
+    const tagged = Array.from({ length: 40 }, (_, i) => ({ username: `v${i + 1}`, id: String(1900000000000000100n + BigInt(i)) }));
+    const text = `@ApeCheckBot evil.xyz ${tagged.map(t => `@${t.username}`).join(' ')}`;
+    const { x, http } = setup(BOT, [
+      mentionsRoute({
+        first: {
+          data: [{
+            id: '1847000000000000500',
+            text,
+            author_id: '1700000000000000003',
+            entities: { mentions: [{ username: 'ApeCheckBot', id: BOT_ID }, ...tagged, { username: 'oldwhale', id: '1700000000000000003' }] },
+          }],
+          meta: { result_count: 1, newest_id: '1847000000000000500' },
+        },
+      }),
+      xWrite(),
+    ]);
+    const [m] = (await x.mentions!('1')).posts;
+    // what worker-bot stores and passes: every mentioned account but the asker
+    const excludeUserIds = m.mentionUserIds!.filter(id => id !== m.authorId);
+    expect(await x.reply!(m.id, TEXT, null, { excludeUserIds })).toBe('1847000000000000999');
+    const body = http.calls.at(-1)!.body as { reply: { in_reply_to_tweet_id: string; exclude_reply_user_ids: string[] } };
+    expect(body.reply.in_reply_to_tweet_id).toBe(m.id);
+    expect(body.reply.exclude_reply_user_ids).toEqual(tagged.map(t => t.id));
+    expect(body.reply.exclude_reply_user_ids).not.toContain(m.authorId);
+    expect(body.reply.exclude_reply_user_ids).not.toContain(BOT_ID);
+  });
+
+  it(`more than ${X_REPLY_EXCLUDE_MAX} accounts to leave out: nothing is posted (no request, no upload)`, async () => {
+    const { x, http } = setup(BOT, [xWrite()]);
+    const ids = Array.from({ length: X_REPLY_EXCLUDE_MAX + 1 }, (_, i) => String(1900000000000000000n + BigInt(i)));
+    expect(await x.reply!('1847000000000000300', TEXT, fakePng(5000), { excludeUserIds: ids })).toBeNull();
+    expect(x.lastError).toBe(`x.reply: not posted: more than ${X_REPLY_EXCLUDE_MAX} accounts to leave out of the reply`);
+    expect(http.calls).toHaveLength(0);
+    // exactly the maximum goes out
+    expect(await x.reply!('1847000000000000300', TEXT, null, { excludeUserIds: ids.slice(1) })).toBe('1847000000000000999');
+    expect((http.calls[0].body as { reply: { exclude_reply_user_ids: string[] } }).reply.exclude_reply_user_ids).toHaveLength(X_REPLY_EXCLUDE_MAX);
+  });
+
+  it('without X_BOT_USER_ID the looked-up bot id is dropped from the exclusions too', async () => {
+    const { x, http } = setup(USER_KEYS, [
+      url => (url.pathname === '/2/users/me' ? { json: { data: { id: BOT_ID, name: 'ApeCheck', username: 'ApeCheckBot' } } } : undefined),
+      mentionsRoute({ first: { meta: { result_count: 0 } } }),
+      xWrite(),
+    ]);
+    await x.mentions!('1');
+    expect(await x.reply!('1847000000000000300', TEXT, null, { excludeUserIds: [BOT_ID, '1500000000000000001'] })).toBe('1847000000000000999');
+    expect(http.calls.at(-1)!.body).toEqual({ text: TEXT, reply: { in_reply_to_tweet_id: '1847000000000000300', exclude_reply_user_ids: ['1500000000000000001'] } });
+  });
+
   it('403 duplicate content → null with lastError', async () => {
     const { x } = setup(BOT, [
       xWrite({ tweet: () => ({ status: 403, json: { detail: 'You are not allowed to create a Tweet with duplicate content.', type: 'about:blank', title: 'Forbidden', status: 403 } }) }),
@@ -574,6 +690,38 @@ describe('X bot: reply()', () => {
     expect(x.canPost).toBe(false);
     expect(await x.reply!('1847000000000000300', TEXT, fakePng(100))).toBeNull();
     expect(await x.mentions!('1')).toEqual({ posts: [], newestId: null });
+    expect(http.calls).toHaveLength(0);
+  });
+});
+
+describe('X bot: createSources().x', () => {
+  it('is the full adapter: mentions() and reply() typed as present, signed over the injected Http', async () => {
+    const http = fakeHttp(mentionsRoute({ first: { meta: { result_count: 0 } } }), xWrite());
+    const started = Date.now();
+    const sources = createSources(testEnv(BOT), { http });
+    // XBotSource: no "!" needed, the methods are part of the returned type
+    const x: XBotSource = sources.x;
+    expect(x.canPost).toBe(true);
+    expect(await x.mentions('1846800000000000001')).toEqual({ posts: [], newestId: null });
+    expect(await x.reply('1847000000000000300', TEXT, fakePng(5000))).toBe('1847000000000000999');
+    expect(http.calls.map(path)).toEqual([
+      `GET /2/users/${BOT_ID}/mentions`,
+      'POST /2/media/upload/initialize',
+      `POST /2/media/upload/${MEDIA_ID}/append`,
+      `POST /2/media/upload/${MEDIA_ID}/finalize`,
+      'POST /2/tweets',
+    ]);
+    // the real clock: createSources() takes no test hooks
+    for (const call of http.calls) expectSignedSince(call, started);
+    expect(http.calls.at(-1)!.body).toEqual({ text: TEXT, reply: { in_reply_to_tweet_id: '1847000000000000300' }, media: { media_ids: [MEDIA_ID] } });
+  });
+
+  it('without the user keys the methods still exist and do nothing (worker-bot idles)', async () => {
+    const http = fakeHttp();
+    const x = createSources(testEnv({ X_BEARER_TOKEN: '' }), { http }).x;
+    expect(x.canPost).toBe(false);
+    expect(await x.mentions(null)).toEqual({ posts: [], newestId: null });
+    expect(await x.reply('1847000000000000300', 'hi')).toBeNull();
     expect(http.calls).toHaveLength(0);
   });
 });

@@ -158,7 +158,10 @@ export function registerInsightRoutes(app: FastifyInstance, deps: AppDeps) {
         where: { status: 'REPLIED', OR: [{ repliedAt: { gte: today } }, { repliedAt: null, createdAt: { gte: today } }] },
         select: { createdAt: true, repliedAt: true, check: { select: { finishedAt: true } } },
       }),
-      prisma.botMention.groupBy({ by: ['authorId'] }).then(g => g.length),
+      // only authors who typed the bot's handle (BotMention.tagged, set by the worker): the mentions timeline also
+      // brings people talking in a thread the bot is in (X's reply prefix, "not_tagged"), untagged replies to the
+      // bot's verdict, retweets of someone's tag and the bot's own posts, none of which tagged it
+      prisma.botMention.groupBy({ by: ['authorId'], where: { tagged: true } }).then(g => g.length),
     ]);
     // the reply's own time when the bot stored it (M2); else the check finishing, which is when the reply goes out
     const secs = replied

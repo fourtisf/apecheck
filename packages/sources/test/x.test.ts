@@ -51,6 +51,7 @@ describe('X adapter: getPost', () => {
       conversationId: '1846629381234567890',
       urls: ['https://app.kairo.xyz/trade', 'https://docs.kairo.xyz'],
       mentions: ['solana'],
+      mentionUserIds: ['951329744804392960'],
       cashtags: ['KAIRO'],
       replyToId: null,
       quotedId: '1846000000000000000',

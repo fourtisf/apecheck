@@ -3,7 +3,7 @@
  * createSources(env) wires the adapters; missing keys turn an adapter into a stub (see README).
  */
 import type { Env } from '@apecheck/core';
-import type { Http, Sources } from './types';
+import type { Http, Sources, XBotSource } from './types';
 import { createHttp } from './http';
 import { createDexScreener } from './adapters/dexscreener';
 import { createEvm } from './adapters/evm';
@@ -27,15 +27,16 @@ export { createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, DETECT_RETRY_D
 export { createSolana, SolanaAdapter, SOL_READ_METHODS, solanaRpcUrl } from './adapters/solana';
 export { createTron, TronAdapter } from './adapters/tron';
 export { createGitHub, GitHubAdapter, parseGitHubRef } from './adapters/github';
-export { createX, XAdapter, type XOptions } from './adapters/x';
+export { createX, XAdapter, X_REPLY_EXCLUDE_MAX, type XOptions } from './adapters/x';
 export { signRequest, oauth1Header, percentEncode, type OAuth1Credentials, type OAuth1Request } from './oauth1';
 export { createFourtis, FourtisAdapter, FOURTIS_PATHS } from './adapters/fourtis';
 
 /**
  * Build every adapter from the parsed env. `http` can be injected (tests); by default one shared client
- * honours OUTBOUND_PROXY and SSRF_ALLOW_HOSTS.
+ * honours OUTBOUND_PROXY and SSRF_ALLOW_HOSTS. `x` is the full X adapter, bot methods included (mentions() / reply(),
+ * which need the OAuth 1.0a user keys: see `x.canPost`).
  */
-export function createSources(env: Env, opts: { http?: Http } = {}): Sources {
+export function createSources(env: Env, opts: { http?: Http } = {}): Sources & { x: XBotSource } {
   const http = opts.http ?? createHttp(env);
   const dex = createDexScreener(env, http);
   const evm = createEvm(env, http);

@@ -239,6 +239,12 @@ export interface XPost {
   /** expanded URLs from entities (t.co resolved) */
   urls: string[];
   mentions: string[];
+  /**
+   * Numeric user ids of the accounts this post @mentions (entities.mentions[].id, else looked up by username in the
+   * response's includes.users), X's reply prefix included. Unresolvable handles are left out. The bot passes them,
+   * minus the asker, as `XReplyOptions.excludeUserIds` so a reply notifies only the asker.
+   */
+  mentionUserIds?: string[];
   cashtags: string[];
   /** referenced_tweets type replied_to */
   replyToId: string | null;
@@ -284,9 +290,31 @@ export interface XSource {
    * M2: reply to `inReplyToId` (POST /2/tweets, OAuth 1.0a) with the PNG attached when given (v2 chunked media
    * upload; if the upload fails the text is posted alone). Returns the new post id, or null (not configured,
    * duplicate content, rate limit, 4xx/5xx — the reason is in lastError). Never throws.
+   * X fills a v2 reply's "Replying to" list by itself (the replied-to post's author plus every account it mentions):
+   * pass `opts.excludeUserIds` to take everyone but that author out (reply.exclude_reply_user_ids).
    */
-  reply?(inReplyToId: string, text: string, mediaPng?: Buffer | null): Promise<string | null>;
+  reply?(inReplyToId: string, text: string, mediaPng?: Buffer | null, opts?: XReplyOptions): Promise<string | null>;
+  /**
+   * M2: the id of the bot's own reply to `inReplyToId`, or null when it posted none (GET /2/users/:id/tweets since
+   * that post, OAuth 1.0a owned read). Used before posting again after a reply whose outcome is unknown (timeout,
+   * 5xx). THROWS when the lookup fails: a failed lookup is never "not posted".
+   */
+  findReply?(inReplyToId: string): Promise<string | null>;
 }
+export interface XReplyOptions {
+  /**
+   * User ids X must leave out of the reply's auto-filled mentions (reply.exclude_reply_user_ids): everyone the
+   * replied-to post names except its own author, whom X always keeps (the leading @mention; never pass that id).
+   * Non-numeric ids and the bot's own id are dropped; duplicates are sent once. More than X_REPLY_EXCLUDE_MAX ids:
+   * nothing is posted (null, lastError) rather than a reply that notifies the ones left over.
+   */
+  excludeUserIds?: readonly string[] | null;
+}
+/**
+ * The X source with the bot methods present: what createX() and createSources().x return (worker-bot calls
+ * mentions() and reply() on it). They stay optional on XSource so test fakes of the read side need not stub them.
+ */
+export type XBotSource = XSource & Required<Pick<XSource, 'mentions' | 'reply'>>;
 
 /* ---------------- Fourtis internal (DevRadar, BundleScan, WhaleFlow) ---------------- */
 

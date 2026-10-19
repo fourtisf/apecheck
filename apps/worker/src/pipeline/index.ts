@@ -75,6 +75,9 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
     }
     if (row.status === 'DONE' || row.status === 'FAILED') {
       log.info(`check already ${row.status.toLowerCase()}, job skipped`);
+      // a run that died between saving the check and enqueueing its bot replies: enqueue them now (a no-op for
+      // mentions already answered or already queued: jobId = mention id, and only QUEUED mentions are picked)
+      await enqueueBotReply(deps, checkId);
       return { status: 'skipped', checkId };
     }
     const d = detect(row.targetRaw);

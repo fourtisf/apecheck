@@ -1,13 +1,4 @@
-import { randomInt } from 'node:crypto';
-
-const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
-
-/** 7 random [a-z0-9] chars: the public id in /c/[id] and card URLs. */
-export function randomShortId(len = 7): string {
-  let s = '';
-  for (let i = 0; i < len; i++) s += ALPHABET[randomInt(ALPHABET.length)];
-  return s;
-}
+/** Public check ids (7 random [a-z0-9] chars) are minted by @apecheck/db createCheck(); this file reads them. */
 
 /** What a public check id can look like (anything else is a 404 without a DB query). */
 export const SHORT_ID_RE = /^[A-Za-z0-9_-]{4,32}$/;

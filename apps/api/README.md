@@ -29,9 +29,15 @@ selects another file, e.g. a staging config).
   `claims[].result` (= `status`, e.g. `"not_seen"`) and `report_url` (= `reportUrl`). The camelCase fields
   (`narScore`/`narBand`, `coinScore`/`coinBand`, `claims[].status`, `reportUrl`) stay; the web uses them.
 - Claims come in `Claim.idx` order (the order the worker extracted them).
-- `post` is `Check.evidence.post` (`{ author, text, createdAt }`) for post checks whose post could be read, else `null`.
-- `botReply` (`{ mention: { author, text, createdAt }, repliedAt }`) is present only for a bot check (`via: 'bot'`) whose
-  `BotMention` has `replyTweetId` and `repliedAt`, i.e. the reply is on X; the /bot page shows a real thread only from it.
+- `post` is `Check.evidence.post` (`{ id, author, text, createdAt }`, `id` the X post id or null) for post checks whose post
+  could be read, else `null`.
+- `botReply` (`{ mention: { author, text, createdAt, inReplyToId }, repliedAt, replyText }`) is present only once the bot's verdict reply
+  about the check is on X: the first `BotMention` of the check with status `REPLIED`, `replyTweetId` and `repliedAt`
+  (kind `check`; follow-up answers don't count). `mention.text` is what the author typed, `replyText` the words the bot
+  posted. A check can answer several mentions since M2 (re-tags reuse it), and a site/API check the bot answered from
+  cache has one too. The /bot page shows a real thread only from it. `mention.inReplyToId` is the X id of the post the
+  mention replies to (null for a quote tweet or a post of its own): /bot draws `post` above the mention only when it
+  equals `post.id`, so a quoted or linked post is never shown as the post the mention replies to.
 - `coin.deployer` is the Deployer row (known launch history only); `coin.deployerAddress` is the wallet whenever it is known.
   The summary's `deployer` is `{ address, chain, record }` with `record: null` when the history is unknown. Feed / coins
   search also matches `CoinFacts.deployerAddress`.
@@ -62,12 +68,12 @@ All errors are `{ error, code }` (`ApiErrorBody`). Codes: `bad_target`, `bad_req
 | POST | `/v1/checks` | body `{ target, recheck? }` → `CreateCheckResponse`. **201** for a new check, **200** when an existing one is returned (running check, or `cached: true` for a finished one younger than `CACHE_HOURS`). 400 `bad_target`, 402 `no_credits`, 403 `max_required` for `private: true` |
 | GET | `/v1/checks/:id` | `CheckReportDTO` by short id, including the /api page's `narrative`, `coin.verdict`/`coin.score`, `claims[].result`, `report_url` (see Report notes). Private checks only for the cookie that started them |
 | GET | `/v1/checks/:id/events` | SSE, see below |
-| GET | `/v1/feed` | `FeedResponse`. `tab=latest\|checked\|real\|least\|vol\|watch`, `type=all\|coin\|post\|site`, `nar=<band>\|any`, `coin=<band>\|any`, `chain=<key>\|any`, `q`, `cursor`, `limit` (1–100, default 25), `ids=<shortId,…>`, `via=bot\|web\|api` |
+| GET | `/v1/feed` | `FeedResponse`. `tab=latest\|checked\|real\|least\|vol\|watch`, `type=all\|coin\|post\|site`, `nar=<band>\|any`, `coin=<band>\|any`, `chain=<key>\|any`, `q`, `cursor`, `limit` (1–100, default 25), `ids=<shortId,…>`, `via=bot\|web\|api` (`bot`: checks the bot started, and checks it answered on X from cache) |
 | GET | `/v1/live` | `LiveResponse`: up to 8 queued/running public checks, newest first |
 | GET | `/v1/coins` | `CoinsResponse`. `tab=all\|clean\|ok\|sketchy\|rigged`, `chain`, `q`, `limit` (1–500, default 200) |
 | GET | `/v1/deployers` | `DeployersResponse`. `chain=all\|<key>`, `sort=real\|dead\|launched`, `limit` (1–500, default 200) |
 | GET | `/v1/insights` | `InsightsDTO`: header stats (`checked` = finished checks all time, `today` = finished since 00:00 UTC, so never more than `checked`), since-check by verdict (latest public coin verdicts finished in the last 30 days), most checked today, builders worth watching |
-| GET | `/v1/bot/stats` | `BotStatsDTO`: replies today, median reply seconds (from `BotMention.repliedAt` when the bot stored it, else the check's `finishedAt`), distinct accounts |
+| GET | `/v1/bot/stats` | `BotStatsDTO`: replies today, median reply seconds (from `BotMention.repliedAt` when the bot stored it, else the check's `finishedAt`), distinct accounts that typed the bot's handle (`BotMention.tagged`, set by the worker: not X's reply prefix, retweets of a tag or the bot itself) |
 | POST | `/v1/checks/:id/asks` | 403 `pro_required` (M3) |
 | POST | `/v1/checks/:id/notes`, `/v1/notes/:id/helpful` | 403 `holders_only` (M3) |
 | POST | `/v1/watch/:targetId` | 401 `sign_in_required` (M3) |
@@ -88,7 +94,9 @@ All errors are `{ error, code }` (`ApiErrorBody`). Codes: `bad_target`, `bad_req
 
 ### Same target (dedupe and cache)
 
-Coins match on the contract address across every chain key (including the preliminary `ca:evm:` one, EVM
+The rules live in `@apecheck/db` (`packages/db/src/checks.ts`: `findReusableCheck()`, `createCheck()`, `withCreateLock()`),
+shared with the X bot, so a site submit and a bot tag of the same project see the same running check or cached verdict
+and never start two (both take the `lock:create:<target key>` lock). This file adds the credit and the job. Coins match on the contract address across every chain key (including the preliminary `ca:evm:` one, EVM
 case-insensitive), sites on the domain, posts on the tweet id, X profiles on `x:<handle>`. A queued/running check of
 the same target is returned even with `recheck: true` (it is already fresh); `recheck` only skips the finished-check
 cache. A run older than 2 × `CHECK_BUDGET_SECONDS`, or a job queued for over 2 hours, counts as dead and does not

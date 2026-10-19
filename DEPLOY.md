@@ -9,7 +9,7 @@ Processes (PM2, `ecosystem.config.cjs`):
 | `web` | Next.js 14 site (`apps/web`) | 3000 (localhost only) |
 | `api` | Fastify REST + SSE (`apps/api`) | 4000 (localhost only) |
 | `worker-checks` | check pipeline; drives the browser agent | — |
-| `worker-bot` | @ApeCheckBot mentions + replies | — |
+| `worker-bot` | @ApeCheckBot mentions + replies (§14) | — |
 | `worker-prices` | price tracking, screenshot cleanup | — |
 
 Plus one systemd unit, `apecheck-browser.service` (`deploy/browser`): Chromium itself, as a separate user with no access
@@ -24,6 +24,7 @@ Nginx terminates TLS: `apecheck.io` → `:3000`, `api.apecheck.io` → `:4000` (
 - The VPS IP address and an SSH user with `sudo`.
 - DNS for `apecheck.io` at your registrar (step 7).
 - The `.env` values: see `.env.example`. Keys that are still empty don't block the deploy: that adapter runs as a stub and logs a warning (see "Empty keys" at the end).
+  The X bot needs its own X account and developer app (§14); until its keys are in, `worker-bot` idles.
 
 ## 1. Server packages (as root / sudo)
 
@@ -254,6 +255,52 @@ pnpm --filter @apecheck/worker test && pnpm --filter @apecheck/worker e2e && pnp
 §11's `install.sh` step installs the matching playwright-core and Chromium into `/opt/apecheck-browser` (Playwright
 removes the old build) and restarts the host; `journalctl -u apecheck-browser -n 1` shows the new Chromium version.
 Ubuntu security updates (`unattended-upgrades`) cover the kernel and the system libraries Chromium uses.
+
+## 14. X bot (@ApeCheckBot)
+
+`worker-bot` idles (one warning in `pm2 logs worker-bot`) until the four OAuth 1.0a keys of the bot account are in `.env`.
+The account and the app are set up once, by ALFA:
+
+1. **The account.** Create `@ApeCheckBot` (fallback `@apecheck_io`, HANDOFF §14) with its own e-mail. Logged in as the bot:
+   Settings and privacy → Your account → Account information → **Automation** → Managing account → choose **ALFA's main
+   account** and confirm from it. The profile and every reply then show "Automated by @…", which X requires for bots.
+2. **The developer app.** Sign in to <https://developer.x.com> **as @ApeCheckBot** (the access token below must belong to
+   the bot, not to ALFA; with ALFA's account as the developer account you would need the 3-legged OAuth flow instead).
+   Create a Project and an App (pay-per-use). In the App → *User authentication settings*: App permissions **Read and
+   write**, Type of App **Web App, Automated App or Bot**, Callback URI and Website `https://apecheck.io` (required
+   fields, not used). Save this **before** generating the access token: a token generated earlier stays read-only.
+3. **Keys and tokens** tab → `.env`:
+   - API Key / API Key Secret → `X_API_KEY` / `X_API_SECRET` (the consumer keys);
+   - Access Token / Secret (generate; the page must say *Read and Write*) → `X_ACCESS_TOKEN` / `X_ACCESS_SECRET`;
+   - Bearer Token → `X_BEARER_TOKEN` (post and account reads during checks);
+   - `X_BOT_HANDLE=ApeCheckBot` (without `@`).
+   They live only in `.env` (`chmod 600`), never in the repo or the database (HANDOFF §11).
+4. **`X_BOT_USER_ID`**, the bot's numeric id:
+   ```bash
+   set -a; . /srv/apecheck/app/.env; set +a
+   curl -s "https://api.x.com/2/users/by/username/$X_BOT_HANDLE" -H "Authorization: Bearer $X_BEARER_TOKEN"   # → data.id
+   ```
+   Without it the bot still runs (the adapter looks the id up once per start and logs
+   `X_BOT_USER_ID not set: looked up the bot account id (…)`), but set it to save the call.
+5. **Start and check:** `pm2 restart worker-bot` (it reads `.env` at start), then `pm2 logs worker-bot` shows
+   `active: polling @ApeCheckBot's mentions every 20s`. From another account that is at least 7 days old, reply to a
+   project's post with `@ApeCheckBot real or larp?`: the reply with the verdict and the share card comes within a few
+   minutes (the check itself takes 1–3). `curl https://api.apecheck.io/v1/bot/stats` counts it.
+
+**Costs and limits.** Mentions are read every `BOT_POLL_SECONDS` (20) with `since_id`, so only new posts are fetched;
+reading your own mentions is billed as an owned read, the cheapest read. Posting is billed per post, and X bills posts
+that contain a URL at a much higher rate: `BOT_INCLUDE_LINK=false` (the default) leaves the `apecheck.io/c/<id>` link out of
+every reply, even the follow-up pointer. Look at the per-post prices in the developer console (Usage / Billing) before
+setting `BOT_INCLUDE_LINK=true`. `BOT_HOURLY_CAP` (200) bounds the bill: at most that many replies an hour across all
+users; `BOT_USER_HOURLY` (3) and `BOT_PRO_USER_HOURLY` (20) limit one account. Mentions over a limit are stored and
+ignored, never answered later.
+
+**One bot at a time.** `worker-bot` is a single PM2 instance; a Redis lock (`bot:lock`) also keeps a second copy (a
+manual start on the same server) on standby, so replies are never doubled. The lock only covers processes that share the
+same `REDIS_URL` and database: a copy with another Redis (another machine, a laptop with a copied `.env`) is a second live
+bot that replies again. Never put the bot's OAuth keys anywhere else; `pnpm dev` leaves the bot off unless `X_BOT_DEV=1`
+(use a separate test bot account for that). `pm2 stop worker-bot` pauses the bot: mentions that
+arrive meanwhile are read on restart (`since_id` is kept in Redis), except those older than 12 hours, which are not answered.
 
 ## Browser isolation notes
 

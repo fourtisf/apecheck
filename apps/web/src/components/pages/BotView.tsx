@@ -96,10 +96,14 @@ function ProjectPost({ item: it, post, time }: { item: CheckReportDTO; post: Exa
   );
 }
 
-/** The bot's answer: verdict line, coin line, disclaimer and the share card. */
-function BotAnswer({ handle, item: it, repliedAt }: { handle: string; item: CheckReportDTO; repliedAt: string | null }) {
+/**
+ * The bot's answer and the share card. A reply that went out shows the words the bot posted (BotMention.replyText);
+ * an illustration (or a reply stored without its text) shows the verdict line, coin line and disclaimer.
+ */
+function BotAnswer({ handle, item: it, repliedAt, text }: { handle: string; item: CheckReportDTO; repliedAt: string | null; text?: string | null }) {
   const nar = it.narScore!;
   const coin = it.hasCoin && it.coinScore != null ? it.coinScore : null;
+  const posted = text?.trim() ? text.trim().split('\n') : null;
   return (
     <Post
       avatar={
@@ -113,18 +117,29 @@ function BotAnswer({ handle, item: it, repliedAt }: { handle: string; item: Chec
     >
       {/* X's automated label belongs to a reply that is on X */}
       {repliedAt ? <span className="p-auto">Automated account</span> : null}
-      <p className="p-text">
-        {NAR_LABEL[narBand(nar).key]} ({nar}/100){it.summary ? `: ${it.summary}` : ''}
-        {coin != null ? (
-          <>
-            <br />
-            Coin: {COIN_LABEL[coinBand(coin).key]} ({coin}/100)
-          </>
-        ) : null}
-        <br />
-        <br />
-        {coin != null ? 'Checks the claims and the coin, not the team. DYOR.' : BOT_DISCLAIMER}
-      </p>
+      {posted ? (
+        <p className="p-text">
+          {posted.map((line, i) => (
+            <span key={i}>
+              {i ? <br /> : null}
+              {line}
+            </span>
+          ))}
+        </p>
+      ) : (
+        <p className="p-text">
+          {NAR_LABEL[narBand(nar).key]} ({nar}/100){it.summary ? `: ${it.summary}` : ''}
+          {coin != null ? (
+            <>
+              <br />
+              Coin: {COIN_LABEL[coinBand(coin).key]} ({coin}/100)
+            </>
+          ) : null}
+          <br />
+          <br />
+          {coin != null ? 'Checks the claims and the coin, not the team. DYOR.' : BOT_DISCLAIMER}
+        </p>
+      )}
       <VCard item={it} />
     </Post>
   );
@@ -132,8 +147,9 @@ function BotAnswer({ handle, item: it, repliedAt }: { handle: string; item: Chec
 
 /**
  * The example thread (the prototype's .thread: the project's post, someone tagging the bot, the bot's reply).
- * - reply: a thread that happened on X: the post the check read (if any), the mention as written by its author,
- *   and the reply with its real time and X's automated label.
+ * - reply: a thread that happened on X: the mention as written by its author and the reply as the bot posted it,
+ *   with its real time and X's automated label; above them the post the check read only when the mention replies
+ *   to it (a quoted or linked post is never drawn as the post the mention replies to).
  * - example: an illustration made from a check that ran on the site, captioned as one: the project's real post
  *   without a time, "You" tagging the bot (no real account is quoted), and the answer without a time or label.
  */
@@ -142,7 +158,7 @@ function Thread({ handle, example: ex }: { handle: string; example: BotExample }
     const m = ex.reply.mention;
     return (
       <div className="thread">
-        {ex.post ? <ProjectPost item={ex.item} post={ex.post} time /> : null}
+        {ex.parent ? <ProjectPost item={ex.item} post={ex.parent} time /> : null}
         <Post
           avatar={
             <div className="pav" style={{ background: 'var(--panel2)', color: 'var(--mute)' }}>
@@ -155,7 +171,7 @@ function Thread({ handle, example: ex }: { handle: string; example: BotExample }
         >
           <PostText text={m.text} />
         </Post>
-        <BotAnswer handle={handle} item={ex.item} repliedAt={ex.reply.repliedAt} />
+        <BotAnswer handle={handle} item={ex.item} repliedAt={ex.reply.repliedAt} text={ex.reply.replyText} />
       </div>
     );
   }

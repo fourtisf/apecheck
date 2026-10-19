@@ -166,7 +166,7 @@ model Check {
   coinFacts      CoinFacts?
   asks           Ask[]
   notes          Note[]
-  mention        BotMention?
+  mentions       BotMention[] // M2: every X mention this check answers (a re-tag or another user's tag reuses the check)
 
   @@index([status, finishedAt])
   @@index([targetId, finishedAt])
@@ -350,13 +350,26 @@ model BotMention {
   inReplyToId    String?
   conversationId String?
   isFollowUp     Boolean       @default(false)
+  /// M2: the author typed the bot's handle (not just X's reply prefix, a retweet of someone else's tag or the bot's
+  /// own post). Set when the mention is stored; /v1/bot/stats counts these authors as "accounts that tagged it"
+  tagged         Boolean       @default(false)
   status         MentionStatus @default(RECEIVED)
   ignoreReason   String?
-  checkId        String?       @unique
+  /// M2: no longer unique: a second tag in the same thread, or another user's tag, reuses the check
+  checkId        String?
   check          Check?        @relation(fields: [checkId], references: [id])
+  targetKey      String?       // added (M2): Target key the mention resolved to (dedupe per conversation)
+  kind           String?       // added (M2): check | followup | help | ignored
   replyTweetId   String?
+  replyText      String?       // added (M2): the text the bot posted
+  /// M2: user ids X would add to the bot's reply ("Replying to …": everyone the mention names, X's reply prefix
+  /// included) except the asker and the bot; sent as reply.exclude_reply_user_ids so only the asker is notified
+  replyExcludeIds String[]     @default([])
   repliedAt      DateTime?     // added: when the bot's reply was posted (M2); /v1/bot/stats prefers it
   createdAt      DateTime      @default(now())
 
   @@index([authorId, createdAt])
+  @@index([conversationId])
+  @@index([checkId])
+  @@index([replyTweetId])
 }

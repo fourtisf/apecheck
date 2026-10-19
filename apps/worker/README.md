@@ -6,8 +6,8 @@ Node workers for ApeCheck (HANDOFF §4, §10, §11):
 |---|---|---|
 | `src/checks.ts` | `worker-checks` | BullMQ worker on queue `checks`: the check pipeline and the browser agent. Concurrency `MAX_CONCURRENT_BROWSERS`, one Chromium per process. |
 | `src/prices.ts` | `worker-prices` | Repeatable jobs on queue `prices`: "since check" price points from DexScreener every 5 minutes, and the daily screenshot cleanup (03:20 UTC, see below). |
-| `src/bot.ts` | `worker-bot` | Placeholder until M2: logs "X bot arrives in M2" once and idles until SIGTERM, so PM2 keeps it `online` instead of restart-looping it. |
-| `src/dev.ts` | — | `pnpm dev`: checks + prices in one process. |
+| `src/bot.ts` | `worker-bot` | The X bot @ApeCheckBot (`src/bot/*`, below): polls the bot's mentions, starts or reuses checks, posts the replies queued on `bot-replies`. Without the X keys it logs one warning and idles, so PM2 keeps it `online`. |
+| `src/dev.ts` | — | `pnpm dev`: checks + prices in one process; the bot too only with `X_BOT_DEV=1` (use a test bot account: the one-bot lock only covers processes on the same Redis). |
 
 Every process loads the repo-root `.env` (`loadEnv()` from `@apecheck/core/node`; `APECHECK_ENV_FILE` picks another file,
 and under `NODE_ENV=test` inherited variables win so a test can never be pointed at the dev database).
@@ -40,7 +40,7 @@ whose check another run took over, stops without writing, publishing or replying
 | C claims | `AI_MODEL_FAST` | Up to `TUNING.maxClaims` claims from the hero, footer, docs, post and X bio. `ClaimsOutZ` + `normaliseClaims`. |
 | D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin". |
 | E judge | `AI_MODEL_JUDGE` | Claim statuses with one-sentence evidence citing a step, `acct`/`git` (used only where Stage D could not decide, and never above `warn`), summary ≤ 180 chars, coin summary. `JudgeOutZ` + `normaliseJudge`. The model never sees or picks a score. A judge that times out, or a model that fails and is replaced by the stand-in (claims or judge), leaves a `warn` step ("Claim review timed out; used the simple rules"). |
-| F save | no | `scoreCheck()` from core. One transaction: signals, `CheckEvidence`, scores, bands, areas, claims (in extraction order, `Claim.idx` 0..n-1), `CoinFacts` (with `deployerAddress` whenever the wallet is known), Deployer upsert, `priceAtCheck`/`mcAtCheck`, first `PricePoint`, `Target.last*`, `isLatest` moved to this check. Then the share card (`GET WEB_INTERNAL_URL/card/<shortId>.png`, 5 s, skipped with a log line when the web app is down) → `SCREENSHOT_DIR/cards/<shortId>.png`, `done` on `check:{id}`, `end` on `live`, the `bot-replies` job for bot checks, and the webhooks hook (a no-op until M4). |
+| F save | no | `scoreCheck()` from core. One transaction: signals, `CheckEvidence`, scores, bands, areas, claims (in extraction order, `Claim.idx` 0..n-1), `CoinFacts` (with `deployerAddress` whenever the wallet is known), Deployer upsert, `priceAtCheck`/`mcAtCheck`, first `PricePoint`, `Target.last*`, `isLatest` moved to this check. Then the share card (`GET WEB_INTERNAL_URL/card/<shortId>.png`, 5 s, skipped with a log line when the web app is down) → `SCREENSHOT_DIR/cards/<shortId>.png`, `done` on `check:{id}`, `end` on `live`, a `bot-replies` job for every X mention still waiting on the check (`BotMention` `QUEUED`, done or failed), and the webhooks hook (a no-op until M4). |
 
 An unrecoverable error (e.g. input that isn't a target) marks the check `FAILED` with a final `fail` step and a
 `done` message. `Check.error` (public through the API) only ever holds that plain sentence ("The check hit an error
@@ -110,6 +110,110 @@ The log, the claims and the summary never turn "a source was down" into a findin
   (an app that opens, or a dialog, doesn't show the chain), never marks an "AI agent" claim seen (a working swap doesn't
   show one), and cites why an X account is unknown ("@x: account could not be read").
 
+## X bot (`src/bot/*`, HANDOFF §7, §11)
+
+`startBotWorker()` (`bot/index.ts`) is what `worker-bot` runs. It needs `XSource.mentions()` / `reply()` from
+`@apecheck/sources` and the four OAuth 1.0a user keys of the bot account (`X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
+`X_ACCESS_SECRET`, env only); without them it warns once and idles. `X_BOT_USER_ID` is recommended (without it the
+adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
+
+- **One active bot.** A Redis lock (`bot:lock`, `SET NX EX`, TTL max(60 s, 3 polls), refreshed every poll and during a
+  long batch). A second `worker-bot` stands by and takes over when the lock expires. Only the holder polls and runs the
+  reply worker, so two processes never double-reply.
+- **Polling.** Every `BOT_POLL_SECONDS`: `mentions(since_id)`, oldest first. `since_id` lives in Redis (`bot:since_id`)
+  and only moves after the whole batch was stored and handled; on a cold start it is the newest handled
+  `BotMention.tweetId` (or just below the oldest one still `RECEIVED`, so a mention whose handling was cut off is read
+  again).
+- **Store first** (`bot/handle.ts`). Every mention becomes a `BotMention` row before anything is decided
+  (`createMany … skipDuplicates` on the unique tweet id): whoever inserts it handles it, once. A mention already stored
+  is never handled again, so a re-delivered mention is never answered twice — except one still `RECEIVED` whose handling
+  was cut off: a lease (`bot:handling:<tweetId>`, 120 s) is held while a mention is handled; a process that dies
+  mid-mention leaves the row `RECEIVED` and the next poll stops there (since_id kept) until the lease is gone, then
+  handles it. A transient database / Redis error (Prisma P1001/P1002/P1008/P1017/P2024/P2034, ioredis connection
+  errors) leaves the row `RECEIVED`, lets go of the lease and stops the poll, so the next poll handles it; any other
+  error marks it `FAILED`. `BotMention.text` is what the author typed
+  (X's reply prefix left out): what the /bot page shows and what a follow-up asks. `BotMention.tagged` records that the
+  author typed the bot's handle (not a retweet, not the bot itself), whatever the rules then do with it: `/v1/bot/stats`
+  counts those authors as the accounts that have tagged the bot.
+- **Rules, in order** (status `IGNORED` + `ignoreReason`, no reply, unless said otherwise):
+  1. the bot itself (`self`), retweets (`retweet`), mentions older than `TUNING.botMaxMentionAgeHours` = 12 h when first
+     read (`stale`: a backlog after downtime), accounts younger than `TUNING.botMinAccountAgeDays` = 7 days
+     (`young_account`; the age comes with the mention, else `getUserById`; unknown is not held against anyone);
+  2. **follow-ups**: a reply to (or a quote of) one of the bot's own verdict (or follow-up) posts (`inReplyToId` /
+     `quotedId` = some `BotMention.replyTweetId`) is a question about that check (`kind: 'followup'`, `isFollowUp`) —
+     unless the author typed the bot's handle with a new link, contract or X post of another target (or a bare
+     "@ApeCheckBot @project"): that is a check of it (rules 4–5). An @handle inside a question ("is the @orbitxyz team
+     doxxed?") stays a question. Tagging the bot under its "Couldn't finish" post runs that check's target again. A Pro/Max author
+     (`User.tier` through `User.xUserId`, linked in M3) gets an answer from that check's stored data only
+     (`loadAnswerData` + `ai.answer`, `AI_MODEL_JUDGE`), saved as an `Ask` (via `BOT`, `askerHandle`) with
+     `Check.asksCount + 1`. Anyone else gets one line pointing to the site ("Follow-up answers here are for Pro holders.
+     The full report is on the ApeCheck site."), once per person per thread (`pointer_already_sent`), no URL unless
+     `BOT_INCLUDE_LINK`. Empty questions (`empty_question`) and replies to a "Couldn't finish" post (`no_report`) get none;
+  3. the author has to have **typed** the bot's handle: X's `display_text_range` (`XPost.displayTextRange`); when X sent
+     none, the leading @handles X carries into a reply (the parent's author and its mentions) are its prefix. A bot
+     handle only in that prefix is someone chatting further down a thread the bot is in (`not_tagged`) — except a direct
+     reply to the bot's help line (answering "include its link or contract" with the link);
+  4. **target** (`bot/resolve.ts`, `resolveBotTarget()`, pure): a contract or link (project site, X post, chart/explorer
+     link with a contract) written in the mention (a quoted post counts as a link; links to and quotes of the bot's own
+     posts and apecheck.io don't), else the links and contracts of the post it replies to (never its @handles: "Audited
+     by @CertiK" names an auditor; cashtags never count), else an @handle typed in the mention (it never beats the
+     parent's link: people tag friends next to the bot), else that post's author's profile; contract > site > X post >
+     @handle when several appear in one post. A post it replies to that is itself a tag of the bot is a request, not a
+     project post: its author (who asked) is never checked; the target is the earlier tag's check when it got one (so a
+     second tag in the thread joins it), else what that tag named, else what it was under (the post above it, read with
+     `getPost`). When only a post's author (or nothing) is found and the thread already has a public check, that check
+     (a tag under the project's own "2/" post). Nothing → the help line "Tag me under a project's post, or include its
+     link or contract." (`kind: 'help'`), at most once per thread (`help_already_sent`);
+  5. **one check per target**: the same target already checked in this thread (running, or done at any age), else the
+     shared `findReusableCheck()` of `@apecheck/db` (same rules as `POST /v1/checks`: the same target running, or a verdict
+     younger than `CACHE_HOURS`), else `createCheck()` (via `BOT`, `requesterHandle`, `postId` for an X post, the linked
+     `User` as requester) + a `checks` job with `PRIORITY.bot`, all under the API's `lock:create:<key>` lock. The mention is
+     linked (`checkId`, `targetKey`, `kind: 'check'`, `QUEUED`) before the job is queued. A finished check (a cached
+     verdict) is answered at once; a running one when Stage F queues the reply of **every** `QUEUED` mention linked to it.
+     **Tagging twice in the same thread never makes a second check.** Another account's tag in the thread gets its own reply
+     with the same verdict; the same account re-tagging for the same check is linked to it and not answered again
+     (`answered_in_thread`: the thread already has, or will get, their answer, and X refuses a repeated post).
+  Rules 2, 4 and 5 count against the hourly limits before anything starts (`bot/limits.ts`): `BOT_USER_HOURLY` per free
+  account, `BOT_PRO_USER_HOURLY` for Pro/Max, `BOT_HOURLY_CAP` for the bot (`user_limit` / `global_limit`). A mention
+  is counted when it is accepted (each accepted mention gets exactly one reply), so a burst can't overshoot while checks
+  run; one Lua script moves both counters (fixed UTC hours). Posted replies are counted in `bot:replied:<hour>`.
+- **Replies** (`bot/reply.ts`, the `bot-replies` consumer, jobId = mention id). Only ever to the stored mention's own
+  tweet id, never without a stored `BotMention`, and notifying the asker only: X would put the mention's author and
+  every account the mention names (its reply prefix included) in the reply's "Replying to"; all but the author are
+  stored on the mention (`BotMention.replyExcludeIds`, `bot/mention.ts` `replyExcludeIds()`) and sent with every reply
+  — verdict, "Couldn't finish", help, follow-up — as `reply.exclude_reply_user_ids`. Text from `bot/compose.ts` (pure):
+  ```
+  LIKELY LARP (37/100) · Coin: SKETCHY (37)
+  'Launch app' does nothing; GitHub pushed in one burst at launch.
+  Checks the claims, not the team. DYOR.
+  ```
+  No "· Coin: …" without a coin; a FAILED check: "Couldn't finish this check. Try again in a few minutes." Max 280
+  counted the way X counts (`bot/xtext.ts`: URL = 23, CJK and other wide characters = 2, any emoji = 2, NFC); the summary is
+  cut at a word boundary with "…". `xLength` is an upper bound: a domain under a TLD the list in `xtext.ts` doesn't know
+  counts max(its length, 23), since X links every gTLD. `BOT_INCLUDE_LINK=true` appends `apecheck.io/c/<id>`
+  (`APP_URL`'s host). Model-written text (summary, answers, and the stored `Ask.answer`) is built from untrusted pages
+  and questions (HANDOFF §11), so it never mentions anyone (the "@" of any handle is dropped) and never carries a link:
+  scheme URLs are dropped and every other domain is defanged (`orbit[.]xyz`), whatever its TLD; a model line in which
+  anything could still be a link is left out. Right before posting, a reply holding any link but the opt-in report
+  link is refused (`FAILED`). A verdict carries the share card PNG:
+  `SCREENSHOT_DIR/cards/<shortId>.png` (Stage F), else `WEB_INTERNAL_URL/card/<shortId>.png` (5 s), else text only.
+  Success → `REPLIED`, `replyTweetId`, `replyText`, `repliedAt`. A Redis marker (`bot:posted:<id>`) written as soon as X
+  accepted the post makes a retry record it instead of posting again. **Nothing is answered twice**: a second marker
+  (`bot:posting:<id>`) is written right before the POST. A failure is read for what it says about the post
+  (`replyFailure()`): 429 or a connection that never opened → not sent, retried (3 attempts, backoff type `x-reply`:
+  30 s, 60 s, or until X's rate-limit reset, max 30 min); a timeout, 5xx, dropped connection or unreadable answer →
+  unknown (X may have created the reply): the marker stays and the next attempt first looks for the bot's reply on X
+  (`XSource.findReply`, `GET /2/users/:id/tweets?since_id=<mention>`, an owned read), records it if found, posts only
+  if not, and never posts when the lookup fails; the same lookup runs after a process died mid-POST. "Duplicate
+  content" right after such an attempt means it posted: `REPLIED` (post id unknown when the lookup still misses it),
+  never `FAILED`. A refusal (other 4xx, a first-attempt duplicate) or the last attempt → `FAILED` with the reason in
+  `ignoreReason`.
+- **Lost reply jobs.** On taking over the lock and every 5 minutes, `sweepLostReplies()` queues the reply again for any
+  mention `QUEUED` for 5+ minutes (and less than 24 h) that is a help / follow-up reply or linked to a `DONE` / `FAILED`
+  check, with no waiting, delayed or running job (a crash between `QUEUED` and the enqueue, a failed Stage F enqueue, a
+  job that failed for good); a finished job with that id is removed first. After 3 re-queues it is given up (`FAILED`).
+  A check job that finds its check already finished also queues the replies of its waiting mentions.
+
 ## Screenshot retention (`src/maintenance/shots.ts`, HANDOFF §12.6)
 
 A daily repeatable job (`shots-cleanup`, `20 3 * * *` UTC) on the `prices` queue deletes `SCREENSHOT_DIR/<checkId>/` and
@@ -178,7 +282,9 @@ Coins whose latest finished check is ≤ 30 days old, on that check's cadence (a
 
 ## Environment
 
-All from the repo-root `.env` (see `.env.example`). Used here: `DATABASE_URL`, `REDIS_URL`, `ANTHROPIC_API_KEY`,
+All from the repo-root `.env` (see `.env.example`). worker-bot: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
+`X_ACCESS_SECRET`, `X_BEARER_TOKEN` (optional), `X_BOT_USER_ID`, `X_BOT_HANDLE`, `BOT_POLL_SECONDS`, `BOT_USER_HOURLY`,
+`BOT_PRO_USER_HOURLY`, `BOT_HOURLY_CAP`, `BOT_INCLUDE_LINK`, `APP_URL`, `CACHE_HOURS`. Used here: `DATABASE_URL`, `REDIS_URL`, `ANTHROPIC_API_KEY`,
 `AI_BASE_URL`, `AI_MODEL_JUDGE`, `AI_MODEL_FAST`, `CHECK_BUDGET_SECONDS`, `CHECK_MAX_AGENT_ACTIONS`,
 `MAX_CONCURRENT_BROWSERS`, `SCREENSHOT_DIR`, `WEB_INTERNAL_URL`, `OUTBOUND_PROXY`, `SSRF_ALLOW_HOSTS` (dev/test only),
 `BROWSER_WS_ENDPOINT` + `BROWSER_GUARD_PORT` (production browser host),
@@ -190,6 +296,7 @@ All from the repo-root `.env` (see `.env.example`). Used here: `DATABASE_URL`, `
 pnpm --filter @apecheck/worker dev            # checks + prices, reloads on change
 pnpm --filter @apecheck/worker start:checks   # what PM2 runs
 pnpm --filter @apecheck/worker start:prices
+pnpm --filter @apecheck/worker start:bot      # worker-bot (idles without the X keys)
 ```
 
 Chromium comes from Playwright (`pnpm exec playwright install --with-deps chromium` on the server).
@@ -209,6 +316,26 @@ with a working Connect wallet button, a main button that only opens a dialog, U+
 Cloudflare challenge, error text); `test/pipeline-timing.test.ts` covers late and repeated work (an abandoned Stage A, a
 coin whose Stage D ran short, model fallbacks in the log, re-runs, a run that lost its check, stuck-check recovery, the
 browser pool relaunch).
+
+The bot: `test/bot-resolve.test.ts` (target resolution table: links, contracts, handles, reply prefix, quotes, the bot's own
+links, several candidates, non-Latin and empty text), `test/bot-compose.test.ts` (reply format, X lengths with URLs / CJK /
+emoji, link on/off, no coin, failed), `test/bot.test.ts` (with a `FakeX`, `test/fake-x.ts`: ignore rules, limits,
+idempotency, one check per thread, cache hits, follow-ups Pro / non-Pro, posting retries and refusals, since_id, the lock
+and the idle mode) and `test/bot-flow.test.ts` (M2 acceptance through the real queues and pipeline: a tag under a project
+post whose link is the local working-app fixture gets one reply with the verdict and the card PNG, and a second tag in the
+thread makes no second check). The same on the real X adapter: `test/bot-adapter.test.ts` (the adapter's recorded API
+fixtures over a fake Http) and `test/bot-x-e2e.test.ts`, where `createSources()` builds the X adapter over `test/x-api.ts`,
+a stateful api.x.com emulator (OAuth 1.0a signatures verified independently, nonces never reused, mentions timeline with
+since_id / paging / field projection / a 429, the v2 chunked media upload checked byte for byte, POST /2/tweets with
+X's reply, media and duplicate rules) and `sources.x` drives worker-bot, the queues and the pipeline: one reply with the
+card per answered mention, one check per thread, a cached answer elsewhere, and a batch cut short by a 429 handled once;
+the emulator builds each reply's "Replying to" list like X (minus `exclude_reply_user_ids`), which must be the asker
+alone. `test/bot-reply-mentions.test.ts`: a tag naming 25 accounts, the help line and a follow-up pointer notify only
+the asker. `test/bot-threads.test.ts`: second tags in a thread (replying to a tag, to the project's "2/" post, a tag
+never stored), retry under "Couldn't finish", answering the help line, @handles in follow-ups, quotes of the bot's
+verdict, mentions cut off by a crash or a transient error, the lost-reply sweep (also on the real queue), reply POSTs
+with an unknown outcome on the FakeX and on the real X adapter (one POST, the lookup's id), `findReply` on the X API
+emulator, and links in model-written text (reply and stored Ask).
 
 Tests use the database `apecheck_test_worker` (created and migrated by `test/global-setup.ts`) and Redis db 2, never
 the dev data. External data sources are replaced by `test/fakes.ts` (`FakeSources`, same `Sources` contract); fixture

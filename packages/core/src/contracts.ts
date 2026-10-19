@@ -22,6 +22,30 @@ export interface WebhookJob { webhookId: string; event: 'check.completed' | 'wat
 /** BullMQ priorities: lower number = earlier. Pro/Max users get the priority queue. */
 export const PRIORITY = { max: 1, pro: 2, free: 5, bot: 5, recheck: 8 } as const;
 
+/**
+ * Options of every "check" job (API and bot; jobId = checkId). The worker throws only when the database fails while
+ * it claims the check (runCheck catches everything after that), so a retry never re-runs stages; the last failure
+ * marks the check FAILED.
+ */
+export const CHECK_JOB_OPTIONS = {
+  removeOnComplete: { count: 2000, age: 24 * 3600 },
+  removeOnFail: { count: 5000, age: 7 * 24 * 3600 },
+  attempts: 3,
+  backoff: { type: 'exponential' as const, delay: 5000 },
+};
+
+/**
+ * Options of every "reply" job on bot-replies (worker-checks' Stage F and worker-bot; jobId = BotMention.id, so a
+ * mention is queued at most once). Posting is retried when X answers 429/5xx (max 3 attempts) with worker-bot's
+ * "x-reply" backoff: exponential from `delay`, or until X's rate-limit reset when it named one (capped).
+ */
+export const BOT_REPLY_JOB_OPTIONS = {
+  removeOnComplete: 1000,
+  removeOnFail: 1000,
+  attempts: 3,
+  backoff: { type: 'x-reply', delay: 30_000 },
+};
+
 /** Redis pub/sub channel with every step of one check (internal Check.id, not shortId). */
 export const checkChannel = (checkId: string) => `check:${checkId}`;
 /** Redis pub/sub channel announcing checks starting/finishing (for /v1/live listeners). */

@@ -17,3 +17,5 @@ if (process.env.NODE_ENV !== 'production') g.__apecheckPrisma = prisma;
 /** Decimal | null → number | null for DTOs */
 export const num = (d: Prisma.Decimal | number | null | undefined): number | null =>
   d == null ? null : typeof d === 'number' ? d : d.toNumber();
+
+export * from './checks';

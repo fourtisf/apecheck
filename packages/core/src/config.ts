@@ -71,6 +71,8 @@ export const TUNING = {
   sinceWindowDays: 30,
   /** Bot: ignore accounts younger than this. */
   botMinAccountAgeDays: 7,
+  /** Bot: a mention older than this when the bot first reads it (a backlog after downtime, tags from before launch) gets no reply. */
+  botMaxMentionAgeHours: 12,
   /** Screenshots and saved share cards of checks finished longer ago than this are deleted (HANDOFF §12.6)... */
   shotsKeepDays: 30,
   /** ...except for checks in the top this-many of the feed's Most checked, Most real and Least real lists. */

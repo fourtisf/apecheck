@@ -17,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@apecheck/core": "workspace:*",
     "@prisma/client": "~6.19.3",
     "dotenv": "^16.6.1"
   },

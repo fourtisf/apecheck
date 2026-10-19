@@ -444,11 +444,18 @@ describe('pipeline run(checkId)', () => {
     expect(c.summary).toMatch(/^The site doesn't load/);
   });
 
-  it('a bot-triggered check enqueues the bot reply', async () => {
+  it('a bot-triggered check enqueues the reply of every mention still waiting on it', async () => {
     const check = await createCheck(sites.get('waitlist')!.url);
-    const mention = await prisma.botMention.create({ data: { tweetId: '1849000000000000001', authorId: '42', authorHandle: 'someone', text: '@ApeCheckBot check this', checkId: check.id } });
+    const mention = (tweetId: string, status: 'QUEUED' | 'IGNORED' | 'REPLIED', authorId: string) =>
+      prisma.botMention.create({ data: { tweetId, authorId, authorHandle: `u${authorId}`, text: '@ApeCheckBot check this', checkId: check.id, status, kind: status === 'IGNORED' ? 'ignored' : 'check' } });
+    const first = await mention('1849000000000000001', 'QUEUED', '42');
+    // another account's tag in the same thread reused the check
+    const second = await mention('1849000000000000002', 'QUEUED', '43');
+    // a re-tag linked to the check but not answered again, and one already answered
+    await mention('1849000000000000003', 'IGNORED', '42');
+    await mention('1849000000000000004', 'REPLIED', '44');
     await runCheck(check.id, deps());
-    expect(botReplies).toEqual([mention.id]);
+    expect(botReplies).toEqual([first.id, second.id]);
   });
 
   it('an unrecoverable input fails the check with a final fail step and a done message', async () => {

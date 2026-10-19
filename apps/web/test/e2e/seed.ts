@@ -125,7 +125,7 @@ export async function seedBotReply(db: Db, posted: boolean) {
   });
   await db.botMention.create({
     data: {
-      tweetId: '9001', authorId: '77', authorHandle: BOT_CHECK.mentionBy, text: BOT_CHECK.mentionText, inReplyToId: '1849', status: 'REPLIED',
+      tweetId: '9001', authorId: '77', authorHandle: BOT_CHECK.mentionBy, text: BOT_CHECK.mentionText, tagged: true, inReplyToId: '1849', status: 'REPLIED',
       checkId: c.id, replyTweetId: '9002', repliedAt: minutesAgo(3), createdAt: minutesAgo(6),
     },
   });

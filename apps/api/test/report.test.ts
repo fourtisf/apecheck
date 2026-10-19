@@ -361,11 +361,17 @@ describe('GET /v1/checks/:id', () => {
     const evidence: CheckEvidence = { post: { id: '1849', author: 'kairolabs', authorId: '42', text: 'Kairo v2 is live. Try it.', createdAt: '2026-10-18T10:00:00.000Z' } };
     await seedCheck(h.prisma, { targetId: t.id, shortId: 'post001', status: 'DONE', isLatest: true, narScore: 50, totalScore: 50, narBand: 'partly', evidence: evidence as object, finishedAt: new Date() });
     const r = (await new Client(h.app).get('/v1/checks/post001')).json<CheckReportDTO>();
-    expect(r.post).toEqual({ author: 'kairolabs', text: 'Kairo v2 is live. Try it.', createdAt: '2026-10-18T10:00:00.000Z' });
+    // with its X id, which /bot compares to the mention's reply target
+    expect(r.post).toEqual({ id: '1849', author: 'kairolabs', text: 'Kairo v2 is live. Try it.', createdAt: '2026-10-18T10:00:00.000Z' });
 
     const t2 = await seedTarget(h.prisma, { kind: 'POST', handle: 'other', name: '@other', key: 'post:1850' });
     await seedCheck(h.prisma, { targetId: t2.id, shortId: 'post002', status: 'DONE', isLatest: true, narScore: 50, totalScore: 50, narBand: 'partly', evidence: { post: null }, finishedAt: new Date() });
     expect((await new Client(h.app).get('/v1/checks/post002')).json<CheckReportDTO>().post).toBeNull();
+
+    // a post stored without a usable id keeps its text, with a null id
+    const t3 = await seedTarget(h.prisma, { kind: 'POST', handle: 'third', name: '@third', key: 'post:1851' });
+    await seedCheck(h.prisma, { targetId: t3.id, shortId: 'post003', status: 'DONE', isLatest: true, narScore: 50, totalScore: 50, narBand: 'partly', evidence: { post: { id: 1851, author: 'third', text: 'gm' } }, finishedAt: new Date() });
+    expect((await new Client(h.app).get('/v1/checks/post003')).json<CheckReportDTO>().post).toEqual({ id: null, author: 'third', text: 'gm', createdAt: null });
   });
 
   it('marks the requester\'s own check as mine and hides private checks from everyone else', async () => {

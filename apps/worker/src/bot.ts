@@ -1,17 +1,13 @@
 /**
- * worker-bot (PM2): the X bot is milestone M2. Until then this process says so once and idles until PM2 stops it,
- * so PM2 shows it online instead of restarting an exited process over and over. M2 replaces this file.
+ * worker-bot (PM2): the X bot @ApeCheckBot (HANDOFF §7). Polls the bot's mentions, starts or reuses checks, and posts
+ * the replies queued on "bot-replies". Without the X keys it says so once and idles, so PM2 keeps it online.
  */
-export {};
+import { loadWorkerEnv } from './env';
+import { createLogger } from './log';
+import { startBotWorker } from './bot/index';
+import { onShutdown } from './worker';
 
-console.log('[bot] X bot arrives in M2; idling until stopped');
-
-// an interval keeps the event loop alive; it does no work
-const keepAlive = setInterval(() => undefined, 1 << 30);
-const stop = (signal: string) => {
-  clearInterval(keepAlive);
-  console.log(`[bot] ${signal}: stopped`);
-  process.exit(0);
-};
-process.on('SIGTERM', () => stop('SIGTERM'));
-process.on('SIGINT', () => stop('SIGINT'));
+const env = loadWorkerEnv();
+const log = createLogger('bot');
+const handle = await startBotWorker({ env, log });
+onShutdown(() => handle.close(), log);

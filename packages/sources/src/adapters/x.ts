@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import type { Env } from '@apecheck/core';
 import { warnOnce } from '@apecheck/core/node';
-import type { Http, HttpResponse, XPost, XSource, XUser } from '../types';
+import type { Http, HttpResponse, XBotSource, XPost, XReplyOptions, XUser } from '../types';
 import { HttpError } from '../http';
 import { formBody, signRequest, type OAuth1Credentials } from '../oauth1';
 import { ErrorState, errMsg, uniq } from '../util';
@@ -36,12 +36,18 @@ const UPLOAD_TIMEOUT_MS = 30_000;
 /** back-off when a 429 carries no usable reset header */
 const DEFAULT_BACKOFF_MS = 60_000;
 const RE_ID = /^\d{1,25}$/;
+/**
+ * Most user ids reply() leaves out of a reply's auto-filled mentions. X carries at most 50 accounts into a reply; a
+ * longer list is refused (nothing posted) instead of cut, so a cut never leaves someone to be notified.
+ */
+export const X_REPLY_EXCLUDE_MAX = 100;
 
 const UrlEntityZ = z.object({ url: z.string().optional(), expanded_url: z.string().optional(), unwound_url: z.string().optional() });
 const EntitiesZ = z
   .object({
     urls: z.array(UrlEntityZ),
-    mentions: z.array(z.object({ username: z.string() })),
+    // id: needed to leave the account out of the bot's reply (exclude_reply_user_ids); an odd value is ignored
+    mentions: z.array(z.object({ username: z.string(), id: z.string().regex(RE_ID).nullish().catch(null) })),
     cashtags: z.array(z.object({ tag: z.string() })),
   })
   .partial();
@@ -92,6 +98,14 @@ const MentionsResponseZ = z.object({
     .nullish(),
 });
 const IdDataZ = z.object({ data: z.object({ id: z.string().regex(RE_ID) }) });
+/** GET /2/users/:id/tweets with tweet.fields=referenced_tweets (findReply) */
+const TimelineResponseZ = z.object({
+  data: z.array(z.object({ id: z.string().regex(RE_ID), referenced_tweets: z.array(z.object({ type: z.string(), id: z.string() })).nullish() })).nullish(),
+  errors: ErrorsZ,
+  meta: z.object({ result_count: z.number().nullish(), next_token: z.string().nullish() }).partial().nullish(),
+});
+/** pages of 100 of the bot's own posts findReply() reads at most */
+export const FIND_REPLY_MAX_PAGES = 3;
 const ProcessingInfoZ = z.object({
   state: z.string(),
   check_after_secs: z.number().nullish(),
@@ -138,6 +152,10 @@ export function mapPost(t: XTweetRaw, users: XUserRaw[]): XPost {
   );
   const authorRaw = users.find(u => u.id === t.author_id) ?? null;
   const author = authorRaw ? mapUser(authorRaw) : null;
+  const mentioned = ents.flatMap(e => e.mentions ?? []);
+  // an entity without an id (note_tweet entities may lack it): the user expanded by entities.mentions.username
+  const idOf = (handle: string) => users.find(u => u.username.toLowerCase() === handle.toLowerCase())?.id;
+  const mentionUserIds = uniq(mentioned.map(m => m.id ?? idOf(m.username)).filter((id): id is string => !!id && RE_ID.test(id)));
   return {
     id: t.id,
     text: t.note_tweet?.text ?? t.text,
@@ -147,7 +165,8 @@ export function mapPost(t: XTweetRaw, users: XUserRaw[]): XPost {
     createdAt: t.created_at ?? null,
     conversationId: t.conversation_id ?? null,
     urls,
-    mentions: uniq(ents.flatMap(e => (e.mentions ?? []).map(m => m.username))),
+    mentions: uniq(mentioned.map(m => m.username)),
+    mentionUserIds,
     cashtags: uniq(ents.flatMap(e => (e.cashtags ?? []).map(c => c.tag.toUpperCase()))),
     replyToId: t.referenced_tweets?.find(r => r.type === 'replied_to')?.id ?? null,
     quotedId: t.referenced_tweets?.find(r => r.type === 'quoted')?.id ?? null,
@@ -265,7 +284,7 @@ interface ApiCall {
   maxBytes?: number;
 }
 
-export class XAdapter implements XSource {
+export class XAdapter implements XBotSource {
   readonly configured: boolean;
   readonly canPost: boolean;
   private readonly errors = new ErrorState('x');
@@ -543,7 +562,24 @@ export class XAdapter implements XSource {
     return id;
   }
 
-  async reply(inReplyToId: string, text: string, mediaPng?: Buffer | null): Promise<string | null> {
+  /** The bot's own user id when known without a request (X_BOT_USER_ID, or an earlier lookup). */
+  private async knownBotId(): Promise<string | null> {
+    const fixed = this.env.X_BOT_USER_ID?.trim();
+    if (fixed) return RE_ID.test(fixed) ? fixed : null;
+    return this.botId ? this.botId.catch(() => null) : null;
+  }
+
+  /**
+   * reply.exclude_reply_user_ids: the caller's ids, numeric only, once each, without the bot's own id. null when
+   * there are more than X_REPLY_EXCLUDE_MAX (the reply is not posted).
+   */
+  private async replyExcludes(ids: XReplyOptions['excludeUserIds']): Promise<string[] | null> {
+    const self = await this.knownBotId();
+    const list = uniq((ids ?? []).filter(id => typeof id === 'string' && RE_ID.test(id) && id !== self));
+    return list.length > X_REPLY_EXCLUDE_MAX ? null : list;
+  }
+
+  async reply(inReplyToId: string, text: string, mediaPng?: Buffer | null, opts: XReplyOptions = {}): Promise<string | null> {
     if (!this.canPost) {
       warnOnce('x-post', 'X posting not configured (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET empty): the bot does not reply');
       return null;
@@ -561,6 +597,12 @@ export class XAdapter implements XSource {
       this.errors.fail('reply', new Error(limited));
       return null;
     }
+    // X adds the replied-to post's author and everyone it mentions to a reply: only that author may stay (HANDOFF §7)
+    const exclude = await this.replyExcludes(opts?.excludeUserIds);
+    if (!exclude) {
+      this.errors.fail('reply', new Error(`not posted: more than ${X_REPLY_EXCLUDE_MAX} accounts to leave out of the reply`));
+      return null;
+    }
     let mediaId: string | null = null;
     if (mediaPng?.length) {
       try {
@@ -571,11 +613,54 @@ export class XAdapter implements XSource {
       }
     }
     try {
-      const body = { text, reply: { in_reply_to_tweet_id: inReplyToId }, ...(mediaId ? { media: { media_ids: [mediaId] } } : {}) };
+      const body = {
+        text,
+        reply: { in_reply_to_tweet_id: inReplyToId, ...(exclude.length ? { exclude_reply_user_ids: exclude } : {}) },
+        ...(mediaId ? { media: { media_ids: [mediaId] } } : {}),
+      };
       return IdDataZ.parse(await this.api('tweets', 'POST', `${X_API}/tweets`, { json: body })).data.id;
     } catch (e) {
       this.errors.fail('reply', e);
       return null;
+    }
+  }
+
+  /**
+   * The bot's own reply to `inReplyToId`, if it posted one: looked up among the bot's posts newer than that post
+   * (GET /2/users/:id/tweets?since_id=…, OAuth 1.0a owned read, up to FIND_REPLY_MAX_PAGES pages of 100). Its id, or
+   * null when there is none. Tells whether a reply whose POST timed out (or got a 5xx) went out after all.
+   * THROWS when the lookup fails or cannot be complete, unlike the other methods: a failed lookup must never be
+   * taken for "not posted".
+   */
+  async findReply(inReplyToId: string): Promise<string | null> {
+    try {
+      if (!this.creds) throw new Error('X OAuth 1.0a keys not configured');
+      if (!RE_ID.test(inReplyToId)) throw new Error(`invalid post id ${JSON.stringify(inReplyToId).slice(0, 40)}`);
+      const limited = this.backedOff('timeline');
+      if (limited) throw new Error(limited);
+      const botId = await this.botUserId('oauth1');
+      if (!botId) throw new Error('the bot user id is unknown');
+      let token: string | null = null;
+      for (let page = 0; page < FIND_REPLY_MAX_PAGES; page++) {
+        const params: [string, string][] = [
+          ['since_id', inReplyToId],
+          ['max_results', '100'],
+          ['tweet.fields', 'referenced_tweets'],
+          ...(token ? ([['pagination_token', token]] as [string, string][]) : []),
+        ];
+        const res = TimelineResponseZ.parse(
+          await this.api('timeline', 'GET', `${X_API}/users/${botId}/tweets?${formBody(params)}`, { maxBytes: 4 * 1024 * 1024 }),
+        );
+        if (!res.data && res.errors?.[0]) throw new Error(res.errors[0].detail ?? res.errors[0].title ?? 'no data');
+        const hit = (res.data ?? []).find(t => t.referenced_tweets?.some(r => r.type === 'replied_to' && r.id === inReplyToId));
+        if (hit) return hit.id;
+        token = res.meta?.next_token ?? null;
+        if (!token) return null;
+      }
+      throw new Error(`more than ${FIND_REPLY_MAX_PAGES * 100} posts since ${inReplyToId}: not all were read`);
+    } catch (e) {
+      this.errors.fail('findReply', e);
+      throw e;
     }
   }
 }

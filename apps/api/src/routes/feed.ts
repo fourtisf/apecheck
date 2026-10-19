@@ -37,6 +37,15 @@ const IDS_MAX = 100;
 /** The feed shows one row per target: its newest finished, public check. */
 const FEED_BASE: Prisma.CheckWhereInput = { isLatest: true, status: 'DONE', isPrivate: false };
 
+/**
+ * `via=bot` ("From the bot", /bot "Recent bot replies"): checks the bot started, and checks the bot answered on X
+ * from cache (a verdict reply was posted about them, M2). `via=web|api`: who started the check.
+ */
+export function viaWhere(via: 'bot' | 'web' | 'api'): Prisma.CheckWhereInput {
+  if (via !== 'bot') return { via: via.toUpperCase() as 'WEB' | 'API' };
+  return { OR: [{ via: 'BOT' }, { mentions: { some: { status: 'REPLIED', OR: [{ kind: 'check' }, { kind: null }] } } }] };
+}
+
 const hasCoinWhere: Prisma.CheckWhereInput = { OR: [{ coinScore: { not: null } }, { coinFacts: { isNot: null } }] };
 
 function searchWhere(term: string, fields: ('name' | 'ticker' | 'domain' | 'handle' | 'ca')[]): Prisma.CheckWhereInput {
@@ -85,7 +94,7 @@ export function registerFeedRoutes(app: FastifyInstance, deps: AppDeps) {
       // a watched id keeps matching after a re-check: follow it to its target's latest check
       and.push({ target: { checks: { some: { shortId: { in: ids } } } } });
     }
-    if (q.via) and.push({ via: q.via.toUpperCase() as 'BOT' | 'WEB' | 'API' });
+    if (q.via) and.push(viaWhere(q.via));
     if (q.tab === 'vol') and.push(hasCoinWhere);
     if (q.type !== 'all') and.push({ target: { kind: q.type.toUpperCase() as 'COIN' | 'POST' | 'SITE' } });
     if (q.nar !== 'any') and.push({ narBand: q.nar });

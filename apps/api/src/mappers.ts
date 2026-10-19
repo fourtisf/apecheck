@@ -75,8 +75,13 @@ export const reportInclude = {
     orderBy: [{ helpful: 'desc' }, { createdAt: 'desc' }],
     include: { author: { select: { xHandle: true, evmAddress: true, solAddress: true } } },
   },
-  // the X mention a bot check answers (M2), for CheckReportDTO.botReply
-  mention: { select: { authorHandle: true, text: true, createdAt: true, replyTweetId: true, repliedAt: true } },
+  // the first verdict reply the bot posted about this check (M2), for CheckReportDTO.botReply
+  mentions: {
+    where: { status: 'REPLIED', replyTweetId: { not: null }, repliedAt: { not: null }, OR: [{ kind: 'check' }, { kind: null }] },
+    orderBy: [{ repliedAt: 'asc' }, { id: 'asc' }],
+    take: 1,
+    select: { authorHandle: true, text: true, createdAt: true, inReplyToId: true, replyTweetId: true, repliedAt: true, replyText: true },
+  },
 } satisfies Prisma.CheckInclude;
 
 export type CheckSummaryRow = Prisma.CheckGetPayload<{ include: typeof summaryInclude }>;
@@ -477,14 +482,20 @@ export function toReport(c: CheckReportRow, ctx: MapCtx): CheckReportDTO {
   };
 }
 
-/** CheckReportDTO.botReply: a bot check's mention and the time its reply was posted; nothing until it was posted. */
-export function botReplyOf(c: Pick<CheckReportRow, 'via' | 'mention'>): Pick<CheckReportDTO, 'botReply'> {
-  const m = c.mention;
-  if (c.via !== 'BOT' || !m || !m.replyTweetId || !m.repliedAt) return {};
+/**
+ * CheckReportDTO.botReply: the first verdict reply the bot really posted about this check (status REPLIED with the
+ * reply's id and time): the mention as written, the reply time and text. Nothing until a reply was posted. A check
+ * the bot answered from cache (started on the site or the API) has one too: the reply is real either way.
+ */
+export function botReplyOf(c: Pick<CheckReportRow, 'mentions'>): Pick<CheckReportDTO, 'botReply'> {
+  const m = c.mentions[0];
+  if (!m || !m.replyTweetId || !m.repliedAt) return {};
   return {
     botReply: {
-      mention: { author: m.authorHandle.replace(/^@+/, ''), text: m.text, createdAt: m.createdAt.toISOString() },
+      // the post the mention replies to: the /bot page shows the checked post as its parent only when they match
+      mention: { author: m.authorHandle.replace(/^@+/, ''), text: m.text, createdAt: m.createdAt.toISOString(), inReplyToId: m.inReplyToId ?? null },
       repliedAt: m.repliedAt.toISOString(),
+      replyText: m.replyText ?? null,
     },
   };
 }
@@ -505,12 +516,13 @@ export function coinVerdictOf(score: number | null, band: string | null): CoinVe
   return key ? (coinVerdictEnum(key) as CoinVerdictS) : null;
 }
 
-/** Check.evidence.post → the post the check read (author handle, text, time); null when there is none. */
+/** Check.evidence.post → the post the check read (X id, author handle, text, time); null when there is none. */
 export function postOf(ev: CheckEvidence): CheckReportDTO['post'] {
   const p = ev.post;
   if (!p || typeof p !== 'object' || typeof p.text !== 'string') return null;
   const createdAt = typeof p.createdAt === 'string' && Number.isFinite(Date.parse(p.createdAt)) ? new Date(p.createdAt).toISOString() : null;
-  return { author: typeof p.author === 'string' ? p.author.replace(/^@+/, '') : '', text: p.text, createdAt };
+  const id = typeof p.id === 'string' && /^\d{1,25}$/.test(p.id) ? p.id : null;
+  return { id, author: typeof p.author === 'string' ? p.author.replace(/^@+/, '') : '', text: p.text, createdAt };
 }
 
 function pickEvidence(ev: CheckEvidence): CheckReportDTO['evidence'] {

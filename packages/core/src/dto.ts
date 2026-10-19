@@ -234,17 +234,24 @@ export interface CheckReportDTO extends CheckSummaryDTO {
   /** same as reportUrl: the key the /api page documents */
   report_url: string;
   /**
-   * The X post a post check read (Check.evidence.post), for the /bot page's example thread.
-   * Absent or null for other kinds, or when the post couldn't be fetched.
+   * The X post a post check read (Check.evidence.post), for the /bot page's example thread: its X id (null for a
+   * post stored without one), author handle, text and time. Absent or null for other kinds, or when the post couldn't
+   * be fetched.
    */
-  post?: { author: string; text: string; createdAt: string | null } | null;
+  post?: { id?: string | null; author: string; text: string; createdAt: string | null } | null;
   /**
-   * The bot's reply on X, for a check the bot ran (via 'bot') once that reply was actually posted: the mention that
-   * asked for it as it was posted (BotMention author handle, text, time) and when the reply went out. Absent until
-   * then (and for every check that didn't come from the bot), so the /bot page never shows a reply that wasn't posted
-   * or words someone didn't write.
+   * The bot's verdict reply on X about this check, once that reply was actually posted: the mention that asked for it
+   * as it was posted (BotMention author handle, text, time, and the X id of the post it replies to: null when it
+   * replies to nothing), when the reply went out and the words the bot posted
+   * (BotMention.replyText; null for a reply stored without them). The first such reply when several tags reused the
+   * check. A check the bot answered from cache (started on the site) carries it too. Absent until then, and for every
+   * check the bot never answered, so the /bot page never shows a reply that wasn't posted or words someone didn't write.
    */
-  botReply?: { mention: { author: string; text: string; createdAt: string }; repliedAt: string } | null;
+  botReply?: {
+    mention: { author: string; text: string; createdAt: string; inReplyToId?: string | null };
+    repliedAt: string;
+    replyText?: string | null;
+  } | null;
 }
 
 export interface LiveCheckDTO {

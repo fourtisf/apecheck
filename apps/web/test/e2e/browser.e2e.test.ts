@@ -230,7 +230,17 @@ describe('/bot example thread', () => {
     expect(thread).toContain(`@${BOT_CHECK.mentionBy}`);
     expect(thread).toContain('Automated account');
     expect(thread).not.toContain('real or larp?');
+    // the seeded mention replies to the post the check read, so that post sits above it
+    expect(thread).toContain(POST_CHECK.text);
     await page.close();
+
+    // a quote tweet of the post replies to nothing: the thread never draws it as a reply under the post
+    await db.botMention.update({ where: { tweetId: '9001' }, data: { inReplyToId: null } });
+    const quoted = await open('/bot');
+    const qthread = (await quoted.textContent('.thread')) ?? '';
+    expect(qthread).toContain(BOT_CHECK.mentionText);
+    expect(qthread).not.toContain(POST_CHECK.text);
+    await quoted.close();
   });
 });
 

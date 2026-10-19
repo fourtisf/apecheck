@@ -533,7 +533,7 @@ describe('GET /v1/bot/stats', () => {
         createdAt, finishedAt: new Date(createdAt.getTime() + replyAfterS * 1000),
       });
       await h.prisma.botMention.create({
-        data: { tweetId: `tw${n}`, authorId: author, authorHandle: author, text: '@ApeCheckBot real?', status, createdAt, checkId: check?.id },
+        data: { tweetId: `tw${n}`, authorId: author, authorHandle: author, text: '@ApeCheckBot real?', tagged: true, status, createdAt, checkId: check?.id },
       });
     };
     await mention(1, 'a1', 'REPLIED', today(min(10)), 180);
@@ -551,16 +551,42 @@ describe('GET /v1/bot/stats', () => {
     const createdAt = today(min(30));
     const check = await seedCheck(h.prisma, { targetId: t.id, shortId: 'botr001', via: 'BOT', isLatest: false, createdAt, finishedAt: new Date(createdAt.getTime() + 100_000) });
     await h.prisma.botMention.create({
-      data: { tweetId: 'twr1', authorId: 'r1', authorHandle: 'r1', text: '@ApeCheckBot?', status: 'REPLIED', createdAt, checkId: check.id, repliedAt: new Date(createdAt.getTime() + 130_000) },
+      data: { tweetId: 'twr1', authorId: 'r1', authorHandle: 'r1', text: '@ApeCheckBot?', tagged: true, status: 'REPLIED', createdAt, checkId: check.id, repliedAt: new Date(createdAt.getTime() + 130_000) },
     });
     // mentioned yesterday, answered today: counts as a reply today
     const y = yesterday();
     await h.prisma.botMention.create({
-      data: { tweetId: 'twr2', authorId: 'r2', authorHandle: 'r2', text: '@ApeCheckBot?', status: 'REPLIED', createdAt: y, repliedAt: new Date(Math.max(Date.now() - 1000, y.getTime() + 1000)) },
+      data: { tweetId: 'twr2', authorId: 'r2', authorHandle: 'r2', text: '@ApeCheckBot?', tagged: true, status: 'REPLIED', createdAt: y, repliedAt: new Date(Math.max(Date.now() - 1000, y.getTime() + 1000)) },
+    });
+    // the bot's own post mentioning itself is stored (ignored as "self") but is not an account that tagged it
+    await h.prisma.botMention.create({
+      data: { tweetId: 'twr3', authorId: 'bot', authorHandle: 'ApeCheckBot', text: '@ApeCheckBot', status: 'IGNORED', kind: 'ignored', ignoreReason: 'self' },
     });
     const r = (await new Client(h.app).get('/v1/bot/stats')).json<BotStatsDTO>();
     expect(r.repliesToday).toBe(2);
     expect(r.accounts).toBe(2);
     expect(r.medianReplySeconds).toBeGreaterThanOrEqual(130);
+  });
+
+  it('counts only accounts that typed the handle: not thread chatter, untagged follow-ups or retweets of a tag', async () => {
+    await resetState(h);
+    type Extra = { text: string; tagged?: boolean; status?: 'REPLIED' | 'IGNORED'; kind?: string; ignoreReason?: string; isFollowUp?: boolean };
+    const row = (tweetId: string, authorId: string, extra: Extra) =>
+      h.prisma.botMention.create({ data: { tweetId, authorId, authorHandle: authorId, status: 'IGNORED', kind: 'ignored', ...extra } });
+    // the one real tag (the worker stores tagged from what the author typed)
+    await row('twt1', 'tagger', { text: '@ApeCheckBot is this real? @kairolabs', tagged: true, status: 'REPLIED', kind: 'check' });
+    // ten people arguing under the bot's reply: the bot is only in X's "Replying to" prefix
+    for (let i = 0; i < 10; i++) await row(`twt-chat${i}`, `chatter${i}`, { text: 'nah this is fake', ignoreReason: 'not_tagged' });
+    // a retweet of someone else's tag
+    await row('twt-rt', 'retweeter', { text: 'RT @tagger: @ApeCheckBot is this real?', ignoreReason: 'retweet' });
+    // a reply to the bot's verdict that never typed the handle (rule 2), answered or pointed at the report
+    await row('twt-fu1', 'follower1', { text: 'why so low?', kind: 'followup', status: 'REPLIED', isFollowUp: true });
+    await row('twt-fu2', 'follower2', { text: 'and the team?', kind: 'ignored', ignoreReason: 'pointer_already_sent', isFollowUp: true });
+    // the bot's own post
+    await row('twt-self', 'bot', { text: '@ApeCheckBot', ignoreReason: 'self' });
+    // a tag that was not answered (account too young, or over the hourly limit) is still an account that tagged it
+    await row('twt-young', 'newbie', { text: '@apecheckbot real?', tagged: true, ignoreReason: 'young_account' });
+    const r = (await new Client(h.app).get('/v1/bot/stats')).json<BotStatsDTO>();
+    expect(r.accounts).toBe(2);
   });
 });

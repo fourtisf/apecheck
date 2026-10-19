@@ -58,9 +58,14 @@ module.exports = {
       ...tsx,
       name: 'worker-bot',
       cwd: path.join(root, 'apps/worker'),
-      // M1: an idle placeholder (logs once, waits for SIGTERM) so PM2 keeps it online; M2 replaces src/bot.ts
+      // the X bot (M2): polls @ApeCheckBot's mentions, starts/reuses checks, posts the replies queued on bot-replies.
+      // One instance: a Redis lock (bot:lock) keeps any second copy on standby. Without the X OAuth 1.0a keys in .env
+      // it logs one warning and idles, so PM2 keeps it online (DEPLOY.md §14).
       script: 'src/bot.ts',
+      instances: 1,
       max_memory_restart: '512M',
+      // let a reply that is uploading its card or posting finish (and be recorded) before exit
+      kill_timeout: 30000,
     },
     {
       ...common,
