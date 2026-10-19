@@ -1,0 +1,357 @@
+// ApeCheck — PostgreSQL schema (Prisma 6)
+// Starting point: the handoff schema. Additions are marked "added:".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Written for Prisma 6.x (keeps `url` here). On Prisma 7+, delete the `url` line and
+// put the connection URL in prisma.config.ts instead — the models need no other change.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TargetKind {
+  COIN
+  POST
+  SITE
+}
+
+enum Chain {
+  SOL
+  ETH
+  BASE
+  BNB
+  ARB
+  RH   // Robinhood Chain
+  TRX
+}
+
+enum CheckStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+enum Via {
+  WEB
+  BOT
+  API
+}
+
+enum StepStatus {
+  INFO
+  OK
+  WARN
+  FAIL
+}
+
+enum Signal {
+  OK
+  WARN
+  FAIL
+}
+
+enum ClaimStatus {
+  SEEN_WORKING
+  NOT_SEEN
+  CONTRADICTED
+  CHECKS_OUT
+}
+
+enum DeployerRecord {
+  BUILDER
+  MIXED
+  SERIAL
+}
+
+enum Tier {
+  FREE
+  PRO
+  MAX
+}
+
+enum MentionStatus {
+  RECEIVED
+  IGNORED
+  QUEUED
+  REPLIED
+  FAILED
+}
+
+/// One project as people refer to it. Several checks can point at the same target.
+model Target {
+  id         String     @id @default(cuid())
+  kind       TargetKind
+  chain      Chain?
+  ca         String?    // contract / mint address
+  domain     String?
+  handle     String?    // project X handle, without @
+  ticker     String?
+  name       String     // display name: $TICKER, @handle or domain
+  key        String     @unique // normalised lookup key, e.g. "ca:sol:<mint>", "site:orbitswap.xyz", "x:kairolabs"
+  checkCount Int        @default(0)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  // added: latest market snapshot, kept current by worker-prices (feed MC column, "5m volume" tab, since-check)
+  lastPrice      Decimal?  @db.Decimal(38, 18)
+  lastMc         Decimal?  @db.Decimal(24, 2)
+  lastVol5m      Decimal?  @db.Decimal(24, 2)
+  lastCh24       Float?
+  priceUpdatedAt DateTime?
+  lastCheckedAt  DateTime? // added: finishedAt of the newest finished check
+
+  checks     Check[]
+  watchers   Watch[]
+  pricePoints PricePoint[]
+
+  @@index([ca])
+  @@index([domain])
+  @@index([handle])
+}
+
+model Check {
+  id             String      @id @default(cuid())
+  shortId        String      @unique // 7-char id used in /c/[id] and card URLs
+  targetId       String
+  target         Target      @relation(fields: [targetId], references: [id])
+  targetRaw      String      // what the user pasted
+  postId         String?     // X post id when the input was a post
+  status         CheckStatus @default(QUEUED)
+  via            Via         @default(WEB)
+  requesterId    String?
+  requester      User?       @relation(fields: [requesterId], references: [id])
+  requesterHandle String?    // X handle for bot-triggered checks
+  requesterSid   String?     // added: anonymous session id (signed cookie) of whoever started it, for "You" badges
+  isPrivate      Boolean     @default(false)
+  isLatest       Boolean     @default(false) // added: newest finished check of its target (the one the feed shows)
+
+  // product + people signals (Stage B / E)
+  sigLaunch      Signal?
+  sigFlow        Signal?
+  sigDocs        Signal?
+  sigAcct        Signal?
+  sigGit         Signal?
+  evidence       Json?       // { launch, flow, docs, git, acct } -> evidence sentences
+
+  // scores (computed by packages/core/scoring.ts)
+  narScore       Int?
+  coinScore      Int?
+  totalScore     Int?
+  narBand        String?     // real | likely | partly | llarp | larp
+  coinBand       String?     // clean | ok | sketchy | rigged
+  areas          Json?       // { Product, Claims, People } 0-100
+
+  summary        String?
+  coinSummary    String?
+  durationMs     Int?
+  error          String?
+
+  // market snapshot at check time (coins only)
+  priceAtCheck   Decimal?    @db.Decimal(38, 18)
+  mcAtCheck      Decimal?    @db.Decimal(24, 2)
+
+  asksCount      Int         @default(0)
+  cardPath       String?
+
+  createdAt      DateTime    @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+
+  steps          CheckStep[]
+  claims         Claim[]
+  coinFacts      CoinFacts?
+  asks           Ask[]
+  notes          Note[]
+  mention        BotMention?
+
+  @@index([status, finishedAt])
+  @@index([targetId, finishedAt])
+  @@index([narBand])
+  @@index([coinBand])
+  @@index([isLatest, finishedAt])
+  @@index([requesterSid])
+  @@index([via, finishedAt])
+}
+
+model CheckStep {
+  id         String     @id @default(cuid())
+  checkId    String
+  check      Check      @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  idx        Int
+  tMs        Int        // ms since check start
+  status     StepStatus
+  text       String
+  source     String?    // X | GitHub | DexScreener | DevRadar | BundleScan | WhaleFlow | On-chain
+  url        String?
+  caption    String?    // caption pill on the screenshot
+  screenshot String?    // path under SCREENSHOT_DIR
+
+  @@unique([checkId, idx])
+}
+
+model Claim {
+  id       String      @id @default(cuid())
+  checkId  String
+  check    Check       @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  text     String
+  source   String      // post | site_hero | docs | x_bio | footer
+  kind     String      // live_product | mainnet | ai_agent | open_source | docs | team | fair_launch | audit | partnership | other
+  status   ClaimStatus
+  evidence String
+  stepIdx  Int?        // the CheckStep the evidence relies on
+}
+
+model CoinFacts {
+  checkId        String   @id
+  check          Check    @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  deployerId     String?
+  deployer       Deployer? @relation(fields: [deployerId], references: [id])
+  sigDeployer    Signal
+  sigBundle      Signal
+  sigHolders     Signal
+  sigLp          Signal
+  sigAuthorities Signal
+  bundlePct      Float?
+  bundleWallets  Int?
+  top10Pct       Float?   // excluding LP
+  devHoldPct     Float?
+  lpStatus       String?  // burned | locked:<days> | unlocked
+  authorities    String?  // e.g. "Mint renounced, freeze active"
+  holders        Int?
+  liquidityUsd   Decimal? @db.Decimal(24, 2)
+  pairCreatedAt  DateTime?
+}
+
+model Deployer {
+  id         String         @id @default(cuid())
+  chain      Chain
+  address    String
+  record     DeployerRecord
+  launched   Int            @default(0)
+  dead       Int            @default(0)
+  fundedFrom String?
+  firstSeen  DateTime?
+  updatedAt  DateTime       @updatedAt
+
+  coins      CoinFacts[]
+
+  @@unique([chain, address])
+}
+
+model PricePoint {
+  id       String   @id @default(cuid())
+  targetId String
+  target   Target   @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  ts       DateTime
+  price    Decimal  @db.Decimal(38, 18)
+  mc       Decimal? @db.Decimal(24, 2)
+  vol5m    Decimal? @db.Decimal(24, 2)
+
+  @@index([targetId, ts])
+}
+
+model User {
+  id         String   @id @default(cuid())
+  evmAddress String?  @unique
+  solAddress String?  @unique
+  xHandle    String?  @unique
+  xUserId    String?  @unique
+  tier       Tier     @default(FREE)
+  tierCheckedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  checks     Check[]
+  watches    Watch[]
+  apiKeys    ApiKey[]
+  webhooks   Webhook[]
+  notes      Note[]
+  noteVotes  NoteVote[]
+}
+
+model Watch {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetId  String
+  target    Target   @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, targetId])
+}
+
+model Ask {
+  id          String   @id @default(cuid())
+  checkId     String
+  check       Check    @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  question    String
+  answer      String
+  askerHandle String?
+  via         Via
+  createdAt   DateTime @default(now())
+}
+
+model Note {
+  id        String     @id @default(cuid())
+  checkId   String
+  check     Check      @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User       @relation(fields: [authorId], references: [id])
+  text      String
+  helpful   Int        @default(0)
+  hidden    Boolean    @default(false)
+  createdAt DateTime   @default(now())
+
+  votes     NoteVote[]
+}
+
+model NoteVote {
+  noteId String
+  note   Note   @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([noteId, userId])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prefix     String    // first chars, shown in UI
+  hash       String    @unique
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url       String
+  secret    String
+  events    String[] // check.completed, watch.changed
+  createdAt DateTime @default(now())
+}
+
+model BotMention {
+  id             String        @id @default(cuid())
+  tweetId        String        @unique
+  authorId       String
+  authorHandle   String
+  text           String
+  inReplyToId    String?
+  conversationId String?
+  isFollowUp     Boolean       @default(false)
+  status         MentionStatus @default(RECEIVED)
+  ignoreReason   String?
+  checkId        String?       @unique
+  check          Check?        @relation(fields: [checkId], references: [id])
+  replyTweetId   String?
+  createdAt      DateTime      @default(now())
+
+  @@index([authorId, createdAt])
+}

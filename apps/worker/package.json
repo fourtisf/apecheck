@@ -1,0 +1,27 @@
+{
+  "name": "@apecheck/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/dev.ts",
+    "start:checks": "node --import tsx src/checks.ts",
+    "start:prices": "node --import tsx src/prices.ts",
+    "start:bot": "node --import tsx src/bot.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "e2e": "vitest run --config vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@apecheck/core": "workspace:*",
+    "@apecheck/db": "workspace:*",
+    "@apecheck/sources": "workspace:*",
+    "bullmq": "~5.81.4",
+    "ioredis": "^5.4.1",
+    "playwright": "1.56.1",
+    "tsx": "^4.20.0",
+    "zod": "^4.1.0"
+  }
+}

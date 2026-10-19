@@ -1,0 +1,22 @@
+{
+  "name": "@apecheck/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./scoring": "./src/scoring.ts",
+    "./config": "./src/config.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "zod": "^4.1.0"
+  }
+}

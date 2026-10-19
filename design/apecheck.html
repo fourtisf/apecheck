@@ -1,0 +1,1624 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ApeCheck — real build or LARP?</title>
+<meta name="description" content="Paste a coin, an X post or a link. An agent tests every claim against the code, the chain and X, and stamps a verdict with the evidence.">
+<meta name="theme-color" content="#FFFFFF">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400..800&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F3F4F6; --bg2:#F7F8FA; --panel:#FFFFFF; --panel2:#EEF0F3; --line:#E7E9ED; --line2:#DCDFE5; --hover:#FAFAFB;
+  --ink:#0E0F12; --mute:#565C6B; --dim:#878D9C;
+  --acc:#6A3DF5; --acc-hi:#5A2EE3; --acc-ink:#FFFFFF; --acc-soft:rgba(106,61,245,.09);
+  --pri:#0E0F12; --pri-hi:#2A2C33; --pri-ink:#FFFFFF;
+  --real:#0B7F57; --likely:#3F7F0F; --partly:#A25F00; --llarp:#C2410C; --larp:#C8203A;
+  --up:#0B7F57; --dn:#C8203A; --live:#16A34A;
+  --s-dev:#D9466D; --s-bun:#B07D0C; --s-top:#6A5FE8; --s-rest:#1A8AA8;
+  --av-l:93%; --av-d:34%;
+  --card-sh:0 1px 2px rgba(14,15,18,.04),0 1px 0 rgba(14,15,18,.02);
+  --modal-bg:rgba(14,15,18,.42);
+  --iris:var(--acc); --iris-ink:var(--acc-ink);
+  --sans:"Plus Jakarta Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"Geist Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+:root[data-theme="dark"]{
+  --bg:#0B0C0F; --bg2:#111317; --panel:#15171B; --panel2:#1F2228; --line:#23262D; --line2:#2E323A; --hover:#1A1C21;
+  --ink:#EDEEF1; --mute:#A0A5B2; --dim:#6E7381;
+  --acc:#8B6CFF; --acc-hi:#9D82FF; --acc-ink:#FFFFFF; --acc-soft:rgba(139,108,255,.15);
+  --pri:#EDEEF1; --pri-hi:#FFFFFF; --pri-ink:#0B0C0F;
+  --real:#3EDDB0; --likely:#9BE075; --partly:#F0C24B; --llarp:#FF8A4C; --larp:#FF5C7F;
+  --up:#3EDDB0; --dn:#FF6F91; --live:#3EDDB0;
+  --s-dev:#E0567A; --s-bun:#B98A14; --s-top:#7A70F0; --s-rest:#1F93B0;
+  --av-l:19%; --av-d:76%;
+  --card-sh:none;
+  --modal-bg:rgba(4,5,8,.72);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-padding-top:80px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:8px}
+[hidden]{display:none!important}
+.wrap{max-width:1360px;margin:0 auto;padding:0 28px}
+.mono{font-family:var(--mono)}
+.up{color:var(--up)} .dn{color:var(--dn)} .muted{color:var(--dim)}
+
+.n-real{--vc:var(--real)} .n-likely{--vc:var(--likely)} .n-partly{--vc:var(--partly)} .n-llarp{--vc:var(--llarp)} .n-larp{--vc:var(--larp)}
+.k-clean{--vc:var(--real)} .k-ok{--vc:var(--likely)} .k-sketchy{--vc:var(--partly)} .k-rigged{--vc:var(--larp)}
+.r-builder{--vc:var(--real)} .r-mixed{--vc:var(--partly)} .r-serial{--vc:var(--larp)}
+
+/* verdict pill */
+.vb{display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 8px;border-radius:999px;font-size:12.5px;font-weight:650;color:var(--vc);background:color-mix(in srgb,var(--vc) 11%,transparent);white-space:nowrap}
+.vb::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--vc)}
+.vb b{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums;opacity:.85}
+/* score chip — the signature element */
+.schip{display:grid;place-items:center;width:46px;height:46px;border-radius:13px;font-weight:800;font-size:17px;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--vc);background:color-mix(in srgb,var(--vc) 11%,var(--panel));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--vc) 22%,transparent)}
+/* mini meter */
+.mm{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 8px;align-items:center;min-width:0}
+.mm-t{font-size:13px;font-weight:650;color:var(--vc);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mm > b{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.mm-bar{grid-column:1/-1;display:block;height:5px;border-radius:3px;background:var(--panel2);overflow:hidden}
+.mm-bar i{display:block;height:100%;border-radius:3px;background:var(--vc)}
+.mm-nil{font-size:13px;color:var(--dim)}
+.tr .mm-k{display:none}
+@media (max-width:760px){.tr .mm-k{display:inline}}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 16px;border-radius:999px;border:1px solid var(--line2);background:var(--panel);font-size:14.5px;font-weight:650;white-space:nowrap}
+.btn:hover{background:var(--panel2)}
+.btn small{font-family:var(--mono);font-size:11px;color:var(--dim);font-weight:500}
+.btn.sm{height:34px;padding:0 13px;font-size:13.5px}
+.btn-primary{background:var(--pri);border-color:var(--pri);color:var(--pri-ink)}
+.btn-primary:hover{background:var(--pri-hi)}
+.btn-primary small{color:color-mix(in srgb,var(--pri-ink) 70%,transparent)}
+.btn[aria-pressed="true"]{border-color:var(--acc);color:var(--acc);background:var(--acc-soft)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.lock{font-family:var(--mono);font-size:10.5px;padding:2px 6px;border-radius:999px;background:var(--acc-soft);color:var(--acc)}
+.icon-btn{width:40px;height:40px;display:grid;place-items:center;border-radius:999px;border:1px solid var(--line2);background:var(--panel);color:var(--mute);flex:none}
+.icon-btn:hover{color:var(--ink);background:var(--panel2)}
+
+/* header */
+.top{position:sticky;top:0;z-index:60;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.top-in{display:flex;align-items:center;gap:18px;height:68px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:20px;letter-spacing:-.035em;flex:none}
+.nav{display:flex;gap:2px;padding:4px;border-radius:999px;background:var(--panel);border:1px solid var(--line)}
+.nav a,.nav-m a{padding:6px 14px;border-radius:999px;color:var(--mute);font-size:14.5px;font-weight:600;white-space:nowrap}
+.nav a:not([aria-current]):hover{color:var(--ink)}
+.nav a[aria-current="page"],.nav-m a[aria-current="page"]{color:var(--pri-ink);background:var(--pri)}
+.hsearch{flex:1;max-width:400px;display:flex;align-items:center;gap:9px;height:40px;padding:0 10px 0 14px;background:var(--panel);border:1px solid var(--line);border-radius:999px;color:var(--dim)}
+.hsearch:focus-within{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
+.hsearch input{flex:1;min-width:0;background:none;border:0;outline:0;font-size:14px;color:var(--ink)}
+.hsearch input::placeholder{color:var(--dim)}
+kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line2);border-radius:5px;padding:1px 6px;color:var(--dim)}
+.top-r{margin-left:auto;display:flex;align-items:center;gap:8px}
+.tok{font-family:var(--mono);font-size:12.5px;color:var(--mute);white-space:nowrap;padding:0 6px}
+.tok b{color:var(--ink);font-weight:600}
+.credits{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 13px 0 9px;border-radius:999px;border:1px solid var(--line2);background:var(--panel);font-family:var(--mono);font-size:13px;font-weight:600}
+.credits:hover{background:var(--panel2)}
+.credits svg{transform:rotate(-90deg)}
+.top-r .btn-primary{height:40px}
+.nav-m{display:none}
+
+/* hero — centered search */
+.hero{padding:64px 0 28px}
+.hero-c{max-width:860px;margin:0 auto;text-align:center;display:flex;flex-direction:column;align-items:center}
+.hero h1{font-size:clamp(40px,5.4vw,72px);line-height:1;letter-spacing:-.05em;font-weight:800;margin:0 0 18px}
+.lede{color:var(--mute);font-size:18px;max-width:58ch;margin:0 0 30px;line-height:1.55}
+#probe{width:100%;max-width:760px}
+.probe-field{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line2);border-radius:999px;padding:7px 7px 7px 10px;box-shadow:0 12px 40px -18px rgba(14,15,18,.25);transition:border-color .15s,box-shadow .15s}
+.probe-field:focus-within{border-color:var(--acc);box-shadow:0 0 0 4px var(--acc-soft),0 12px 40px -18px rgba(14,15,18,.25)}
+.probe-type{flex:none;font-family:var(--mono);font-size:11.5px;padding:7px 11px;border-radius:999px;background:var(--bg2);color:var(--dim);border:1px solid var(--line);min-width:84px;text-align:center}
+.probe-type.on{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 40%,transparent);background:var(--acc-soft)}
+#target{flex:1;min-width:0;background:none;border:0;outline:0;font-size:17px;padding:10px 6px;text-align:left}
+#target::placeholder{color:var(--dim)}
+.btn-run{flex:none;display:inline-flex;align-items:baseline;gap:9px;background:var(--pri);color:var(--pri-ink);border:0;font-weight:700;font-size:16.5px;padding:0 26px;height:52px;line-height:52px;border-radius:999px}
+.btn-run:hover{background:var(--pri-hi)}
+.btn-run small{font-family:var(--mono);font-size:11.5px;font-weight:500;opacity:.65}
+.probe-sub{margin:16px 0 0;color:var(--mute);font-size:14.5px}
+.probe-sub b{color:var(--ink)}
+.hero-stats{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 26px;margin-top:6px;font-size:14px;color:var(--dim)}
+.hero-stats b{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
+.hero-stats b.dn{color:var(--dn)}
+
+/* live checks row */
+.live-wrap{margin-top:52px}
+.live-h{display:flex;align-items:center;gap:9px;margin:0 2px 12px;font-size:15px;font-weight:700}
+.live-h b{font-variant-numeric:tabular-nums;color:var(--dim);font-weight:600}
+.live-hint{margin-left:auto;font-size:13.5px;color:var(--dim);font-weight:500}
+.dotlive{width:8px;height:8px;border-radius:50%;background:var(--live);box-shadow:0 0 0 4px color-mix(in srgb,var(--live) 18%,transparent);animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.4}}
+.live-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.lc{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-radius:16px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--card-sh)}
+.lc:hover{border-color:var(--line2);background:var(--hover)}
+.lc-top{display:flex;align-items:center;gap:11px;min-width:0}
+.lc-n{min-width:0;flex:1}
+.lc-n b{display:flex;align-items:center;gap:7px;font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lc-n b em{font-style:normal;font-size:10.5px;font-weight:700;color:var(--acc);background:var(--acc-soft);padding:1px 7px;border-radius:999px}
+.lc-n small{display:block;font-size:12.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lc time{font-family:var(--mono);font-size:13px;color:var(--live)}
+.lc-bar{display:block;height:4px;border-radius:2px;background:var(--panel2);overflow:hidden}
+.lc-bar i{display:block;height:100%;width:0;background:var(--acc);border-radius:2px;transition:width .25s linear}
+.live-empty{padding:18px;color:var(--dim);margin:0;border:1px dashed var(--line2);border-radius:16px}
+
+.av{--s:30px;width:var(--s);height:var(--s);flex:none;border-radius:calc(var(--s)*.3);display:grid;place-items:center;font-weight:800;font-size:calc(var(--s)*.42);background:hsl(var(--h) 72% var(--av-l));color:hsl(var(--h) 58% var(--av-d))}
+.av-x,.av-site{background:var(--panel2);color:var(--mute)}
+.av-x svg,.av-site svg{width:42%;height:42%}
+.tag{font-size:12px;color:var(--dim);font-weight:500;white-space:nowrap}
+.ch{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;color:var(--dim);white-space:nowrap}
+.ch i{width:6px;height:6px;border-radius:50%}
+
+/* insights */
+.ins{padding-top:20px}
+.side{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.scard{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:var(--card-sh)}
+.scard h3{display:flex;align-items:baseline;gap:8px;margin:0 0 14px;font-size:16px;font-weight:750;letter-spacing:-.015em}
+.scard h3 small{font-size:12.5px;color:var(--dim);font-weight:500}
+.scard h3 a,.scard h3 button{margin-left:auto;font-size:13.5px;color:var(--acc);font-weight:650;background:none;border:0;padding:0}
+.scard .sub{margin:-8px 0 16px;font-size:13.5px;color:var(--dim)}
+.dv{display:grid;gap:10px}
+.dv-row{display:grid;grid-template-columns:92px minmax(0,1fr) 54px;align-items:center;gap:10px;font-size:13.5px}
+.dv-l{display:flex;align-items:center;gap:7px;color:var(--mute);white-space:nowrap}
+.sw{width:8px;height:8px;border-radius:50%;background:var(--vc);flex:none}
+.dv-bar{position:relative;height:12px}
+.dv-bar::before{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:var(--line2)}
+.dv-bar i{position:absolute;top:0;height:100%;background:var(--vc);border-radius:0 6px 6px 0}
+.dv-bar i.neg{border-radius:6px 0 0 6px}
+.dv-v{font-size:13px;font-weight:650;text-align:right;font-variant-numeric:tabular-nums}
+.dv-ax{display:flex;justify-content:space-between;margin:8px 64px 0 102px;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+.rk{list-style:none;margin:0;padding:0}
+.rk li a{display:grid;grid-template-columns:18px auto minmax(0,1fr) auto 30px;align-items:center;gap:10px;padding:7px 0;font-size:14.5px}
+.rk li a:hover b{color:var(--acc)}
+.rk .rk-i{font-size:12.5px;color:var(--dim);font-weight:600}
+.rk b{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rk .rk-n{font-size:13px;color:var(--mute);text-align:right;font-variant-numeric:tabular-nums}
+.dl{list-style:none;margin:0;padding:0}
+.dl li a{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:9px 0;border-top:1px solid var(--line)}
+.dl li:first-child a{border-top:0;padding-top:2px}
+.dl li a:hover .mono{color:var(--acc)}
+.dl .mono{font-size:13px;font-weight:600}
+.dl small{grid-column:1/-1;color:var(--dim);font-size:12.5px}
+
+/* feed */
+.feed{padding-top:44px;padding-bottom:80px}
+.feed-h{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.feed-h h2{margin:0;font-size:30px;font-weight:800;letter-spacing:-.035em}
+.ftabs{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.tabs-pill{display:flex;gap:2px;padding:4px;border-radius:999px;background:var(--panel);border:1px solid var(--line);overflow-x:auto;scrollbar-width:none;max-width:100%}
+.tabs-pill::-webkit-scrollbar{display:none}
+.tabs-pill button{background:none;border:0;padding:7px 14px;border-radius:999px;font-size:14px;font-weight:600;color:var(--mute);white-space:nowrap}
+.tabs-pill button:not([aria-selected="true"]):hover{color:var(--ink)}
+.tabs-pill button[aria-selected="true"]{background:var(--pri);color:var(--pri-ink)}
+.tabs-pill button small{font-family:var(--mono);font-size:11px;opacity:.6;margin-left:5px}
+.vt{margin-left:auto;display:flex;gap:2px;background:var(--panel);border:1px solid var(--line);padding:4px;border-radius:999px;flex:none}
+.vt button{background:none;border:0;width:34px;height:30px;border-radius:999px;color:var(--dim);display:grid;place-items:center}
+.vt button[aria-pressed="true"]{background:var(--panel2);color:var(--ink)}
+.fbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.fsearch{flex:1 1 260px;display:flex;align-items:center;gap:9px;height:40px;padding:0 14px;background:var(--panel);border:1px solid var(--line);border-radius:999px;color:var(--dim);max-width:420px}
+.fsearch:focus-within{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
+.fsearch input{flex:1;min-width:0;background:none;border:0;outline:0;font-size:14px;color:var(--ink)}
+.fsearch input::placeholder{color:var(--dim)}
+.seg{display:flex;gap:2px;background:var(--panel);border:1px solid var(--line);padding:4px;border-radius:999px}
+.seg button{background:none;border:0;padding:5px 12px;border-radius:999px;color:var(--mute);font-size:14px;font-weight:600;white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--panel2);color:var(--ink)}
+.sel{appearance:none;-webkit-appearance:none;height:40px;padding:0 34px 0 14px;border-radius:999px;border:1px solid var(--line);font-size:14px;font-weight:600;background:var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23878D9C' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 14px center;color:var(--ink)}
+.sel:focus{border-color:var(--acc);outline:0}
+
+.tbl{border:1px solid var(--line);border-radius:18px;overflow:hidden;background:var(--panel);box-shadow:var(--card-sh)}
+.tr{display:grid;grid-template-columns:46px minmax(0,1fr) 170px 170px 78px 118px 44px;gap:18px;align-items:center;padding:13px 20px;border-top:1px solid var(--line)}
+.th{font-size:12.5px;font-weight:600;color:var(--dim);border-top:0;padding-top:12px;padding-bottom:12px;background:var(--bg2)}
+a.tr:hover{background:var(--hover)}
+a.tr.fresh,.gc.fresh{animation:fresh 4s ease-out}
+@keyframes fresh{0%,30%{background:var(--acc-soft)}100%{background:transparent}}
+.td{min-width:0}
+.c-nm{display:flex;align-items:center;gap:12px;min-width:0}
+.nm{min-width:0;flex:1}
+.nm1{display:flex;align-items:center;gap:8px;min-width:0}
+.nm1 b{font-weight:750;font-size:15.5px;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nm2{display:block;font-size:13.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.num{font-size:13.5px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:550}
+.th .num{font-weight:600}
+.c-since{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.c-since svg{flex:none}
+.nil{color:var(--dim)}
+.c-mob{display:none}
+.tbl-empty{padding:30px 20px;color:var(--mute);border-top:1px solid var(--line)}
+.tbl-empty button{margin-top:10px}
+.fmore{display:flex;justify-content:center;align-items:center;gap:14px;margin-top:18px;color:var(--dim);font-size:13.5px}
+
+.gview{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
+.gc{display:flex;flex-direction:column;gap:14px;padding:18px;border:1px solid var(--line);border-radius:18px;background:var(--panel);box-shadow:var(--card-sh)}
+.gc:hover{border-color:var(--line2);background:var(--hover)}
+.gc-top{display:flex;align-items:center;gap:12px;min-width:0}
+.gc-ms{display:grid;gap:12px}
+.gc p{margin:0;font-size:13.5px;color:var(--mute);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:40px}
+.gc-ft{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--dim);padding-top:12px;border-top:1px solid var(--line)}
+
+.br{display:block;padding:10px 0;border-top:1px solid var(--line);font-size:14px}
+.br:first-child{border-top:0;padding-top:0}
+.br .meta{display:block;font-size:12.5px;color:var(--dim);margin-bottom:3px}
+.br b{margin-right:6px}
+
+/* report */
+.rep{padding-top:26px;padding-bottom:80px}
+.crumb{display:flex;gap:8px;font-size:14px;color:var(--dim);margin-bottom:18px}
+.crumb a:hover{color:var(--ink)}
+.rep-head{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.rh-id{min-width:0;flex:1}
+.rh-id h1{margin:0;font-size:clamp(28px,3vw,40px);letter-spacing:-.04em;line-height:1.1;font-weight:800;word-break:break-all}
+.rh-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:6px}
+.ca{display:inline-flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line2);border-radius:999px;padding:3px 10px;font-family:var(--mono);font-size:12px;color:var(--mute)}
+.ca:hover{color:var(--ink);border-color:var(--dim)}
+.lnk{font-size:13.5px;color:var(--mute);font-weight:600}
+.lnk:hover{color:var(--acc)}
+.rh-act{display:flex;gap:8px;flex-wrap:wrap}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:20px;box-shadow:var(--card-sh)}
+.rv{display:grid;grid-template-columns:150px minmax(0,1fr) 320px;gap:32px;align-items:center;padding:28px;margin-bottom:22px}
+.rv-ring{position:relative;display:grid;place-items:center;width:max-content}
+.rv-ring svg .arc{transition:stroke-dasharray .9s cubic-bezier(.2,.8,.2,1)}
+.rv-ring-in{position:absolute;inset:0;display:grid;place-content:center;text-align:center}
+.rv-ring-in b{font-size:44px;font-weight:800;letter-spacing:-.05em;line-height:1;font-variant-numeric:tabular-nums}
+.rv-ring-in span{font-size:12.5px;color:var(--dim);font-weight:600;margin-top:4px}
+.rv-ring.sm .rv-ring-in b{font-size:26px}
+.rv-l{min-width:0}
+.vlabel{display:inline-flex;align-items:center;gap:8px;padding:6px 14px 6px 12px;border-radius:999px;font-size:16px;font-weight:750;color:var(--vc);background:color-mix(in srgb,var(--vc) 11%,transparent)}
+.vlabel::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--vc)}
+.vlabel.slam{animation:land .45s cubic-bezier(.2,.8,.2,1) both}
+@keyframes land{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.v-sum{font-size:20px;line-height:1.45;margin:14px 0 8px;max-width:58ch;font-weight:650;letter-spacing:-.015em}
+.v-note{font-size:14px;color:var(--dim);margin:0 0 8px}
+.v-meta{font-size:12.5px;color:var(--dim);margin:0}
+.rv-s{display:grid;gap:18px}
+.mb{display:grid;gap:7px}
+.mb-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:14px;color:var(--mute);font-weight:600}
+.mb-h b{font-size:26px;font-weight:800;letter-spacing:-.03em;color:var(--ink);font-variant-numeric:tabular-nums}
+.mb-h b small{font-size:12px;color:var(--dim);font-weight:600;letter-spacing:0;margin-left:2px}
+.mb .mm-bar{height:7px;border-radius:4px}
+.mb-t{font-size:13px;color:var(--dim)}
+.mb-t strong{color:var(--vc);font-weight:700}
+.rv-run{grid-column:2/-1;min-width:0}
+.rv-run .v-sum{margin-top:0}
+.rv-prog{height:6px;border-radius:3px;background:var(--panel2);overflow:hidden;margin:6px 0 10px;max-width:640px}
+.rv-prog i{display:block;height:100%;width:0;background:var(--acc);border-radius:3px;transition:width .25s linear}
+#rvStep{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stamp{display:inline-flex;align-items:center;gap:8px;padding:6px 14px 6px 12px;border-radius:999px;font-size:16px;font-weight:750;color:var(--vc);background:color-mix(in srgb,var(--vc) 11%,transparent)}
+.stamp::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--vc)}
+.sb{display:flex;flex-direction:column;gap:7px;padding:16px;border-radius:16px;background:var(--bg2);border:1px solid var(--line)}
+.sb-l{font-size:13px;font-weight:600;color:var(--mute)}
+.sb-n{font-size:40px;font-weight:800;letter-spacing:-.045em;line-height:1;font-variant-numeric:tabular-nums}
+.sb-n small{font-size:12px;color:var(--dim);letter-spacing:0;margin-left:2px;font-weight:600}
+.sb .vb{align-self:flex-start}
+.sb-h{font-size:12.5px;color:var(--dim);line-height:1.4}
+.meter{position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:3px;height:6px;margin:4px 0 2px}
+.meter i{border-radius:3px}
+.meter i:nth-child(1){background:var(--larp)}.meter i:nth-child(2){background:var(--llarp)}.meter i:nth-child(3){background:var(--partly)}.meter i:nth-child(4){background:var(--likely)}.meter i:nth-child(5){background:var(--real)}
+.meter b{position:absolute;top:-5px;width:4px;height:16px;background:var(--ink);border-radius:2px;left:calc(var(--s) * 1% - 2px);box-shadow:0 0 0 2px var(--bg2);transition:left .9s cubic-bezier(.2,.8,.2,1)}
+
+.rep-g{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:22px;align-items:start}
+.rtabs{display:inline-flex;gap:2px;padding:4px;border-radius:999px;background:var(--panel);border:1px solid var(--line);margin-bottom:18px;overflow-x:auto;scrollbar-width:none;max-width:100%}
+.rtabs::-webkit-scrollbar{display:none}
+.rtabs button{background:none;border:0;padding:7px 15px;border-radius:999px;font-size:14px;font-weight:600;color:var(--mute);white-space:nowrap}
+.rtabs button:not([aria-selected="true"]):not(:disabled):hover{color:var(--ink)}
+.rtabs button[aria-selected="true"]{background:var(--pri);color:var(--pri-ink)}
+.rtabs button:disabled{opacity:.4;cursor:not-allowed}
+.rtabs small{font-family:var(--mono);font-size:11px;opacity:.6;margin-left:4px}
+#tp{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:var(--card-sh)}
+
+.run-top{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.status{display:inline-flex;align-items:center;gap:8px;font-size:14px;color:var(--mute);font-weight:600}
+.status .pulse{width:9px;height:9px;border-radius:50%;background:var(--acc);animation:pulse 1.1s ease-in-out infinite}
+.run-top time{font-family:var(--mono);font-size:14px;color:var(--live)}
+.run-top .sp{flex:1}
+.run-g{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:14px}
+.cam{border:1px solid var(--line2);border-radius:14px;overflow:hidden;background:var(--panel)}
+.cam-bar{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--bg2)}
+.cam-dots{display:flex;gap:6px}.cam-dots i{width:9px;height:9px;border-radius:50%;background:var(--line2)}
+.cam-url{flex:1;min-width:0;font-family:var(--mono);font-size:11.5px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 12px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cam-view{position:relative;height:330px;overflow:hidden;background:#0B0D12}
+.cam-idle{position:absolute;inset:0;display:grid;place-items:center;color:#7F8699;font-family:var(--mono);font-size:13px}
+.site{--sh:250;position:absolute;inset:0;padding:15px 17px 54px;display:flex;flex-direction:column;background:radial-gradient(120% 80% at 80% 0%,hsl(var(--sh) 45% 16%) 0%,hsl(var(--sh) 30% 8%) 70%);color:#EEF0FA;opacity:0;transition:opacity .35s}
+.site.on{opacity:1}
+.s-nav{display:flex;align-items:center;gap:9px}
+.s-logo{width:20px;height:20px;border-radius:6px;background:hsl(var(--sh) 85% 64%)}
+.s-name{font-weight:700;font-size:13.5px}
+.s-links{display:flex;gap:8px;margin-left:auto}
+.s-links i{width:32px;height:7px;border-radius:4px;background:hsl(var(--sh) 20% 30%)}
+.s-hero{padding:20px 2px 8px}
+.s-h1{font-size:clamp(18px,2vw,23px);font-weight:750;line-height:1.08;letter-spacing:-.02em;max-width:19ch}
+.s-sub{font-size:12px;color:hsl(var(--sh) 20% 72%);margin-top:8px}
+.s-btns{display:flex;gap:8px;margin-top:13px}
+.s-btn{font-size:11.5px;font-weight:700;padding:7px 12px;border-radius:8px;background:hsl(var(--sh) 85% 64%);color:#0A0A16}
+.s-btn.ghost{background:transparent;color:#EEF0FA;border:1px solid hsl(var(--sh) 25% 34%)}
+.s-row{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:auto}
+.s-tile{border:1px solid hsl(var(--sh) 25% 22%);background:hsla(var(--sh),30%,12%,.6);border-radius:10px;padding:10px;min-height:64px;display:flex;flex-direction:column;gap:6px}
+.s-tile b{font-size:11px;color:hsl(var(--sh) 20% 70%);font-weight:600}
+.s-tile span{font-size:12.5px;font-weight:650;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[data-t]{outline:2px solid transparent;outline-offset:3px;transition:outline-color .2s}
+[data-t].t-hit{outline-color:#8B6CFF} [data-t].t-ok{outline-color:#3EDDB0} [data-t].t-warn{outline-color:#F0C24B} [data-t].t-fail{outline-color:#FF4F7B}
+.s-modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-44%);width:min(250px,80%);background:#F4F5FB;color:#14162A;border-radius:12px;padding:15px;display:flex;flex-direction:column;gap:5px;box-shadow:0 30px 60px -10px rgba(0,0,0,.7);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:2}
+.s-modal.on{opacity:1;transform:translate(-50%,-50%)}
+.s-modal b{font-size:14px}.s-modal span{font-size:12px;color:#55597a}
+.s-modal i{display:block;height:26px;border-radius:7px;border:1px solid #d5d8e8;margin-top:6px}
+.cursor{position:absolute;left:62%;top:70%;z-index:3;pointer-events:none;transition:left .6s cubic-bezier(.3,.7,.2,1),top .6s cubic-bezier(.3,.7,.2,1);opacity:0}
+.cursor.on{opacity:1}
+.cursor.click::after{content:"";position:absolute;left:-10px;top:-10px;width:22px;height:22px;border-radius:50%;border:2px solid #8B6CFF;animation:ripple .5s ease-out forwards}
+@keyframes ripple{from{transform:scale(.4);opacity:1}to{transform:scale(1.6);opacity:0}}
+.cam-cap{position:absolute;left:12px;bottom:12px;z-index:4;background:rgba(8,12,24,.9);color:#E9EDFB;border:1px solid #313F68;padding:5px 11px;border-radius:999px;font-family:var(--mono);font-size:11.5px;max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log{border:1px solid var(--line2);border-radius:14px;background:var(--panel);display:flex;flex-direction:column;height:372px}
+.log-h{padding:11px 14px;border-bottom:1px solid var(--line);font-size:13.5px;font-weight:650;color:var(--mute)}
+.log ol{list-style:none;margin:0;padding:6px;overflow:auto;flex:1;font-family:var(--mono);font-size:12px;line-height:1.5}
+.log li{display:grid;grid-template-columns:36px 9px minmax(0,1fr);gap:8px;padding:6px 8px;border-radius:8px;animation:logIn .25s ease-out}
+.log li:last-child{background:var(--acc-soft)}
+@keyframes logIn{from{opacity:0;transform:translateY(4px)}}
+.log time{color:var(--dim)}
+.log .ic{width:8px;height:8px;border-radius:50%;margin-top:5px;background:var(--line2)}
+.log li.ok .ic{background:var(--real)} .log li.warn .ic{background:var(--partly)} .log li.fail .ic{background:var(--larp)} .log li.info .ic{background:var(--acc)}
+.log li.fail span{color:var(--larp)} .log li.warn span{color:var(--partly)}
+.log em{font-style:normal;color:var(--acc);margin-left:6px;font-size:10.5px;white-space:nowrap}
+
+.cl{list-style:none;margin:0 0 28px;padding:0}
+.cl li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;padding:14px 0;border-bottom:1px solid var(--line)}
+.cl li:first-child{padding-top:0}
+.cl li b{font-weight:700;font-size:16px}
+.cl li small{grid-column:1/-1;color:var(--mute);font-size:14px}
+.cl li small span{color:var(--dim)}
+.pill{align-self:start;font-size:12.5px;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
+.pill.ok{color:var(--real);background:color-mix(in srgb,var(--real) 11%,transparent)} .pill.warn{color:var(--partly);background:color-mix(in srgb,var(--partly) 12%,transparent)} .pill.fail{color:var(--larp);background:color-mix(in srgb,var(--larp) 11%,transparent)}
+.h4{font-size:14px;font-weight:700;color:var(--mute);margin:0 0 12px}
+.areas{display:grid;gap:12px;max-width:560px}
+.area{display:grid;grid-template-columns:72px minmax(0,1fr) 54px;align-items:center;gap:12px;font-size:14.5px}
+.area .bar{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden}
+.area .bar i{display:block;height:100%;border-radius:4px;background:var(--acc)}
+.area span:last-child{font-size:13px;color:var(--mute);text-align:right;font-variant-numeric:tabular-nums}
+.facts{margin:0;display:grid;grid-template-columns:minmax(150px,auto) minmax(0,1fr) auto}
+.facts dt,.facts dd{padding:12px 0;border-bottom:1px solid var(--line);font-size:15px;margin:0}
+.facts dt{color:var(--mute);padding-right:16px}
+.facts dd small{display:block;color:var(--dim);font-size:13px}
+.facts dd.src{text-align:right;font-size:12px;font-weight:600;color:var(--acc);padding-left:12px;white-space:nowrap}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:1px}
+.dot.ok{background:var(--real)}.dot.warn{background:var(--partly)}.dot.fail{background:var(--larp)}
+.coin-g{display:grid;grid-template-columns:220px minmax(0,1fr);gap:14px;margin-bottom:18px}
+.supply{padding:16px;border-radius:16px;background:var(--bg2);border:1px solid var(--line)}
+.stack{display:flex;gap:2px;height:14px;margin:4px 0 14px}
+.stack i{height:100%;border-radius:3px}
+.stack i:first-child{border-radius:7px 3px 3px 7px}.stack i:last-child{border-radius:3px 7px 7px 3px}
+.legend{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 18px}
+.legend li{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--mute)}
+.legend li b{margin-left:auto;font-size:13px;color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
+.legend .sw{border-radius:3px;width:10px;height:10px}
+.qa{list-style:none;margin:0 0 16px;padding:0}
+.qa li{padding:16px 0;border-bottom:1px solid var(--line);display:grid;gap:10px}
+.qa li:first-child{padding-top:0}
+.q,.a{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px;font-size:15px}
+.q .meta,.a .meta{display:block;font-size:13px;color:var(--dim)}
+.q .meta b,.a .meta b{color:var(--ink);font-weight:700}
+.a{padding-left:38px}
+.a p,.q p{margin:2px 0 0}
+.mini-av{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;background:var(--panel2);color:var(--mute)}
+.ask{display:flex;gap:8px;align-items:center;padding:6px 6px 6px 12px;border:1px solid var(--line2);border-radius:999px;background:var(--panel)}
+.ask input{flex:1;min-width:0;background:none;border:0;outline:0;padding:6px 4px;font-size:15px}
+.ask input::placeholder{color:var(--dim)}
+.notes{list-style:none;margin:0 0 16px;padding:0;display:grid;gap:10px}
+.notes li{padding:16px;border-radius:16px;background:var(--bg2);border:1px solid var(--line)}
+.notes li p{margin:6px 0 12px;font-size:15px}
+.notes .meta{font-size:13px;color:var(--dim)}
+.notes .meta b{color:var(--ink);font-weight:700}
+.empty{padding:22px;border:1px dashed var(--line2);border-radius:16px;color:var(--mute);font-size:15px}
+.empty p{margin:0 0 12px}
+
+.rep-side{display:flex;flex-direction:column;gap:14px}
+.sc-big{font-size:36px;font-weight:800;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+.sc-sub{margin:6px 0 12px;font-size:13px;color:var(--dim)}
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.ch-ax{display:flex;justify-content:space-between;font-size:11.5px;color:var(--dim);margin-top:6px}
+
+.vcard{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:20px;position:relative;overflow:hidden;box-shadow:var(--card-sh)}
+.vcard-top{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;color:var(--dim);font-weight:600}
+.vcard-brand{display:flex;align-items:center;gap:7px;font-weight:800;color:var(--ink);font-size:15px;letter-spacing:-.03em}
+.vcard-main{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;align-items:center;margin:18px 0 6px}
+.vcard-ms{display:grid;gap:10px;margin-top:12px}
+.vcard p{font-size:14px;color:var(--mute);margin:12px 0 0;line-height:1.45}
+.vcard-foot{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim);font-weight:600}
+
+/* pages */
+.page{padding-top:40px;padding-bottom:80px}
+.ph{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;margin-bottom:22px}
+.h-pg{font-size:clamp(32px,3.6vw,48px);letter-spacing:-.045em;line-height:1.02;margin:0 0 12px;font-weight:800}
+.ph p{margin:0;color:var(--mute);max-width:64ch;font-size:16.5px}
+.ctbl .tr{grid-template-columns:minmax(170px,1.3fr) 126px 74px 66px 60px 132px minmax(130px,1fr) 128px 76px 100px;gap:12px}
+.dtbl .tr{grid-template-columns:30px minmax(170px,1.2fr) 70px 136px 74px 60px 76px 72px 62px minmax(150px,1fr);gap:12px}
+.ctbl .th,.dtbl .th{font-size:12.5px}
+.dep-row{width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line)}
+.dep-row:hover{background:var(--hover)}
+.dep-row[aria-expanded="true"]{background:var(--bg2)}
+.dep-more{padding:14px 20px 18px 62px;background:var(--bg2);border-top:1px dashed var(--line2)}
+.dep-more p{margin:0 0 10px;font-size:14px;color:var(--mute)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip-l{display:inline-flex;align-items:center;gap:8px;padding:6px 12px 6px 6px;border:1px solid var(--line2);border-radius:999px;font-size:14px;background:var(--panel)}
+.chip-l:hover{border-color:var(--acc)}
+.dep-focus{animation:fresh 3s ease-out}
+.rep-b{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--vc);font-weight:700}
+.rep-b::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--vc)}
+
+.bot-g{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:56px;align-items:start}
+.bot-stats{display:flex;flex-wrap:wrap;gap:6px 26px;margin:18px 0 0;font-size:15px;color:var(--mute)}
+.bot-stats b{color:var(--ink);font-variant-numeric:tabular-nums}
+.steps{list-style:none;padding:0;margin:26px 0 0;counter-reset:s}
+.steps li{counter-increment:s;display:grid;grid-template-columns:44px 1fr;gap:12px;padding:16px 0;border-top:1px solid var(--line)}
+.steps li::before{content:counter(s);width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:14px;font-weight:800;color:var(--pri-ink);background:var(--pri)}
+.steps b{display:block;font-size:17px;margin-bottom:2px}
+.steps p{margin:0;color:var(--mute)}
+.rules{margin-top:18px;font-size:14.5px;color:var(--dim);max-width:60ch}
+.thread{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:6px 0;box-shadow:var(--card-sh)}
+.post{display:grid;grid-template-columns:42px minmax(0,1fr);gap:12px;padding:16px 20px;position:relative}
+.post:not(:last-child)::before{content:"";position:absolute;left:40px;top:62px;bottom:-4px;width:2px;background:var(--line2)}
+.pav{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:15px}
+.p-meta{font-size:14.5px;color:var(--dim);display:flex;flex-wrap:wrap;gap:0 6px}
+.p-meta b{color:var(--ink);font-weight:700}
+.p-auto{display:block;font-size:13px;color:var(--dim)}
+.p-text{margin:6px 0 0;font-size:15.5px;line-height:1.5}
+.tagx{color:var(--acc);font-weight:600}
+.post .vcard{margin-top:12px}
+.sec2{margin-top:56px}
+.sec2 h2{font-size:28px;letter-spacing:-.035em;margin:0 0 14px;font-weight:800}
+
+.dev-g{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:48px;align-items:start}
+.dev-list{list-style:none;padding:0;margin:22px 0 0}
+.dev-list li{padding:14px 0;border-top:1px solid var(--line);color:var(--mute)}
+.dev-list b{color:var(--ink);display:block;font-weight:700}
+.code{background:#0F1115;border:1px solid var(--line2);border-radius:18px;overflow:hidden}
+.code-tabs{display:flex;border-bottom:1px solid #22252B;padding:0 8px}
+.code-tabs button{background:none;border:0;padding:12px;font-size:14px;font-weight:600;color:#6E7381;border-bottom:2px solid transparent;margin-bottom:-1px}
+.code-tabs button[aria-selected="true"]{color:#EDEEF1;border-bottom-color:#8B6CFF}
+.code pre{margin:0;padding:18px 20px;font-family:var(--mono);font-size:12.6px;line-height:1.65;overflow:auto;color:#C9D0EC;white-space:pre}
+.k{color:#B3ADFF}.s{color:#7FE8C8}.nn{color:#F0C24B}.c{color:#6E7381}
+.tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.tier{padding:24px 22px;display:flex;flex-direction:column;gap:12px;border:1px solid var(--line);border-radius:20px;background:var(--panel);box-shadow:var(--card-sh)}
+.tier.pro{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
+.tier h3{margin:0;font-size:20px;font-weight:800;letter-spacing:-.02em}
+.tier .req{font-size:15px;color:var(--mute);margin:0}
+.tier .req b{color:var(--ink);font-weight:700}
+.tier ul{list-style:none;margin:2px 0 6px;padding:0;display:grid;gap:8px;flex:1}
+.tier li{font-size:15px;display:grid;grid-template-columns:18px 1fr;gap:8px}
+.tier li::before{content:"";width:10px;height:6px;border-left:2px solid var(--acc);border-bottom:2px solid var(--acc);transform:rotate(-45deg);margin-top:7px}
+.pay-note{margin:14px 0 0;font-size:14px;color:var(--dim)}
+
+footer{border-top:1px solid var(--line);padding:30px 0 48px}
+.foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--dim)}
+.foot nav{display:flex;flex-wrap:wrap;gap:6px 20px}
+.foot nav a:hover{color:var(--ink)}
+
+.modal{position:fixed;inset:0;background:var(--modal-bg);backdrop-filter:blur(3px);display:none;place-items:center;z-index:100;padding:16px;overflow:auto}
+.modal.open{display:grid}
+.modal-box{width:min(940px,100%);background:var(--bg);border:1px solid var(--line2);border-radius:24px;padding:24px;box-shadow:0 30px 80px -30px rgba(0,0,0,.35)}
+.modal-box.narrow{width:min(520px,100%);background:none;border:0;padding:0;box-shadow:none}
+.modal-box.narrow .vcard{box-shadow:0 30px 80px -30px rgba(0,0,0,.4)}
+.modal-h{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
+.modal-h h2{margin:0;font-size:24px;letter-spacing:-.03em;font-weight:800}
+.modal-h p{margin:4px 0 0;color:var(--mute)}
+.x-btn{background:var(--panel);border:1px solid var(--line2);border-radius:999px;width:36px;height:36px;display:grid;place-items:center;color:var(--mute);flex:none}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap}
+.toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);display:flex;align-items:center;gap:14px;background:var(--pri);color:var(--pri-ink);padding:11px 16px 11px 18px;border-radius:999px;font-size:14.5px;font-weight:600;opacity:0;pointer-events:none;transition:.25s;z-index:120;max-width:calc(100% - 32px);box-shadow:0 20px 50px -20px rgba(0,0,0,.5)}
+.toast.on{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+.toast a{color:var(--pri-ink);font-weight:800;text-decoration:underline;white-space:nowrap}
+#tip{position:fixed;z-index:130;pointer-events:none;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:6px 10px;font-size:12.5px;font-weight:600;color:var(--ink);white-space:nowrap;transform:translate(-50%,calc(-100% - 12px));opacity:0;transition:opacity .1s;box-shadow:0 8px 24px -8px rgba(0,0,0,.25)}
+#tip.on{opacity:1}
+#tip span{color:var(--mute)}
+
+@media (max-width:1240px){
+  .tok{display:none}
+  .hsearch{max-width:280px}
+  .tr{grid-template-columns:46px minmax(0,1fr) 150px 150px 112px 44px}
+  .c-mc{display:none}
+  .side{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .rep-g{grid-template-columns:minmax(0,1fr)}
+  .rep-side{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .rv{grid-template-columns:140px minmax(0,1fr)}
+  .rv-s{grid-column:1/-1;grid-template-columns:1fr 1fr;gap:24px}
+  .ctbl .tr{grid-template-columns:minmax(150px,1.3fr) 118px 70px 62px 120px 120px 72px 90px}
+  .ctbl .c-dev,.ctbl .c-mint{display:none}
+  .dtbl .tr{grid-template-columns:30px minmax(150px,1.2fr) 130px 70px 60px 72px 70px}
+  .dtbl .c-ch,.dtbl .c-avg,.dtbl .c-fund{display:none}
+}
+@media (max-width:1000px){
+  .nav,.hsearch{display:none}
+  .nav-m{display:flex;gap:2px;overflow-x:auto;padding:0 20px 12px;scrollbar-width:none}
+  .nav-m::-webkit-scrollbar{display:none}
+  .bot-g,.dev-g{grid-template-columns:1fr}
+  .run-g{grid-template-columns:1fr}
+  .log{height:300px}
+  .coin-g{grid-template-columns:1fr}
+  .tr{grid-template-columns:46px minmax(0,1fr) 140px 140px 44px}
+  .c-since{display:none}
+  .tiers{grid-template-columns:1fr}
+}
+@media (max-width:760px){
+  .wrap{padding:0 16px}
+  .nav-m{padding:0 12px 12px}
+  .top-in{gap:8px}
+  .wallet-t{display:none}
+  .hero{padding-top:34px}
+  .probe-field{flex-wrap:wrap;border-radius:22px;padding:8px}
+  #target{flex-basis:100%;order:2;padding:8px 8px 10px}
+  .btn-run{width:100%;order:3;justify-content:center}
+  .side,.rep-side{grid-template-columns:1fr}
+  .th{display:none}
+  .tr{grid-template-columns:46px minmax(0,1fr);grid-template-areas:"sc nm" "nar nar" "coin coin" "mob mob";gap:10px 12px;padding:16px}
+  .tr .c-score{grid-area:sc}.tr .c-nm{grid-area:nm}.tr .c-nar{grid-area:nar}.tr .c-coin{grid-area:coin}
+  .tr .c-mc,.tr .c-since,.tr .c-age{display:none}
+  .tr .c-mob{grid-area:mob;display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--dim)}
+  .ctbl .tr,.dtbl .tr{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"nm sc" "mob mob"}
+  .ctbl .tr > :not(.c-nm):not(.c-sc):not(.c-mob),.dtbl .tr > :not(.c-nm):not(.c-sc):not(.c-mob){display:none}
+  .ctbl .c-sc,.dtbl .c-sc{grid-area:sc}
+  .dep-more{padding-left:16px}
+  .rv{grid-template-columns:1fr;justify-items:start;padding:20px;gap:20px}
+  .rv-s{grid-template-columns:1fr}
+  .rv-run{grid-column:auto}
+  #tp{padding:16px}
+  .facts{grid-template-columns:minmax(110px,auto) minmax(0,1fr)}
+  .facts dd.src{display:none}
+  .legend{grid-template-columns:1fr}
+  .cam-view{height:290px}
+  .modal-box{padding:18px}
+  .feed-h h2{font-size:26px}
+  .vt{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="#/" aria-label="ApeCheck home">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect x="3.5" y="3.5" width="21" height="21" rx="6" transform="rotate(-8 14 14)" style="fill:var(--ink)"/><path d="M8.6 13.8l3.9 4.3 7-8.8" fill="none" style="stroke:var(--bg)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>apecheck
+    </a>
+    <nav class="nav" aria-label="Main" id="nav"></nav>
+    <form class="hsearch" id="hsearch" role="search">
+      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="hq" placeholder="Search coins, or paste a CA, X post or link" autocomplete="off" spellcheck="false" aria-label="Search or check">
+      <kbd>/</kbd>
+    </form>
+    <div class="top-r">
+      <span class="tok">$APECHECK <b>$0.00412</b> <span class="up">+6.1%</span></span>
+      <button class="icon-btn" id="themeBtn" data-act="theme" type="button" aria-label="Switch to dark mode"></button>
+      <button class="credits" id="credBtn" data-act="access" type="button"></button>
+      <button class="btn btn-primary" data-act="wallet" type="button"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3.5" width="13" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 8.5h4" stroke="currentColor" stroke-width="1.5"/></svg><span class="wallet-t">Connect wallet</span></button>
+    </div>
+  </div>
+  <nav class="nav-m" aria-label="Main" id="navm"></nav>
+</header>
+
+<main id="app"></main>
+
+<footer>
+  <div class="wrap foot">
+    <span>Verdicts are automated opinions based on what the agent could see at the time of the check. Not financial advice.</span>
+    <nav aria-label="Footer"><a href="#/">Feed</a><a href="#/bot">@ApeCheckBot</a><a href="#/api">API</a><a href="#/coins">Coins</a><a href="#/deployers">Deployers</a></nav>
+  </div>
+</footer>
+
+<div class="modal" id="modal" role="dialog" aria-modal="true"><div class="modal-box" id="modalBox"></div></div>
+<div class="toast" id="toast" role="status"></div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+(() => {
+'use strict';
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const app = $('#app');
+
+/* ================= helpers ================= */
+function hash(str){let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;}
+function rng(seed){let a=seed||1;return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+const short = a => a && a.length > 14 ? a.slice(0, 5) + '…' + a.slice(-4) : a;
+const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+const fmtT = s => { s = Math.max(0, Math.floor(s)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
+const fmtDur = s => { s = Math.round(s); return Math.floor(s/60) + 'm ' + (s%60) + 's'; };
+const fmtUsd = n => n >= 1e9 ? '$'+(n/1e9).toFixed(1)+'B' : n >= 1e6 ? '$'+(n/1e6).toFixed(n>=1e7?0:1)+'M' : n >= 1e3 ? '$'+(n/1e3).toFixed(n>=1e4?0:1)+'K' : '$'+Math.round(n);
+const fmtPct = p => (p >= 0 ? '+' : '−') + (Math.abs(p) >= 10 ? Math.round(Math.abs(p)) : Math.abs(p).toFixed(1)) + '%';
+const ago = ts => { const m = Math.max(0, Math.floor((Date.now()-ts)/60000)); if(m < 1) return 'now'; if(m < 60) return m+'m'; const h = Math.floor(m/60); if(h < 24) return h+'h'; return Math.floor(h/24)+'d'; };
+const agoLong = ts => { const a = ago(ts); return a === 'now' ? 'just now' : a + ' ago'; };
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+function fakeAddr(chain, r){
+  if(chain === 'sol'){ let s=''; for(let i=0;i<44;i++) s += B58[Math.floor(r()*58)]; return s; }
+  if(chain === 'trx'){ let s='T'; for(let i=0;i<33;i++) s += B58[Math.floor(r()*58)]; return s; }
+  let s='0x'; for(let i=0;i<40;i++) s += '0123456789abcdef'[Math.floor(r()*16)]; return s;
+}
+
+const NAR = [{min:80,key:'real',label:'REAL',name:'Real'},{min:60,key:'likely',label:'LIKELY REAL',name:'Likely real'},{min:40,key:'partly',label:'PARTLY REAL',name:'Partly real'},{min:20,key:'llarp',label:'LIKELY LARP',name:'Likely LARP'},{min:0,key:'larp',label:'LARP',name:'LARP'}];
+const COIN = [{min:80,key:'clean',label:'CLEAN',name:'Clean'},{min:60,key:'ok',label:'OK',name:'OK'},{min:35,key:'sketchy',label:'SKETCHY',name:'Sketchy'},{min:0,key:'rigged',label:'RIGGED',name:'Rigged'}];
+const nb = s => NAR.find(b => s >= b.min);
+const kb = s => COIN.find(b => s >= b.min);
+const CHAINS = {sol:{name:'Solana',s:'SOL',c:'#A796FF'},base:{name:'Base',s:'BASE',c:'#5B8CFF'},eth:{name:'Ethereum',s:'ETH',c:'#8A94B8'},bnb:{name:'BNB Chain',s:'BNB',c:'#F0C24B'},rh:{name:'Robinhood Chain',s:'RH',c:'#3EDDB0'},trx:{name:'Tron',s:'TRX',c:'#FF6F7D'},arb:{name:'Arbitrum',s:'ARB',c:'#5CC8F0'}};
+const REP = {builder:'Builder', mixed:'Mixed record', serial:'Serial launcher'};
+const VAL = {ok:1, warn:.5, fail:0};
+const KIND = {coin:'Coin', post:'Post', site:'Site'};
+
+const XSVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5l10 11M13 2.5l-10 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+const GLOBE = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.8 8h12.4M8 1.8c2 2 2 10.4 0 12.4M8 1.8c-2 2-2 10.4 0 12.4" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
+const LOGO = '<svg width="18" height="18" viewBox="0 0 28 28" aria-hidden="true"><rect x="3.5" y="3.5" width="21" height="21" rx="6" transform="rotate(-8 14 14)" style="fill:var(--ink)"/><path d="M8.6 13.8l3.9 4.3 7-8.8" fill="none" style="stroke:var(--bg)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const COPY = '<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 3.5V3a1.5 1.5 0 0 0-1.5-1.5h-6A1.5 1.5 0 0 0 2 3v6.5A1.5 1.5 0 0 0 3.5 11H4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+const SEARCH = '<svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+
+/* ================= deployers ================= */
+const DEPS = [];
+(function(){
+  const r = rng(777), pick = a => a[Math.floor(r()*a.length)];
+  const types = ['builder','builder','builder','builder','builder','mixed','mixed','mixed','mixed','mixed','serial','serial','serial','serial','serial','builder','mixed','serial'];
+  const chains = ['sol','sol','rh','base','sol','sol','rh','bnb','eth','base','sol','sol','rh','bnb','trx','arb','sol','base'];
+  types.forEach((t, i) => {
+    const ch = chains[i];
+    const launched = t === 'builder' ? 1 + Math.floor(r()*3) : t === 'mixed' ? 3 + Math.floor(r()*6) : 9 + Math.floor(r()*30);
+    const dead = t === 'builder' ? 0 : t === 'mixed' ? Math.floor(launched*(.3+r()*.3)) : Math.floor(launched*(.78+r()*.18));
+    DEPS.push({addr:fakeAddr(ch, r), chain:ch, type:t, launched, dead,
+      funded: t === 'builder' ? pick(['Coinbase','Binance hot wallet','Kraken']) : t === 'mixed' ? pick(['Binance hot wallet','a bridge from Base','OKX']) : pick(['a fresh wallet via FixedFloat','another flagged deployer','a mixer-funded wallet']),
+      first: t === 'builder' ? (1+Math.floor(r()*3))+'y' : t === 'mixed' ? (4+Math.floor(r()*8))+' months' : (5+Math.floor(r()*40))+' days'});
+  });
+})();
+
+/* ================= item generator ================= */
+const TICKERS = ['ORBIT','KAIRO','NEXA','VANTA','HELIX','MOTH','GLINT','RUNE','TALLY','BRISK','SABLE','YIELDR','FERAL','QUILL','PYLON','SPOOL','EMBER','CRUX','DRIFT','LUMA','ZEPH','NOOK','PRISM','OPAL','TORQ','VOLT','WISP','AXON','COBALT','MERIT','GRAIL','HAVEN','JOLT','KELP','LYNX','MANTA','NOVA','ONYX','PERCH','RIFT','SHARD','TIDE','UMBRA','VEX','WREN','YARN','ZINC','ACRE','BOLT','CINDER'];
+const PHANDLES = ['kairolabs','prismfi_','orbit_xyz','lumenpad','vantaagent','helixdex','motharena','glintai','runefi','sableprotocol','quillmarkets','pylonhq','emberlaunch','cruxai_','driftagents','zephyrbots','tidefinance','shardlabs','wrenagent','cinderpad','onyxperps','lynxfun','haventrade','boltagents'];
+const DOMAINS = ['orbitswap.xyz','lumenpad.ai','driftagent.xyz','vantaswap.fi','quantaverse.io','helixdex.app','astraagent.fun','sablefi.xyz','pylon.app','emberpad.fun','glint.trade','runeagent.ai','tallyperps.io','brisk.markets','nookvault.fi'];
+const REQS = ['0xmira','trench_ken','degen_rina','solsleuth','budi_eth','nadia_onchain','whalewatch','agentkid','buildooor','lowcapluke','raka_sol','meta_dimas','chartgod','ser_yield','mintmaxi','0xtama'];
+const TLD = ['.xyz','.app','.ai','.fi','.io','.fun'];
+const HEADS = ['An AI agent that trades on-chain for you','Swap anything, on any chain, in one click','The launchpad that pays holders back','Autonomous yield, managed by agents','Perps with zero fees and real leverage','Prediction markets run by AI agents','Your wallet, on autopilot'];
+const BYID = {};
+let SEQ = 0;
+
+function walk(end, r){
+  const n = 28, a = [0];
+  for(let i = 1; i < n; i++){
+    const f = i/(n-1);
+    a.push(Math.max(-97, end*f + (r()-.5)*Math.max(10, Math.abs(end)*.4)*(1-f*.7)));
+  }
+  a[n-1] = end;
+  return a;
+}
+
+function buildItem(seed, kind, ov = {}){
+  const r = rng(hash(seed)), pick = a => a[Math.floor(r()*a.length)], num = (a, b) => Math.round(a + r()*(b-a));
+  const it = {id: hash(seed + '#id').toString(36).slice(0, 7), seed, kind};
+  const p = ov.p != null ? ov.p : 0.06 + r()*0.9;
+  const st = () => { const x = r(); return x < p*0.86+0.05 ? 'ok' : x < p*0.86+0.33 ? 'warn' : 'fail'; };
+  const o = {launch:st(),flow:st(),docs:st(),git:st(),acct:st(),deployer:st(),bundle:st(),holders:st(),lp:st(),mint:st()};
+  if(o.launch !== 'ok') o.flow = o.launch;
+  it.o = o;
+
+  if(kind === 'coin'){
+    it.ticker = ov.ticker || pick(TICKERS);
+    it.handle = it.ticker.toLowerCase() + pick(['','fi','_xyz','labs','hq']);
+    it.domain = ov.domain || it.ticker.toLowerCase() + pick(TLD);
+    it.name = '$' + it.ticker; it.title = cap(it.ticker.toLowerCase());
+  } else if(kind === 'post'){
+    it.handle = ov.handle || pick(PHANDLES);
+    const base = it.handle.replace(/_+$/, '').replace(/(labs|hq|_xyz|fi)$/i, '') || it.handle;
+    it.domain = ov.domain || base.toLowerCase() + pick(TLD);
+    it.name = '@' + it.handle; it.title = cap(base);
+  } else {
+    it.domain = ov.domain || pick(DOMAINS);
+    const base = it.domain.split('.')[0];
+    it.handle = base.replace(/[^a-z0-9_]/gi, '').slice(0, 15) || 'project';
+    it.name = it.domain; it.title = cap(base);
+  }
+  it.hasCoin = kind === 'coin' || !!ov.ca || r() < 0.5;
+  if(it.hasCoin){
+    const want = o.deployer === 'ok' ? 'builder' : o.deployer === 'warn' ? 'mixed' : 'serial';
+    let pool = DEPS.filter(d => d.type === want);
+    if(ov.chain){ const pc = pool.filter(d => d.chain === ov.chain); if(pc.length) pool = pc; }
+    it.dep = pool[Math.floor(r()*pool.length)];
+    it.chain = ov.chain || it.dep.chain;
+    if(!it.ticker) it.ticker = (it.title.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6) || 'TKN');
+    it.ca = ov.ca || fakeAddr(it.chain, r);
+  } else {
+    it.chain = ov.chain || pick(['sol','sol','base','rh','rh','bnb','eth','arb']);
+  }
+  it.hue = num(0, 359);
+  it.head = pick(HEADS);
+  const dep = it.dep;
+  it.acct = o.acct === 'ok' ? {age:`${num(1,4)}y ${num(1,11)}m`, fol:`${(num(40,420)/10).toFixed(1)}k`, ren:'never renamed', q:'Mostly real accounts'}
+          : o.acct === 'warn' ? {age:`${num(3,9)} months`, fol:`${(num(15,80)/10).toFixed(1)}k`, ren:'renamed once', q:'About a third look bought'}
+          : {age:`${num(6,40)} days`, fol:num(300,4800).toLocaleString('en-US'), ren:`renamed ${num(2,4)} times`, q:'Most look bought or inactive'};
+  it.team = {ok:'Two founders, both public on X with earlier shipped work', warn:'Anonymous, but the dev has a public build history', fail:'Anonymous, no history before this launch'}[o.acct];
+  it.bundlePct = +(o.bundle === 'ok' ? 1 + r()*6 : o.bundle === 'warn' ? 9 + r()*10 : 22 + r()*25).toFixed(1);
+  it.bundleW = num(3, 14);
+  it.top10 = o.holders === 'ok' ? num(12, 24) : o.holders === 'warn' ? num(27, 39) : num(42, 60);
+  it.devHold = +(o.holders === 'ok' ? .4 + r()*2.5 : o.holders === 'warn' ? 3 + r()*5 : 8 + r()*10).toFixed(1);
+  it.holdersN = num(180, 9400);
+  it.lp = {ok:'Burned', warn:'Locked 30 days', fail:'Unlocked'}[o.lp];
+  it.mintA = {ok:'Renounced', warn:'Mint renounced, freeze active', fail:'Mint still active'}[o.mint];
+
+  it.T = {
+    launch: {ok:'App opened and wallet connect works', warn:"'Launch app' opens a waitlist form", fail:"'Launch app' does nothing when clicked"}[o.launch],
+    flow: {ok:`Ran the main flow with a test wallet, transaction confirmed on ${CHAINS[it.chain].name}`, warn:"Main flow stops at a 'Coming soon' screen", fail:'Main flow throws an error, no transaction was sent'}[o.flow],
+    docs: {ok:`${num(9,28)} pages, last edited ${num(1,6)} days ago`, warn:'a single Notion page with no technical detail', fail:'link returns 404'}[o.docs],
+    git: {ok:`${num(140,900)} commits, last push ${num(1,4)} days ago`, warn:`1 repo, ${num(6,19)} commits, all within 48h of launch`, fail:'no repository found, site says "open source"'}[o.git],
+    deployer: dep ? {builder: dep.launched === 1 ? `first launch, funded from ${dep.funded}` : `${dep.launched-1} earlier launches, all still trading`, mixed:`${dep.launched} earlier tokens, ${dep.dead} dead`, serial:`${dep.launched} earlier tokens, ${dep.dead} dead within a day`}[dep.type] : ''
+  };
+
+  const pool = [{t:'AI agent trades on-chain for you',k:'flow'},{t:`Live on ${CHAINS[it.chain].name} mainnet`,k:'launch'},{t:'Open-source code',k:'git'},{t:'Full documentation',k:'docs'},{t:'Experienced public team',k:'acct'}];
+  if(it.hasCoin) pool.push({t:'Fair launch, no team bundle',k:'bundle'});
+  for(let i = pool.length-1; i > 0; i--){ const j = Math.floor(r()*(i+1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  const EV = {flow:it.T.flow, launch:it.T.launch, git:'GitHub: '+it.T.git, docs:'Docs: '+it.T.docs, acct:`@${it.handle}: ${it.acct.age} old, ${it.acct.ren}`, bundle:`${it.bundlePct}% of supply bought by ${it.bundleW} bundled wallets at launch`};
+  it.claims = pool.slice(0, 4).map(c => {
+    const s = o[c.k];
+    return {t:c.t, st:s, label: (c.k === 'acct' || c.k === 'bundle') && s === 'ok' ? 'Checks out' : {ok:'Seen working', warn:'Not seen', fail:'Contradicted'}[s],
+      src: kind === 'post' ? 'From the post' : pick(['From the site hero','From the docs','From the X bio','From the site footer']), ev: EV[c.k]};
+  });
+
+  const prod = VAL[o.launch]*.3 + VAL[o.flow]*.5 + VAL[o.docs]*.2;
+  const clm = avg(it.claims.map(c => VAL[c.st]));
+  const ppl = VAL[o.acct]*.6 + VAL[o.git]*.4;
+  it.areas = {Product:Math.round(prod*100), Claims:Math.round(clm*100), People:Math.round(ppl*100)};
+  it.nar = clamp(Math.round(100*(prod*.4 + clm*.35 + ppl*.25)) + num(-4, 4), 2, 98);
+  if(o.launch !== 'ok') it.nar = Math.min(it.nar, 52 + num(0, 6));
+  else if(o.flow !== 'ok') it.nar = Math.min(it.nar, 66 + num(0, 8));
+  if(it.hasCoin){
+    it.coin = clamp(Math.round(100*(VAL[o.deployer]*.3 + VAL[o.bundle]*.3 + VAL[o.holders]*.2 + VAL[o.lp]*.1 + VAL[o.mint]*.1)) + num(-4, 4), 2, 98);
+    if(dep.type === 'serial') it.coin = Math.min(it.coin, 30 + num(0, 12));
+    else if(dep.type === 'mixed') it.coin = Math.min(it.coin, 62 + num(0, 10));
+    it.total = Math.round((it.nar + it.coin)/2);
+  } else { it.coin = null; it.total = it.nar; }
+
+  const prodS = o.launch === 'warn' ? "The 'live' app is a waitlist"
+    : o.launch === 'fail' ? "'Launch app' does nothing"
+    : o.flow === 'ok' ? 'The app works end to end'
+    : o.flow === 'warn' ? "The app loads but the main flow stops at 'Coming soon'"
+    : 'The app loads but the main flow errors out';
+  const gitS = {ok:'code is public and active', warn:'the GitHub was pushed in one burst at launch', fail:'no code backs the open-source claim'}[o.git];
+  let coinS = '';
+  if(it.hasCoin){
+    coinS = o.bundle === 'fail' ? `${it.bundlePct}% of supply was bundled at launch`
+      : dep.type === 'serial' ? `Deployer has ${dep.dead} dead tokens behind it`
+      : o.holders === 'fail' ? `Top 10 wallets hold ${it.top10}%`
+      : o.lp === 'fail' ? 'Liquidity is unlocked'
+      : (o.bundle === 'warn' || o.holders === 'warn' || dep.type === 'mixed') ? 'Holders are somewhat concentrated'
+      : 'Supply and liquidity look clean';
+  }
+  it.prodS = prodS; it.gitS = gitS; it.coinS = coinS;
+  it.summary = `${prodS}; ${gitS}.` + (it.hasCoin && it.coin < 60 ? ` ${coinS}.` : '');
+
+  if(it.hasCoin){
+    it.mc = Math.round(Math.exp(Math.log(8e3) + r()*(Math.log(9e6) - Math.log(8e3))));
+    it.vol5m = Math.round(it.mc*(0.001 + r()*0.03));
+    it.since = clamp((it.total-50)*1.6 + (r()-.5)*50 + (it.total >= 80 ? r()*120 : 0), -96, 480);
+    it.ch24 = clamp(it.since*.35 + (r()-.5)*40, -90, 300);
+    it.spark = walk(it.since, r);
+  } else { it.mc = null; it.vol5m = 0; it.since = null; it.ch24 = null; it.spark = null; }
+  it.checks = 1 + Math.round(Math.pow(r(), 3)*140);
+  it.asks = Math.round(Math.pow(r(), 2)*12);
+  it.via = r() < .55 ? 'bot' : 'web';
+  it.by = pick(REQS);
+
+  const QA = [
+    ['who funded the deployer?', it.hasCoin ? `The deployer was funded from ${dep.funded}. Track record: ${it.T.deployer}.` : 'There is no coin linked to this one yet, so there is no deployer to trace.'],
+    ['can I actually use the app today?', prodS + '.'],
+    ['is the github legit?', cap(gitS) + '.'],
+    ['how much was bundled?', it.hasCoin ? `${it.bundlePct}% of supply went to ${it.bundleW} wallets in the launch block.` : 'No coin linked, so there is no supply to check.'],
+    ['is the team doxxed?', it.team + '.']
+  ];
+  for(let i = QA.length-1; i > 0; i--){ const j = Math.floor(r()*(i+1)); [QA[i], QA[j]] = [QA[j], QA[i]]; }
+  it.qa = QA.slice(0, Math.min(it.asks, 3)).map(([q, a]) => ({q, a, by:pick(REQS), via:r() < .6 ? 'X' : 'site', t:num(2, 90)}));
+  const good = ['Team ran a live demo in a Space on Oct 14; the recording is pinned on their profile.','Dev shipped two earlier tools under the same GitHub; both still have users.','Contract matches the open-source repo; verified it myself on the explorer.'];
+  const bad = ['Same site template as two rugs from last week; only the logo changed.','The demo video in the post is from a different project\'s launch.','Dev wallet sent funds to a CEX within an hour of launch.','Their "partners" section lists projects that never announced anything.'];
+  const nN = num(0, 3), srcN = it.total >= 55 ? good : bad;
+  it.notes = Array.from({length:nN}, (_, i) => ({by:pick(REQS), hold:(num(3,90)/10).toFixed(1)+'M', text:srcN[(i + num(0,3)) % srcN.length], help:num(2,48), mine:false}));
+
+  let t = 0; const S = []; const add = (s, d) => { t += d; s.cum = t; S.push(s); };
+  if(kind === 'site') add({x:`Target is a website: ${it.domain}`, st:'info'}, 2);
+  if(kind === 'post'){ add({x:`Reading post by @${it.handle}`, st:'info', src:'X'}, 3); add({x:`Found link in post: ${it.domain}`, st:'ok'}, 4); }
+  if(kind === 'coin'){ add({x:`Contract on ${CHAINS[it.chain].name}: ${short(it.ca)}`, st:'info'}, 3); add({x:`Website from token metadata: ${it.domain}`, st:'ok', src:'DexScreener'}, 5); }
+  add({x:`Opening ${it.domain} in a clean browser`, st:'info', url:`https://${it.domain}`, open:true, cap:'Loading page'}, 6);
+  add({x:`Page loaded in ${(0.8 + r()*2).toFixed(1)}s, pulled ${it.claims.length + num(1,4)} claims from the copy`, st:'ok', cap:'Reading the page'}, 9);
+  add({x:it.T.launch, st:o.launch, target:'launch', cap:"Clicking 'Launch app'", modal:o.launch === 'warn' ? ['Join the waitlist','Early access opens soon. Drop your email.'] : null}, 14);
+  if(o.launch === 'ok') add({x:it.T.flow, st:o.flow, target:'flow', cap:'Trying the main flow', url:`https://app.${it.domain}`, modal:o.flow === 'warn' ? ['Coming soon','Agent strategies unlock after TGE.'] : o.flow === 'fail' ? ['Something went wrong','Transaction simulation failed.'] : null}, 31);
+  add({x:`Docs: ${it.T.docs}`, st:o.docs, target:'docs', cap:'Opening docs', close:true}, 12);
+  add({x:`GitHub: ${it.T.git}`, st:o.git, src:'GitHub'}, 11);
+  add({x:`@${it.handle}: ${it.acct.age} old, ${it.acct.fol} followers, ${it.acct.ren}`, st:o.acct, src:'X'}, 8);
+  if(it.hasCoin){
+    if(kind !== 'coin') add({x:`Contract found on page: ${short(it.ca)} on ${CHAINS[it.chain].name}`, st:'info', target:'ca', cap:'Reading the contract address'}, 5);
+    add({x:`Deployer: ${it.T.deployer}`, st:o.deployer, src:'DevRadar'}, 9);
+    add({x:`Launch: ${it.bundlePct}% of supply bought by ${it.bundleW} bundled wallets`, st:o.bundle, src:'BundleScan'}, 10);
+    add({x:`Top 10 holders own ${it.top10}%, liquidity ${it.lp.toLowerCase()}`, st:o.holders, src:'WhaleFlow'}, 8);
+  } else add({x:'No contract found on the site or in the post', st:'info'}, 5);
+  add({x:`Scoring ${it.claims.length} claims${it.hasCoin ? ' and the coin' : ''}`, st:'info'}, 7);
+  S.forEach(s => s.frac = s.cum / t);
+  it.steps = S; it.simDur = t;
+  it.tvl = `$${(num(8,240)/10).toFixed(1)}${r() > .4 ? 'M' : 'K'}`;
+  return it;
+}
+
+/* ================= state ================= */
+const S = {credits:4, max:5, runs:[], watch:new Set(), view:'list', tab:'latest',
+  f:{q:'', type:'all', nar:'any', coin:'any', chain:'any'}, limit:25,
+  coinTab:'all', coinQ:'', coinChain:'any', depChain:'all', depSort:'real', depOpen:null,
+  repTab:null, repId:null, mount:null};
+const ITEMS = [];
+const used = new Set();
+function uniq(base, kind){
+  for(let k = 0; k < 30; k++){ const it = buildItem(base + '~' + k, kind); if(!used.has(it.name)){ used.add(it.name); return it; } }
+  return buildItem(base + '~z', kind);
+}
+(function(){
+  const r = rng(42); let age = 1;
+  for(let i = 0; i < 64; i++){
+    const x = r(); const kind = x < .56 ? 'coin' : x < .85 ? 'post' : 'site';
+    const it = uniq('feed' + i, kind);
+    age += Math.floor(r()*7);
+    it.checkedAt = Date.now() - age*60000 - Math.floor(r()*50000);
+    ITEMS.push(it); BYID[it.id] = it;
+  }
+  [[48,120],[86,140],[15,95],[112,150]].forEach(([off, dur]) => {
+    const x = r(); const kind = x < .55 ? 'coin' : x < .85 ? 'post' : 'site';
+    const it = uniq('live' + (SEQ++), kind); it.running = true; BYID[it.id] = it;
+    S.runs.push({item:it, start:Date.now() - off*1000, dur:dur*1000});
+  });
+})();
+const runOf = it => S.runs.find(r => r.item === it);
+const okCoin = i => i.total >= 60 && i.coin >= 60;
+
+/* ================= shared bits ================= */
+function avatar(it, size = 30){
+  if(it.kind === 'coin') return `<span class="av" style="--s:${size}px;--h:${it.hue}" aria-hidden="true">${esc(it.ticker[0])}</span>`;
+  if(it.kind === 'post') return `<span class="av av-x" style="--s:${size}px" aria-hidden="true">${XSVG}</span>`;
+  return `<span class="av av-site" style="--s:${size}px" aria-hidden="true">${GLOBE}</span>`;
+}
+const chainTag = c => `<span class="ch"><i style="background:${CHAINS[c].c}"></i>${CHAINS[c].s}</span>`;
+const narB = n => { const b = nb(n); return `<span class="vb n-${b.key}">${b.name}<b>${n}</b></span>`; };
+const coinB = n => { if(n == null) return '<span class="nil">—</span>'; const b = kb(n); return `<span class="vb k-${b.key}">${b.name}<b>${n}</b></span>`; };
+const mm = (n, b, p = 'n', label) => `<span class="mm ${p}-${b.key}"><span class="mm-t">${label ? `<span class="mm-k">${label} · </span>` : ''}${b.name}</span><b>${n}</b><span class="mm-bar"><i style="width:${n}%"></i></span></span>`;
+function ringSVG(n, size, col, id){
+  const c = size/2, r = c - 7, C = 2*Math.PI*r;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><circle cx="${c}" cy="${c}" r="${r}" fill="none" style="stroke:var(--panel2)" stroke-width="9"/><circle class="arc"${id ? ` id="${id}"` : ''} data-c="${C.toFixed(1)}" cx="${c}" cy="${c}" r="${r}" fill="none" style="stroke:${col || 'var(--vc)'}" stroke-width="9" stroke-linecap="round" stroke-dasharray="${(C*n/100).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 ${c} ${c})"/></svg>`;
+}
+const FEED_HEAD = `<div class="tr th" role="row"><span>Score</span><span>Project</span><span>Narrative</span><span>Coin</span><span class="num c-mc">MC</span><span class="num c-since">Since check</span><span class="num c-age">Age</span></div>`;
+const pct = p => p == null ? '<span class="nil">—</span>' : `<span class="${p >= 0 ? 'up' : 'dn'}">${fmtPct(p)}</span>`;
+function spark(a, w = 46, h = 16){
+  if(!a) return '';
+  const mn = Math.min(0, ...a), mx = Math.max(0, ...a), rg = (mx - mn) || 1;
+  const pts = a.map((v, i) => `${(i/(a.length-1)*w).toFixed(1)},${(h - 1 - (v - mn)/rg*(h-2)).toFixed(1)}`).join(' ');
+  const z = (h - 1 - (0 - mn)/rg*(h-2)).toFixed(1);
+  const col = a[a.length-1] >= 0 ? 'var(--up)' : 'var(--dn)';
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><line x1="0" x2="${w}" y1="${z}" y2="${z}" style="stroke:var(--line2)" stroke-dasharray="2 2"/><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+function credLine(){
+  return S.credits > 0 ? `<b>${S.credits} free check${S.credits === 1 ? '' : 's'}</b> left today. Reading verdicts is always free.` : `You've used today's free checks. Hold $APECHECK for more, or come back after 00:00 UTC.`;
+}
+function renderCredits(){
+  const f = S.credits / S.max, C = 2*Math.PI*8;
+  $('#credBtn').innerHTML = `<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="8" fill="none" style="stroke:var(--line2)" stroke-width="3"/><circle cx="11" cy="11" r="8" fill="none" style="stroke:${S.credits ? 'var(--acc)' : 'var(--dn)'}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(C*f).toFixed(1)} ${C.toFixed(1)}"/></svg>${S.credits}/${S.max}`;
+  $('#credBtn').setAttribute('aria-label', `${S.credits} of ${S.max} free checks left today`);
+  const cl = $('#credLine'); if(cl) cl.innerHTML = credLine();
+}
+function cardHTML(it){
+  const b = nb(it.nar), t = nb(it.total), src = it.kind === 'post' ? `@${esc(it.handle)} on X` : it.kind === 'coin' ? esc(it.name) : esc(it.domain);
+  return `<div class="vcard">
+    <div class="vcard-top"><span class="vcard-brand">${LOGO}apecheck</span><span>${src}</span></div>
+    <div class="vcard-main"><div class="rv-ring sm n-${t.key}">${ringSVG(it.total, 92)}<div class="rv-ring-in"><b>${it.total}</b></div></div>
+      <div style="min-width:0"><span class="vlabel n-${b.key}">${b.name}</span><div class="vcard-ms">${mm(it.nar, b, 'n', 'Narrative')}${it.hasCoin ? mm(it.coin, kb(it.coin), 'k', 'Coin') : ''}</div></div></div>
+    <p>${esc(it.summary)}</p>
+    <div class="vcard-foot"><span>${CHAINS[it.chain].name}</span><span>apecheck.io/c/${it.id}</span></div>
+  </div>`;
+}
+/* ================= theme ================= */
+const SUN = '<svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 1.8v1.8M9 14.4v1.8M1.8 9h1.8M14.4 9h1.8M3.9 3.9l1.3 1.3M12.8 12.8l1.3 1.3M3.9 14.1l1.3-1.3M12.8 5.2l1.3-1.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const MOON = '<svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true"><path d="M15 11.2A6.5 6.5 0 0 1 6.8 3a6.5 6.5 0 1 0 8.2 8.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+function setTheme(t, init){
+  document.documentElement.dataset.theme = t;
+  const b = $('#themeBtn'); b.innerHTML = t === 'dark' ? SUN : MOON; b.setAttribute('aria-label', t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+  const m = document.querySelector('meta[name=theme-color]'); if(m) m.content = t === 'dark' ? '#0D0F12' : '#FFFFFF';
+  if(!init){ try { localStorage.setItem('apecheck-theme', t); } catch(e){} }
+}
+
+/* ================= tooltip ================= */
+const tip = $('#tip');
+function showTip(html, x, y){ tip.innerHTML = html; tip.style.left = x + 'px'; tip.style.top = y + 'px'; tip.classList.add('on'); }
+function hideTip(){ tip.classList.remove('on'); }
+document.addEventListener('mouseover', e => {
+  const t = e.target.closest('[data-tip]');
+  if(!t) return;
+  const r = t.getBoundingClientRect();
+  showTip(t.dataset.tip, r.left + r.width/2, r.top);
+});
+document.addEventListener('mouseout', e => { if(e.target.closest('[data-tip]')) hideTip(); });
+
+/* ================= toast & modal ================= */
+let toastT;
+function toast(text, id){
+  const el = $('#toast');
+  el.innerHTML = `<span>${esc(text)}</span>${id ? `<a href="#/c/${id}">Open</a>` : ''}`;
+  el.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('on'), id ? 6000 : 2800);
+}
+function openModal(html, narrow){
+  const m = $('#modal'), b = $('#modalBox');
+  b.className = 'modal-box' + (narrow ? ' narrow' : '');
+  b.innerHTML = html; m.classList.add('open');
+  const f = b.querySelector('button'); if(f) f.focus();
+}
+function closeModal(){ $('#modal').classList.remove('open'); }
+$('#modal').addEventListener('click', e => { if(e.target.id === 'modal') closeModal(); });
+function tiersHTML(){
+  return `<div class="tiers">
+    <div class="tier"><h3>Free</h3><p class="req">No wallet needed</p><ul><li>5 checks a day on the site</li><li>Bot replies when you tag it</li><li>Every verdict and report is public</li><li>Narrative and coin scores</li></ul><button class="btn" type="button" data-act="close">Keep using free</button></div>
+    <div class="tier pro"><h3>Pro</h3><p class="req">Hold <b>250,000 $APECHECK</b></p><ul><li>30 checks a day, ahead of the queue</li><li>Deep holder analysis and wallet clusters</li><li>Ask follow-ups on the site and via the bot</li><li>Re-check alerts when a site or contract changes</li></ul><button class="btn btn-primary" type="button" data-act="wallet">Connect wallet</button></div>
+    <div class="tier"><h3>Max</h3><p class="req">Hold <b>2,500,000 $APECHECK</b></p><ul><li>200 checks a day</li><li>API, MCP and webhooks</li><li>Watchlists that re-check on their own</li><li>Private checks kept off the public feed</li></ul><button class="btn" type="button" data-act="wallet">Connect wallet</button></div>
+  </div>`;
+}
+function openAccess(out){
+  openModal(`<div class="modal-h"><div><h2>${out ? "You've used today's free checks" : 'Checks and access'}</h2><p>${out ? 'Free checks reset at 00:00 UTC. Holders get more, plus deeper checks.' : `${S.credits} of ${S.max} free checks left today. Free checks reset at 00:00 UTC.`}</p></div><button class="x-btn" type="button" data-act="close" aria-label="Close">✕</button></div>${tiersHTML()}<p class="pay-note">Prefer not to hold? Pro and Max can also be paid monthly in USDC.</p>`);
+}
+function openShare(it){
+  openModal(`${cardHTML(it)}<div class="modal-actions"><button class="btn" type="button" data-act="close">Close</button><button class="btn" type="button" data-act="toast" data-msg="Card saved as PNG">Download image</button><button class="btn btn-primary" type="button" data-act="toast" data-msg="Opens X with the card and verdict attached">Post to X</button></div>`, true);
+}
+
+/* ================= target detection & checks ================= */
+function detect(raw){
+  const v = raw.trim(); if(!v) return null; let m;
+  if((m = v.match(/(?:^|\/\/|\b)(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})(?:\/status\/(\d+))?/i))) return {kind:'xpost', label:'X post', handle:m[1]};
+  if(/^0x[a-fA-F0-9]{40}$/.test(v)) return {kind:'evm', label:'EVM CA'};
+  if(/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(v)) return {kind:'tron', label:'Tron CA'};
+  if(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)) return {kind:'sol', label:'Solana CA'};
+  if((m = v.match(/^(?:https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?:[\/?#]\S*)?$/i))) return {kind:'site', label:'Website', domain:m[1].toLowerCase().replace(/^www\./, '')};
+  return {kind:'bad'};
+}
+function startCheck(raw){
+  const d = detect(raw);
+  if(!d || d.kind === 'bad'){ toast('Paste a contract address, an X post link or a website'); return false; }
+  if(S.credits <= 0){ openAccess(true); return false; }
+  const v = raw.trim(), ov = {p: 0.06 + rng(hash(v.toLowerCase()))()*0.9}; let kind;
+  if(d.kind === 'site'){ kind = 'site'; ov.domain = d.domain; }
+  else if(d.kind === 'xpost'){ kind = 'post'; ov.handle = d.handle; }
+  else { kind = 'coin'; ov.ca = v; ov.chain = d.kind === 'sol' ? 'sol' : d.kind === 'tron' ? 'trx' : ['base','eth','bnb','rh','arb'][hash(v) % 5]; }
+  const it = buildItem('user:' + v.toLowerCase() + ':' + (SEQ++), kind, ov);
+  it.by = 'you'; it.via = 'web'; it.running = true; BYID[it.id] = it;
+  S.credits--; renderCredits();
+  S.runs.unshift({item:it, start:Date.now(), dur:26000, mine:true});
+  location.hash = '#/c/' + it.id;
+  return true;
+}
+function spawnLive(){
+  if(S.runs.filter(r => !r.mine).length >= 4) return;
+  const x = Math.random(), kind = x < .55 ? 'coin' : x < .85 ? 'post' : 'site';
+  const it = uniq('live' + (SEQ++), kind); it.running = true; BYID[it.id] = it;
+  S.runs.push({item:it, start:Date.now(), dur:70000 + Math.random()*80000});
+  if(cur().page === 'feed') renderLive();
+}
+function finishRun(run){
+  S.runs = S.runs.filter(r => r !== run);
+  const it = run.item; it.running = false; it.checkedAt = Date.now(); it.fresh = true;
+  if(it.hasCoin){ const r = rng(hash(it.id + 'fresh')); it.since = +((r() - .5)*4).toFixed(1); it.spark = Array.from({length:28}, (_, i) => i === 27 ? it.since : +((r() - .5)*2.4*(i/27)).toFixed(2)); }
+  ITEMS.unshift(it); used.add(it.name);
+  setTimeout(() => { it.fresh = false; }, 6000);
+  if(!run.mine) setTimeout(spawnLive, 2500 + Math.random()*5000);
+  const c = cur();
+  if(c.page === 'report' && c.id === it.id){ S.mount = null; S.repTab = 'run'; viewReport(it, {just:true}); }
+  else if(run.mine) toast(`Your check on ${it.name} is done: ${nb(it.nar).label} ${it.nar}`, it.id);
+  if(c.page === 'feed'){ renderLive(); renderRows(); renderSide(); }
+}
+
+/* ================= router ================= */
+const NAV = [['/','Feed','feed'],['/coins','Coins','coins'],['/deployers','Deployers','deployers'],['/bot','X bot','bot'],['/api','API','api']];
+function cur(){
+  const h = location.hash.replace(/^#/, '') || '/';
+  const m = h.match(/^\/c\/([a-z0-9]+)/);
+  if(m) return {page:'report', id:m[1]};
+  const p = {'/coins':'coins','/deployers':'deployers','/bot':'bot','/api':'api'}[h];
+  return {page:p || 'feed'};
+}
+function route(){
+  const c = cur();
+  S.mount = null; hideTip(); closeModal(); window.scrollTo(0, 0);
+  const navHTML = NAV.map(([h, l, p]) => `<a href="#${h}"${(c.page === p || (c.page === 'report' && p === 'feed')) ? ' aria-current="page"' : ''}>${l}</a>`).join('');
+  $('#nav').innerHTML = navHTML; $('#navm').innerHTML = navHTML;
+  if(c.page === 'report'){
+    const it = BYID[c.id];
+    if(S.repId !== c.id){ S.repId = c.id; S.repTab = null; }
+    if(it) viewReport(it); else app.innerHTML = `<div class="wrap page"><div class="empty"><p>This check doesn't exist or has expired.</p><a class="btn" href="#/">Back to the feed</a></div></div>`;
+  } else {
+    S.repId = null;
+    ({coins:viewCoins, deployers:viewDeployers, bot:viewBot, api:viewApi, feed:viewFeed})[c.page]();
+  }
+}
+window.addEventListener('hashchange', route);
+
+/* ================= feed ================= */
+const TABS = [['latest','Latest'],['checked','Most checked'],['real','Most real'],['least','Least real'],['vol','5m volume'],['watch','Watchlist']];
+function viewFeed(){
+  const larpC = ITEMS.filter(i => i.hasCoin && !i.running && i.nar < 40);
+  app.innerHTML = `
+  <section class="hero"><div class="wrap">
+    <div class="hero-c">
+      <h1>Know what's real<br>before you ape.</h1>
+      <p class="lede">Paste a coin, an X post or a link. An agent opens it in a real browser, tests every claim against the code, the chain and X, and gives you a verdict with the evidence.</p>
+      <form id="probe" novalidate>
+        <label class="probe-field"><span class="probe-type" id="typeChip">Auto</span><input id="target" placeholder="Contract address, X post or link" autocomplete="off" spellcheck="false" aria-label="What to check"><button class="btn-run" type="submit">Check <small>1 credit</small></button></label>
+      </form>
+      <p class="probe-sub" id="credLine">${credLine()}</p>
+      <div class="hero-stats"><span><b>${(21904 + ITEMS.length).toLocaleString('en-US')}</b> checked</span><span><b>2,869</b> today</span><span>LARP-stamped coins <b class="dn">${fmtPct(avg(larpC.map(i => i.since)))}</b> since their check</span></div>
+    </div>
+    <div class="live-wrap"><div class="live-h"><span class="dotlive"></span>Checking right now <b id="liveN"></b><span class="live-hint">Open one to watch the agent work</span></div><div class="live-row" id="liveList"></div></div>
+  </div></section>
+  <section class="wrap ins"><div class="side" id="side" aria-label="Highlights"></div></section>
+  <section class="wrap feed">
+      <div class="feed-h"><h2>Verdicts</h2></div>
+      <div class="ftabs" id="ftabs"><div class="tabs-pill" role="tablist">${TABS.map(([k, l]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}${k === 'watch' ? `<small>${S.watch.size}</small>` : ''}</button>`).join('')}</div>
+        <div class="vt" role="group" aria-label="Layout"><button type="button" data-view="list" aria-pressed="${S.view === 'list'}" aria-label="List view"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button><button type="button" data-view="grid" aria-pressed="${S.view === 'grid'}" aria-label="Grid view"><svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+      </div>
+      <div class="fbar">
+        <label class="fsearch">${SEARCH}<input id="fq" placeholder="Search name, CA, $ticker or dev wallet" value="${esc(S.f.q)}" aria-label="Filter the feed"></label>
+        <div class="seg" role="group" aria-label="Type" id="fType">${[['all','All'],['coin','Coins'],['post','Posts'],['site','Sites']].map(([k, l]) => `<button type="button" data-type="${k}" aria-pressed="${S.f.type === k}">${l}</button>`).join('')}</div>
+        <select class="sel" id="fNar" aria-label="Narrative verdict"><option value="any">Any narrative</option>${NAR.map(b => `<option value="${b.key}"${S.f.nar === b.key ? ' selected' : ''}>${b.name}</option>`).join('')}</select>
+        <select class="sel" id="fCoin" aria-label="Coin verdict"><option value="any">Any coin</option>${COIN.map(b => `<option value="${b.key}"${S.f.coin === b.key ? ' selected' : ''}>${b.name}</option>`).join('')}</select>
+        <select class="sel" id="fChain" aria-label="Chain"><option value="any">All chains</option>${Object.entries(CHAINS).map(([k, c]) => `<option value="${k}"${S.f.chain === k ? ' selected' : ''}>${c.name}</option>`).join('')}</select>
+      </div>
+      <div id="rows"></div>
+      <div class="fmore" id="fmore"></div>
+  </section>`;
+
+  const input = $('#target'), chip = $('#typeChip');
+  input.addEventListener('input', () => {
+    const d = detect(input.value);
+    chip.textContent = !d ? 'Auto' : d.kind === 'bad' ? 'Unknown' : d.label;
+    chip.classList.toggle('on', !!d && d.kind !== 'bad');
+  });
+  $('#probe').addEventListener('submit', e => { e.preventDefault(); startCheck(input.value); });
+  $('#fq').addEventListener('input', e => { S.f.q = e.target.value; S.limit = 25; renderRows(); });
+  $('#fNar').addEventListener('change', e => { S.f.nar = e.target.value; S.limit = 25; renderRows(); });
+  $('#fCoin').addEventListener('change', e => { S.f.coin = e.target.value; S.limit = 25; renderRows(); });
+  $('#fChain').addEventListener('change', e => { S.f.chain = e.target.value; S.limit = 25; renderRows(); });
+  renderLive(); renderRows(); renderSide();
+}
+function feedList(){
+  const f = S.f, q = f.q.trim().toLowerCase().replace(/^[$@]/, '');
+  let L = ITEMS.filter(i => !i.running);
+  if(S.tab === 'watch') L = L.filter(i => S.watch.has(i.id));
+  if(S.tab === 'vol') L = L.filter(i => i.hasCoin);
+  if(f.type !== 'all') L = L.filter(i => i.kind === f.type);
+  if(f.nar !== 'any') L = L.filter(i => nb(i.nar).key === f.nar);
+  if(f.coin !== 'any') L = L.filter(i => i.hasCoin && kb(i.coin).key === f.coin);
+  if(f.chain !== 'any') L = L.filter(i => i.chain === f.chain);
+  if(q) L = L.filter(i => [i.name, i.title, i.ticker, i.domain, i.handle, i.ca, i.dep && i.dep.addr].some(v => v && String(v).toLowerCase().includes(q)));
+  const sorts = {latest:(a,b) => b.checkedAt - a.checkedAt, checked:(a,b) => b.checks - a.checks, real:(a,b) => b.total - a.total, least:(a,b) => a.total - b.total, vol:(a,b) => b.vol5m - a.vol5m, watch:(a,b) => b.checkedAt - a.checkedAt};
+  return L.sort(sorts[S.tab]);
+}
+function rowHTML(it){
+  const n = nb(it.nar), t = nb(it.total);
+  return `<a class="tr${it.fresh ? ' fresh' : ''}" href="#/c/${it.id}">
+    <span class="td c-score"><span class="schip n-${t.key}" title="Total score">${it.total}</span></span>
+    <span class="td c-nm">${avatar(it, 36)}<span class="nm"><span class="nm1"><b>${esc(it.name)}</b><span class="tag">${KIND[it.kind]}</span>${chainTag(it.chain)}</span><span class="nm2" title="${esc(it.summary)}">${esc(it.summary)}</span></span></span>
+    <span class="td c-nar">${mm(it.nar, n, 'n', 'Narrative')}</span>
+    <span class="td c-coin">${it.hasCoin ? mm(it.coin, kb(it.coin), 'k', 'Coin') : '<span class="mm-nil">No coin linked</span>'}</span>
+    <span class="td num c-mc">${it.mc ? fmtUsd(it.mc) : '<span class="nil">—</span>'}</span>
+    <span class="td num c-since">${spark(it.spark)}${pct(it.since)}</span>
+    <span class="td num c-age muted" data-age="${it.checkedAt}">${ago(it.checkedAt)}</span>
+    <span class="c-mob">${it.mc ? `<span>MC ${fmtUsd(it.mc)}</span><span>Since check ${pct(it.since)}</span>` : ''}<span>${ago(it.checkedAt)} ago</span></span>
+  </a>`;
+}
+function gridHTML(it){
+  const n = nb(it.nar), t = nb(it.total);
+  return `<a class="gc${it.fresh ? ' fresh' : ''}" href="#/c/${it.id}">
+    <div class="gc-top"><span class="schip n-${t.key}">${it.total}</span><span class="nm"><span class="nm1"><b>${esc(it.name)}</b></span><span class="nm2">${KIND[it.kind]} · ${CHAINS[it.chain].name}</span></span>${avatar(it, 30)}</div>
+    <div class="gc-ms">${mm(it.nar, n, 'n', 'Narrative')}${it.hasCoin ? mm(it.coin, kb(it.coin), 'k', 'Coin') : '<span class="mm-nil">No coin linked</span>'}</div>
+    <p>${esc(it.summary)}</p>
+    <div class="gc-ft"><span>${it.mc ? 'MC ' + fmtUsd(it.mc) : 'No coin'}</span><span>${it.spark ? spark(it.spark) + ' ' + pct(it.since) : ''}</span><span>${ago(it.checkedAt)}</span></div>
+  </a>`;
+}
+function renderRows(){
+  const el = $('#rows'); if(!el) return;
+  const L = feedList(), shown = L.slice(0, S.limit);
+  if(!L.length){
+    el.innerHTML = S.tab === 'watch' && !S.watch.size
+      ? `<div class="tbl"><div class="tbl-empty" style="border-top:0">Nothing on your watchlist yet. Open any verdict and press Watch to keep it here and get a re-check when the site or contract changes.</div></div>`
+      : `<div class="tbl"><div class="tbl-empty" style="border-top:0">No verdicts match these filters.<br><button class="btn sm" type="button" data-act="clearf">Clear filters</button></div></div>`;
+    $('#fmore').innerHTML = ''; return;
+  }
+  el.innerHTML = S.view === 'grid' ? `<div class="gview">${shown.map(gridHTML).join('')}</div>`
+    : `<div class="tbl" role="table">${FEED_HEAD}${shown.map(rowHTML).join('')}</div>`;
+  $('#fmore').innerHTML = `<span>Showing ${shown.length} of ${L.length}</span>${L.length > S.limit ? '<button class="btn sm" type="button" data-act="more">Show 25 more</button>' : ''}`;
+}
+function renderLive(){
+  const el = $('#liveList'); if(!el) return;
+  $('#liveN').textContent = S.runs.length;
+  el.innerHTML = S.runs.length ? S.runs.map(run => { const it = run.item; return `<a class="lc" href="#/c/${it.id}"><span class="lc-top">${avatar(it, 34)}<span class="lc-n"><b>${esc(it.name)}${run.mine ? '<em>You</em>' : ''}</b><small id="lvs-${it.id}">${KIND[it.kind]}</small></span><time id="lvt-${it.id}">0:00</time></span><span class="lc-bar"><i id="lvb-${it.id}"></i></span></a>`; }).join('') : '<p class="live-empty">Nothing running right now. Paste something above to start a check.</p>';
+  updateLive(Date.now());
+}
+function updateLive(now){
+  for(const run of S.runs){
+    const it = run.item, b = document.getElementById('lvb-' + it.id); if(!b) continue;
+    const f = clamp((now - run.start)/run.dur, 0, 1);
+    b.style.width = (f*100) + '%';
+    document.getElementById('lvt-' + it.id).textContent = fmtT(f*it.simDur);
+    const done = it.steps.filter(s => s.frac <= f).length;
+    document.getElementById('lvs-' + it.id).textContent = `${KIND[it.kind]} · step ${Math.max(1, done)} of ${it.steps.length}`;
+  }
+}
+function renderSide(){
+  const el = $('#side'); if(!el) return;
+  const done = ITEMS.filter(i => !i.running);
+  const groups = NAR.map(b => { const g = done.filter(i => i.hasCoin && nb(i.nar).key === b.key); return {b, n:g.length, v:avg(g.map(i => i.since))}; }).filter(g => g.n);
+  const mx = Math.max(...groups.map(g => Math.abs(g.v))) || 1;
+  const top = [...done].sort((a, b) => b.checks - a.checks).slice(0, 5);
+  const deps = DEPS.map(d => { const its = done.filter(i => i.dep === d); return {d, its, real:its.filter(okCoin).length}; }).filter(x => x.its.length).sort((a, b) => (b.real/b.its.length - a.real/a.its.length) || b.its.length - a.its.length).slice(0, 4);
+  const bots = done.filter(i => i.via === 'bot').sort((a, b) => b.checkedAt - a.checkedAt).slice(0, 4);
+  el.innerHTML = `
+  <div class="scard"><h3>Since check, by verdict</h3><p class="sub">Average price move of checked coins after they were stamped</p>
+    <div class="dv">${groups.map(g => `<div class="dv-row n-${g.b.key}" data-tip="${esc(g.b.name)}: ${g.n} coins, average ${fmtPct(g.v)}"><span class="dv-l"><i class="sw"></i>${g.b.name}</span><span class="dv-bar"><i class="${g.v >= 0 ? 'pos' : 'neg'}" style="${g.v >= 0 ? 'left:50%' : 'right:50%'};width:${(Math.abs(g.v)/mx*50).toFixed(1)}%"></i></span><span class="dv-v ${g.v >= 0 ? 'up' : 'dn'}">${fmtPct(g.v)}</span></div>`).join('')}</div>
+    <div class="dv-ax"><span>−${Math.round(mx)}%</span><span>0</span><span>+${Math.round(mx)}%</span></div>
+  </div>
+  <div class="scard"><h3>Most checked <small>today</small><button type="button" data-act="tabjump" data-tab="checked">All</button></h3>
+    <ol class="rk">${top.map((it, i) => `<li><a href="#/c/${it.id}"><span class="rk-i">${i+1}</span>${avatar(it, 22)}<b>${esc(it.name)}</b>${narB(it.nar)}<span class="rk-n">${it.checks}</span></a></li>`).join('')}</ol>
+  </div>
+  <div class="scard"><h3>Builders worth watching<a href="#/deployers">All</a></h3>
+    <ul class="dl">${deps.map(x => `<li><a href="#/deployers" data-act="dep" data-a="${x.d.addr}"><span class="mono">${short(x.d.addr)}</span><span class="rep-b r-${x.d.type}">${REP[x.d.type]}</span><small>${x.real} of ${x.its.length} checked coins real · ${CHAINS[x.d.chain].name}</small></a></li>`).join('')}</ul>
+  </div>`;
+}
+
+/* ================= report ================= */
+function scoreBlock(label, n, band, cls, hint, just){
+  return `<div class="sb ${cls}"><span class="sb-l">${label}</span><span class="sb-n">${n}<small>/100</small></span><span class="vb">${band.name}</span><div class="meter" style="--s:${just ? 0 : n}" data-s="${n}"><i></i><i></i><i></i><i></i><i></i><b></b></div><span class="sb-h">${hint}</span></div>`;
+}
+function mblock(label, n, b, p, hint, just){
+  return `<div class="mb ${p}-${b.key}"><div class="mb-h"><span>${label}</span><b>${n}<small>/100</small></b></div><span class="mm-bar"><i style="width:${just ? 0 : n}%;transition:width .9s cubic-bezier(.2,.8,.2,1)" data-w="${n}"></i></span><span class="mb-t"><strong>${b.name}</strong> · ${hint}</span></div>`;
+}
+function rvHTML(it, just){
+  if(it.running){
+    return `<div class="rv-ring">${ringSVG(0, 140, 'var(--acc)', 'rvArc')}<div class="rv-ring-in"><b id="rvPct" style="font-size:30px">0%</b><span>Testing</span></div></div>
+    <div class="rv-run"><span class="vlabel" style="--vc:var(--acc)">Testing now</span><p class="v-sum" style="margin-top:14px">The agent is working through ${it.steps.length} steps. You can leave this page; the verdict lands in the feed when it's done.</p><div class="rv-prog"><i id="rvProg"></i></div><p class="v-meta" id="rvStep">Starting a clean browser</p></div>`;
+  }
+  const b = nb(it.nar), t = nb(it.total);
+  const by = it.by === 'you' ? ', requested by you' : it.via === 'bot' ? `, requested by @${esc(it.by)} via @ApeCheckBot` : `, requested by @${esc(it.by)} on the site`;
+  return `<div class="rv-ring n-${t.key}">${ringSVG(just ? 0 : it.total, 140, null, 'rvTot')}<div class="rv-ring-in"><b>${it.total}</b><span>Total score</span></div></div>
+  <div class="rv-l"><span class="vlabel n-${b.key}${just ? ' slam' : ''}">${b.name}</span><p class="v-sum">${esc(it.summary)}</p><p class="v-note">Checks the claims and the coin, not anyone's intentions. Real products can still rug. DYOR.</p><p class="v-meta">Checked ${agoLong(it.checkedAt)}${by} · ${it.steps.length} steps in ${fmtDur(it.simDur)}</p></div>
+  <div class="rv-s">${mblock('Narrative', it.nar, b, 'n', 'Is what they claim actually built?', just)}${it.hasCoin ? mblock('Coin', it.coin, kb(it.coin), 'k', 'Is the token set up fairly?', just) : `<div class="mb"><div class="mb-h"><span>Coin</span><b style="color:var(--dim)">—</b></div><span class="mb-t">No coin linked to this ${it.kind}</span></div>`}</div>`;
+}
+function viewReport(it, opts = {}){
+  const running = !!it.running;
+  if(!S.repTab) S.repTab = running ? 'run' : 'claims';
+  if(running) S.repTab = 'run';
+  const tabs = [['run','Agent run'],['claims','Claims'],['coin','Coin'],['people','People'],['asks',`Asks<small>${it.asks}</small>`],['notes',`Notes<small>${it.notes.length}</small>`]];
+  app.innerHTML = `<div class="wrap rep">
+    <nav class="crumb" aria-label="Breadcrumb"><a href="#/">Feed</a><span>/</span><span>${esc(it.name)}</span></nav>
+    <header class="rep-head">
+      ${avatar(it, 56)}
+      <div class="rh-id"><h1>${esc(it.name)}</h1>
+        <div class="rh-meta"><span class="tag">${KIND[it.kind]}</span>${chainTag(it.chain)}${it.ca ? `<button class="ca" type="button" data-act="copy" data-v="${esc(it.ca)}" aria-label="Copy contract address">${esc(short(it.ca))}${COPY}</button>` : ''}<a class="lnk" href="#" data-act="toast" data-msg="Opens ${esc(it.domain)} in a new tab">${esc(it.domain)}</a><a class="lnk" href="#" data-act="toast" data-msg="Opens @${esc(it.handle)} on X">@${esc(it.handle)}</a></div>
+      </div>
+      <div class="rh-act">
+        <button class="btn" type="button" data-act="watch" data-id="${it.id}" aria-pressed="${S.watch.has(it.id)}">${S.watch.has(it.id) ? 'Watching' : 'Watch'}</button>
+        <button class="btn" type="button" data-act="recheck" data-id="${it.id}"${running ? ' disabled' : ''}>Re-check <small>1 credit</small></button>
+        <button class="btn btn-primary" type="button" data-act="share" data-id="${it.id}"${running ? ' disabled' : ''}>Share card</button>
+      </div>
+    </header>
+    <section class="rv panel" id="rv" aria-live="polite">${rvHTML(it, opts.just)}</section>
+    <div class="rep-g">
+      <div class="rep-main">
+        <div class="rtabs" role="tablist">${tabs.map(([k, l]) => `<button type="button" role="tab" data-act="rtab" data-t="${k}" aria-selected="${S.repTab === k}"${running && k !== 'run' ? ' disabled title="Available when the check finishes"' : ''}>${l}</button>`).join('')}</div>
+        <div id="tp" role="tabpanel"></div>
+      </div>
+      <aside class="rep-side">${repSide(it)}</aside>
+    </div>
+  </div>`;
+  renderTab(it, S.repTab);
+  bindChart(it);
+  if(opts.just) requestAnimationFrame(() => requestAnimationFrame(() => { $$('#rv [data-w]').forEach(i => i.style.width = i.dataset.w + '%'); const a = $('#rvTot'); if(a) a.setAttribute('stroke-dasharray', `${(a.dataset.c*it.total/100).toFixed(1)} ${a.dataset.c}`); }));
+}
+function repSide(it){
+  let since;
+  if(it.running) since = `<div class="scard"><h3>Price since check</h3><p class="sub" style="margin:0">Tracking starts when the verdict lands, so you can see later whether it held up.</p></div>`;
+  else if(!it.hasCoin) since = `<div class="scard"><h3>Price since check</h3><p class="sub" style="margin:0 0 12px">No coin is linked to this ${it.kind}. If the project has one, paste its contract to check the coin too.</p><a class="btn sm" href="#/">Check a contract</a></div>`;
+  else since = `<div class="scard"><h3>Price since check</h3><div class="sc-big ${it.since >= 0 ? 'up' : 'dn'}">${fmtPct(it.since)}</div><p class="sc-sub">MC ${fmtUsd(it.mc)} · 24h ${fmtPct(it.ch24)}</p><div class="chart" id="sinceChart">${sinceSVG(it)}</div><div class="ch-ax"><span>At check</span><span>Now</span></div></div>`;
+  const d = it.dep;
+  const depC = d ? `<div class="scard r-${d.type}"><h3>Deployer<a href="#/deployers" data-act="dep" data-a="${d.addr}">All their coins</a></h3><p style="margin:0 0 6px"><span class="mono" style="font-size:13px">${short(d.addr)}</span> &nbsp;<span class="rep-b">${REP[d.type]}</span></p><p class="sub" style="margin:0">Funded from ${esc(d.funded)}. ${d.launched} tokens launched, ${d.dead} dead. Wallet first seen ${d.first} ago.</p></div>` : '';
+  const card = it.running ? '' : `<div class="scard"><h3>Share card</h3><p class="sub">What @ApeCheckBot posts when someone tags it</p>${cardHTML(it)}</div>`;
+  return since + depC + card;
+}
+const SW = 300, SH = 120, SP = 6;
+function sinceSVG(it){
+  const a = it.spark, n = a.length, mn = Math.min(-5, ...a), mx = Math.max(5, ...a), rg = (mx - mn) || 1;
+  const X = i => SP + i/(n-1)*(SW - 2*SP), Y = v => SP + (mx - v)/rg*(SH - 2*SP);
+  const line = a.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+  const col = it.since >= 0 ? 'var(--up)' : 'var(--dn)';
+  const area = `${line}L${X(n-1).toFixed(1)},${Y(0).toFixed(1)}L${X(0).toFixed(1)},${Y(0).toFixed(1)}Z`;
+  return `<svg viewBox="0 0 ${SW} ${SH}" role="img" aria-label="Price change since the check, now ${fmtPct(it.since)}">
+    <line x1="${SP}" x2="${SW-SP}" y1="${Y(0)}" y2="${Y(0)}" style="stroke:var(--line2)" stroke-dasharray="3 3"/>
+    <path d="${area}" fill="${col}" opacity=".1"/>
+    <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${X(0)}" cy="${Y(0)}" r="4" fill="var(--panel)" stroke="var(--ink)" stroke-width="2"/>
+    <circle cx="${X(n-1)}" cy="${Y(a[n-1])}" r="4" fill="${col}" stroke="var(--panel)" stroke-width="2"/>
+    <line id="chX" x1="0" x2="0" y1="${SP}" y2="${SH-SP}" style="stroke:var(--dim)" stroke-width="1" opacity="0"/>
+    <circle id="chD" r="4.5" fill="${col}" stroke="var(--panel)" stroke-width="2" opacity="0"/>
+    <rect x="0" y="0" width="${SW}" height="${SH}" fill="transparent" id="chHit"/>
+  </svg>`;
+}
+function bindChart(it){
+  const svg = $('#sinceChart svg'); if(!svg) return;
+  const a = it.spark, n = a.length, mn = Math.min(-5, ...a), mx = Math.max(5, ...a), rg = (mx - mn) || 1;
+  const X = i => SP + i/(n-1)*(SW - 2*SP), Y = v => SP + (mx - v)/rg*(SH - 2*SP);
+  const totalMin = Math.max(1, (Date.now() - it.checkedAt)/60000);
+  const xl = $('#chX', svg), dt = $('#chD', svg);
+  const move = e => {
+    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left)/r.width*SW;
+    const i = clamp(Math.round((x - SP)/(SW - 2*SP)*(n-1)), 0, n-1);
+    xl.setAttribute('x1', X(i)); xl.setAttribute('x2', X(i)); xl.setAttribute('opacity', '.6');
+    dt.setAttribute('cx', X(i)); dt.setAttribute('cy', Y(a[i])); dt.setAttribute('opacity', '1');
+    const m = i/(n-1)*totalMin, when = i === 0 ? 'At check' : m < 60 ? `${Math.round(m)}m after check` : `${(m/60).toFixed(1)}h after check`;
+    showTip(`<span>${when}</span> &nbsp;<b class="${a[i] >= 0 ? 'up' : 'dn'}">${fmtPct(a[i])}</b>`, r.left + X(i)/SW*r.width, r.top + Y(a[i])/SH*r.height);
+  };
+  svg.addEventListener('mousemove', move);
+  svg.addEventListener('mouseleave', () => { hideTip(); xl.setAttribute('opacity', '0'); dt.setAttribute('opacity', '0'); });
+}
+function renderTab(it, t){
+  S.repTab = t; S.mount = null;
+  $$('.rtabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.t === t));
+  const tp = $('#tp'); if(!tp) return;
+  if(t === 'run'){ tp.innerHTML = tabRun(it); mountRun(it); return; }
+  if(t === 'claims') tp.innerHTML = `<ul class="cl">${it.claims.map(c => `<li><b>“${esc(c.t)}”</b><span class="pill ${c.st}">${c.label}</span><small><span>${c.src}.</span> ${esc(c.ev)}</small></li>`).join('')}</ul>
+    <h4 class="h4">Narrative score by area</h4><div class="areas">${Object.entries(it.areas).map(([k, v]) => `<div class="area"><span>${k}</span><span class="bar"><i style="width:${v}%"></i></span><span>${v}/100</span></div>`).join('')}</div>`;
+  if(t === 'coin') tp.innerHTML = tabCoin(it);
+  if(t === 'people') tp.innerHTML = `<dl class="facts">${[
+      ['X account', `<span class="dot ${it.o.acct}"></span>@${esc(it.handle)}<small>${esc(it.acct.age)} old, ${esc(it.acct.ren)}</small>`, 'X'],
+      ['Followers', `${esc(it.acct.fol)}<small>${esc(it.acct.q)}</small>`, 'X'],
+      ['Team', `<span class="dot ${it.o.acct}"></span>${esc(it.team)}`, ''],
+      ['GitHub', `<span class="dot ${it.o.git}"></span>${esc(it.T.git)}`, 'GitHub'],
+      ['Docs', `<span class="dot ${it.o.docs}"></span>${esc(it.T.docs)}`, 'Site']
+    ].map(([a, b, s]) => `<dt>${a}</dt><dd>${b}</dd><dd class="src">${s}</dd>`).join('')}</dl>`;
+  if(t === 'asks') tp.innerHTML = `${it.qa.length ? `<ul class="qa">${it.qa.map(x => `<li><div class="q"><span class="mini-av">${esc(x.by[0].toUpperCase())}</span><div><span class="meta"><b>@${esc(x.by)}</b> asked ${x.via === 'X' ? 'via X' : 'on the site'} · ${x.t}m ago</span><p>${esc(x.q)}</p></div></div><div class="a"><span class="mini-av" style="background:var(--panel);border:1px solid var(--line2)">${LOGO}</span><div><span class="meta"><b>ApeCheck</b> answered from the check</span><p>${esc(x.a)}</p></div></div></li>`).join('')}</ul>${it.asks > it.qa.length ? `<p class="muted" style="margin:0 0 14px;font-size:13.5px">${it.asks - it.qa.length} more questions were asked on X</p>` : ''}` : `<div class="empty" style="margin-bottom:14px"><p>No follow-up questions yet.</p></div>`}
+    <form class="ask" data-act="askform"><input placeholder="Ask about this check, like “who funded the deployer?”" aria-label="Ask a follow-up"><button class="btn btn-primary sm" type="submit">Ask <span class="lock" style="background:rgba(255,255,255,.22);color:#fff">Pro</span></button></form>`;
+  if(t === 'notes') tp.innerHTML = `${it.notes.length ? `<ul class="notes">${it.notes.map((n, i) => `<li><span class="meta"><b>@${esc(n.by)}</b> · holds ${n.hold} $APECHECK</span><p>${esc(n.text)}</p><button class="btn sm" type="button" data-act="helpful" data-id="${it.id}" data-i="${i}" aria-pressed="${n.mine}">Helpful <small>${n.help}</small></button></li>`).join('')}</ul>` : `<div class="empty" style="margin-bottom:14px"><p>No community notes yet. Notes add context the agent can't see, like a Space recording or a past project.</p></div>`}
+    <button class="btn" type="button" data-act="toast" data-msg="Notes are open to $APECHECK holders. Connect a wallet to add one.">Add a note</button>`;
+}
+function tabCoin(it){
+  if(!it.hasCoin) return `<div class="empty"><p>No coin is linked to this ${it.kind}. The narrative score covers the claims; paste the contract to score the coin too.</p><a class="btn sm" href="#/">Check a contract</a></div>`;
+  let dev = it.devHold, bun = it.bundlePct, top = it.top10;
+  const sum = dev + bun + top; if(sum > 92){ const k = 92/sum; dev = +(dev*k).toFixed(1); bun = +(bun*k).toFixed(1); top = +(top*k).toFixed(1); }
+  const rest = +(100 - dev - bun - top).toFixed(1);
+  const segs = [['Dev wallet', dev, 'var(--s-dev)'], ['Bundled at launch', bun, 'var(--s-bun)'], ['Other top 10', top, 'var(--s-top)'], ['Everyone else', rest, 'var(--s-rest)']];
+  const kbd = kb(it.coin);
+  return `<div class="coin-g">
+    ${scoreBlock('Coin', it.coin, kbd, 'k-' + kbd.key, 'Deployer, bundle, holders, liquidity and authorities', false)}
+    <div class="supply"><h4 class="h4">Who holds the supply</h4>
+      <div class="stack" role="img" aria-label="${segs.map(s => `${s[0]} ${s[1]}%`).join(', ')}">${segs.map(s => `<i style="width:${s[1]}%;background:${s[2]}" data-tip="${s[0]}: ${s[1]}%"></i>`).join('')}</div>
+      <ul class="legend">${segs.map(s => `<li><i class="sw" style="background:${s[2]}"></i>${s[0]}<b>${s[1]}%</b></li>`).join('')}</ul>
+    </div>
+  </div>
+  <dl class="facts">${[
+    ['Deployer', `<span class="dot ${it.o.deployer}"></span><span class="mono">${short(it.dep.addr)}</span><small>${REP[it.dep.type]}, funded from ${esc(it.dep.funded)}</small>`, 'DevRadar'],
+    ['Earlier launches', esc(cap(it.T.deployer)), 'DevRadar'],
+    ['Bundled at launch', `<span class="dot ${it.o.bundle}"></span>${it.bundlePct}% in ${it.bundleW} wallets`, 'BundleScan'],
+    ['Top 10 holders', `<span class="dot ${it.o.holders}"></span>${it.top10}%<small>Excludes the liquidity pool</small>`, 'WhaleFlow'],
+    ['Liquidity', `<span class="dot ${it.o.lp}"></span>${it.lp}`, 'On-chain'],
+    ['Authorities', `<span class="dot ${it.o.mint}"></span>${it.mintA}`, 'On-chain'],
+    ['Holders', it.holdersN.toLocaleString('en-US'), 'On-chain'],
+    ['Market cap', fmtUsd(it.mc), 'DexScreener']
+  ].map(([a, b, s]) => `<dt>${a}</dt><dd>${b}</dd><dd class="src">${s}</dd>`).join('')}</dl>`;
+}
+
+/* ---- agent run view ---- */
+function tabRun(it){
+  const run = runOf(it);
+  return `<div class="run-top"><span class="status" id="runState">${run ? '<i class="pulse"></i>Testing' : 'Finished'}</span><time id="runTime">${run ? '0:00' : fmtT(it.simDur)}</time><span class="sp"></span>${run ? '<button class="btn sm" type="button" data-act="skip">Skip to verdict</button>' : '<button class="btn sm" type="button" data-act="replay">Replay run</button>'}</div>
+  <div class="run-g">
+    <div class="cam"><div class="cam-bar"><span class="cam-dots"><i></i><i></i><i></i></span><span class="cam-url" id="camUrl">about:blank</span></div>
+      <div class="cam-view" id="camView">
+        <div class="cam-idle" id="camIdle">Starting a clean browser…</div>
+        <div class="site" id="site" style="--sh:${it.hue}">
+          <div class="s-nav"><span class="s-logo"></span><span class="s-name">${esc(it.title.toLowerCase())}</span><span class="s-links"><i></i><i></i><i></i></span></div>
+          <div class="s-hero"><div class="s-h1">${esc(it.head)}</div><div class="s-sub">Built on ${CHAINS[it.chain].name}. Audited. Community owned.</div><div class="s-btns"><span class="s-btn" data-t="launch">Launch app</span><span class="s-btn ghost" data-t="docs">Read docs</span></div></div>
+          <div class="s-row"><div class="s-tile" data-t="flow"><b>Agent</b><span>Run strategy</span></div><div class="s-tile"><b>TVL</b><span>${it.tvl}</span></div><div class="s-tile" data-t="ca"><b>Contract</b><span>${it.ca ? esc(short(it.ca)) : 'not listed'}</span></div></div>
+          <div class="s-modal" id="sModal"><b id="smT"></b><span id="smB"></span><i></i></div>
+        </div>
+        <div class="cursor" id="cursor"><svg width="20" height="22" viewBox="0 0 20 22" aria-hidden="true"><path d="M2 2l15 8-6.5 1.8L7.5 18z" fill="#fff" stroke="#0C1220" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
+        <div class="cam-cap" id="camCap">Waiting</div>
+      </div>
+    </div>
+    <div class="log"><div class="log-h">What the agent ${run ? 'is doing' : 'did'}</div><ol id="logList"></ol></div>
+  </div>`;
+}
+function camCap(t){ const c = $('#camCap'); if(c) c.textContent = t; }
+function addLog(s, t){
+  const ol = $('#logList'); if(!ol) return;
+  const li = document.createElement('li'); li.className = s.st;
+  li.innerHTML = `<time>${fmtT(t)}</time><span class="ic"></span><span>${esc(s.x)}${s.src ? `<em>${esc(s.src)}</em>` : ''}</span>`;
+  ol.appendChild(li); ol.scrollTop = ol.scrollHeight;
+}
+function applyStep(s, animate){
+  const site = $('#site'), cursor = $('#cursor'), view = $('#camView'); if(!site) return;
+  if(s.url) $('#camUrl').textContent = s.url;
+  if(s.open){ $('#camIdle').hidden = true; site.classList.add('on'); cursor.classList.add('on'); }
+  if(s.close) $('#sModal').classList.remove('on');
+  if(s.cap) camCap(s.cap);
+  const el = s.target ? site.querySelector(`[data-t="${s.target}"]`) : null;
+  const finish = () => {
+    if(el){ el.classList.remove('t-hit'); if(s.st !== 'info') el.classList.add('t-' + s.st); }
+    if(s.modal && animate){ $('#smT').textContent = s.modal[0]; $('#smB').textContent = s.modal[1]; $('#sModal').classList.add('on'); }
+  };
+  if(el && animate){
+    const v = view.getBoundingClientRect(), e = el.getBoundingClientRect();
+    cursor.style.left = (e.left - v.left + e.width*.62) + 'px';
+    cursor.style.top = (e.top - v.top + e.height*.55) + 'px';
+    el.classList.add('t-hit');
+    setTimeout(() => { if(!document.body.contains(cursor)) return; cursor.classList.remove('click'); void cursor.offsetWidth; cursor.classList.add('click'); finish(); }, 650);
+  } else finish();
+}
+function applyAll(it){
+  const site = $('#site'); if(!site) return;
+  $('#camIdle').hidden = true; site.classList.add('on');
+  it.steps.forEach(s => { if(s.url) $('#camUrl').textContent = s.url; applyStep(Object.assign({}, s, {open:false, cap:null}), false); addLog(s, s.frac*it.simDur); });
+  $('#sModal').classList.remove('on'); camCap('Done');
+}
+function mountRun(it){
+  const run = runOf(it);
+  if(run){ S.mount = {run, shown:0}; tickMount(Date.now(), true); }
+  else applyAll(it);
+}
+function tickMount(now, instant){
+  const M = S.mount; if(!M) return;
+  if(!$('#logList')){ S.mount = null; return; }
+  const it = M.run.item, f = clamp((now - M.run.start)/M.run.dur, 0, 1);
+  let due = 0; while(M.shown + due < it.steps.length && it.steps[M.shown + due].frac <= f) due++;
+  const anim = !instant && due === 1;
+  for(let k = 0; k < due; k++){ const s = it.steps[M.shown]; applyStep(s, anim); addLog(s, s.frac*it.simDur); M.shown++; }
+  const tm = $('#runTime'); if(tm) tm.textContent = fmtT(f*it.simDur);
+  const pg = $('#rvProg'); if(pg) pg.style.width = (f*100) + '%';
+  const ra = $('#rvArc'); if(ra) ra.setAttribute('stroke-dasharray', `${(ra.dataset.c*f).toFixed(1)} ${ra.dataset.c}`);
+  const rp = $('#rvPct'); if(rp) rp.textContent = Math.round(f*100) + '%';
+  const sp = $('#rvStep'); if(sp && M.shown) sp.textContent = `Step ${M.shown} of ${it.steps.length}: ${it.steps[M.shown-1].x}`;
+  if(M.replay && f >= 1 && M.shown >= it.steps.length){
+    setTimeout(() => { camCap('Done'); const c = $('#cursor'); if(c) c.classList.remove('on'); const m = $('#sModal'); if(m) m.classList.remove('on'); }, 900);
+    const rs = $('#runState'); if(rs) rs.textContent = 'Replay finished';
+    S.mount = null;
+  }
+}
+
+/* ================= coins ================= */
+function viewCoins(){
+  app.innerHTML = `<section class="wrap page">
+    <div class="ph"><div><h1 class="h-pg">Coins</h1><p>The coin score looks only at the token: who deployed it, how much was bundled, who holds the supply and whether liquidity can be pulled. It's separate from whether the story is real.</p></div></div>
+    <div class="fbar">
+      <div class="seg" role="group" aria-label="Coin verdict" id="cTab">${[['all','All'], ...COIN.map(b => [b.key, b.name])].map(([k, l]) => `<button type="button" data-ctab="${k}" aria-pressed="${S.coinTab === k}">${l}</button>`).join('')}</div>
+      <label class="fsearch">${SEARCH}<input id="cq" placeholder="Search $ticker, CA or deployer" value="${esc(S.coinQ)}" aria-label="Filter coins"></label>
+      <select class="sel" id="cChain" aria-label="Chain"><option value="any">All chains</option>${Object.entries(CHAINS).map(([k, c]) => `<option value="${k}"${S.coinChain === k ? ' selected' : ''}>${c.name}</option>`).join('')}</select>
+    </div>
+    <div id="cRows"></div>
+  </section>`;
+  $('#cq').addEventListener('input', e => { S.coinQ = e.target.value; renderCoinRows(); });
+  $('#cChain').addEventListener('change', e => { S.coinChain = e.target.value; renderCoinRows(); });
+  renderCoinRows();
+}
+function renderCoinRows(){
+  const q = S.coinQ.trim().toLowerCase().replace(/^\$/, '');
+  let L = ITEMS.filter(i => !i.running && i.hasCoin);
+  if(S.coinTab !== 'all') L = L.filter(i => kb(i.coin).key === S.coinTab);
+  if(S.coinChain !== 'any') L = L.filter(i => i.chain === S.coinChain);
+  if(q) L = L.filter(i => [i.ticker, i.ca, i.dep.addr, i.name].some(v => v && v.toLowerCase().includes(q)));
+  L.sort((a, b) => b.coin - a.coin);
+  $('#cRows').innerHTML = L.length ? `<div class="tbl ctbl"><div class="tr th"><span>Coin</span><span>Coin score</span><span class="num">Bundled</span><span class="num">Top 10</span><span class="num c-dev">Dev</span><span>Liquidity</span><span class="c-mint">Authorities</span><span>Deployer</span><span class="num">MC</span><span class="num">Since check</span></div>
+    ${L.map(it => `<a class="tr" href="#/c/${it.id}">
+      <span class="td c-nm">${avatar(it.kind === 'coin' ? it : Object.assign({}, it, {kind:'coin'}))}<span class="nm"><span class="nm1"><b>$${esc(it.ticker)}</b>${chainTag(it.chain)}</span><span class="nm2">${it.kind === 'coin' ? 'Narrative ' + it.nar : 'Linked from ' + esc(it.name)}</span></span></span>
+      <span class="td c-sc">${coinB(it.coin)}</span>
+      <span class="td num"><span class="dot ${it.o.bundle}"></span>${it.bundlePct}%</span>
+      <span class="td num"><span class="dot ${it.o.holders}"></span>${it.top10}%</span>
+      <span class="td num c-dev">${it.devHold}%</span>
+      <span class="td"><span class="dot ${it.o.lp}"></span>${it.lp}</span>
+      <span class="td c-mint" style="font-size:13.5px"><span class="dot ${it.o.mint}"></span>${it.mintA}</span>
+      <span class="td"><span class="rep-b r-${it.dep.type}">${REP[it.dep.type]}</span></span>
+      <span class="td num">${fmtUsd(it.mc)}</span>
+      <span class="td num c-since">${spark(it.spark)}${pct(it.since)}</span>
+      <span class="c-mob"><span>Bundled ${it.bundlePct}%</span><span>Top 10 ${it.top10}%</span><span>${it.lp}</span><span>MC ${fmtUsd(it.mc)}</span></span>
+    </a>`).join('')}</div>` : `<div class="tbl"><div class="tbl-empty" style="border-top:0">No coins match these filters.</div></div>`;
+}
+
+/* ================= deployers ================= */
+function viewDeployers(){
+  app.innerHTML = `<section class="wrap page">
+    <div class="ph"><div><h1 class="h-pg">Deployers</h1><p>Every wallet that launched a checked coin, with its full launch history from DevRadar. Builders ship more than once; serial launchers leave a trail of dead tokens.</p></div></div>
+    <div class="fbar">
+      <div class="seg" role="group" aria-label="Chain" id="dChain">${[['all','All chains'], ['sol','Solana'], ['rh','Robinhood'], ['base','Base'], ['bnb','BNB']].map(([k, l]) => `<button type="button" data-dchain="${k}" aria-pressed="${S.depChain === k}">${l}</button>`).join('')}</div>
+      <select class="sel" id="dSort" aria-label="Sort"><option value="real"${S.depSort === 'real' ? ' selected' : ''}>Most real first</option><option value="dead"${S.depSort === 'dead' ? ' selected' : ''}>Most dead tokens first</option><option value="launched"${S.depSort === 'launched' ? ' selected' : ''}>Most launches first</option></select>
+    </div>
+    <div id="dRows"></div>
+  </section>`;
+  $('#dSort').addEventListener('change', e => { S.depSort = e.target.value; renderDepRows(); });
+  renderDepRows();
+  if(S.depOpen) setTimeout(() => { const el = document.getElementById('dep-' + S.depOpen.slice(0, 10)); if(el){ el.scrollIntoView({block:'center'}); el.classList.add('dep-focus'); } }, 30);
+}
+function renderDepRows(){
+  const done = ITEMS.filter(i => !i.running);
+  let L = DEPS.map(d => { const its = done.filter(i => i.dep === d); const real = its.filter(okCoin).length; return {d, its, real, rp: its.length ? real/its.length : -1, at: its.length ? Math.round(avg(its.map(i => i.total))) : null}; });
+  if(S.depChain !== 'all') L = L.filter(x => x.d.chain === S.depChain);
+  L.sort(S.depSort === 'real' ? (a, b) => (b.rp - a.rp) || b.its.length - a.its.length : S.depSort === 'dead' ? (a, b) => b.d.dead - a.d.dead : (a, b) => b.d.launched - a.d.launched);
+  $('#dRows').innerHTML = `<div class="tbl dtbl"><div class="tr th"><span>#</span><span>Wallet</span><span class="c-ch">Chain</span><span>Record</span><span class="num">Launched</span><span class="num">Dead</span><span class="num">Checked</span><span class="num">Real</span><span class="num c-avg">Avg total</span><span class="c-fund">Funded from</span></div>
+  ${L.map((x, i) => { const d = x.d, open = S.depOpen === d.addr; return `<div class="dep" id="dep-${d.addr.slice(0, 10)}">
+    <button type="button" class="tr dep-row" data-act="deptoggle" data-a="${d.addr}" aria-expanded="${open}">
+      <span class="num muted" style="text-align:left">${i+1}</span>
+      <span class="td c-nm"><span class="nm"><span class="nm1"><b class="mono" style="font-size:13.5px">${short(d.addr)}</b></span><span class="nm2">First seen ${d.first} ago</span></span></span>
+      <span class="td c-ch">${chainTag(d.chain)}</span>
+      <span class="td c-sc"><span class="rep-b r-${d.type}">${REP[d.type]}</span></span>
+      <span class="td num">${d.launched}</span>
+      <span class="td num ${d.dead ? 'dn' : ''}">${d.dead}</span>
+      <span class="td num">${x.its.length}</span>
+      <span class="td num">${x.its.length ? `${x.real}/${x.its.length}` : '<span class="nil">—</span>'}</span>
+      <span class="td num c-avg">${x.at != null ? x.at : '<span class="nil">—</span>'}</span>
+      <span class="td c-fund" style="font-size:13.5px;color:var(--mute)">${esc(cap(d.funded))}</span>
+      <span class="c-mob"><span>${d.launched} launched</span><span class="${d.dead ? 'dn' : ''}">${d.dead} dead</span><span>${x.its.length} checked</span><span>${CHAINS[d.chain].name}</span></span>
+    </button>
+    <div class="dep-more"${open ? '' : ' hidden'}><p>Funded from ${esc(d.funded)}. ${d.launched} tokens launched, ${d.dead} dead. ${x.its.length ? 'Checked coins from this wallet:' : 'None of their coins have been checked yet.'}</p>${x.its.length ? `<div class="chips">${x.its.map(it => `<a class="chip-l" href="#/c/${it.id}">${avatar(Object.assign({}, it, {kind:'coin'}), 20)}<b>$${esc(it.ticker)}</b>${coinB(it.coin)}</a>`).join('')}</div>` : ''}</div>
+  </div>`; }).join('')}</div>`;
+}
+
+/* ================= bot ================= */
+function viewBot(){
+  const it = ITEMS.find(i => i.kind === 'post' && !i.running && i.by !== 'you') || ITEMS[0];
+  const recent = ITEMS.filter(i => i.via === 'bot' && !i.running).sort((a, b) => b.checkedAt - a.checkedAt).slice(0, 8);
+  app.innerHTML = `<section class="wrap page">
+    <div class="bot-g">
+      <div>
+        <h1 class="h-pg">Tag @ApeCheckBot under any project post.</h1>
+        <p class="sec-sub" style="color:var(--mute);font-size:17px;margin:0;max-width:56ch">No site visit needed. The bot runs the full check and answers in the thread, where everyone reading the shill can see it.</p>
+        <div class="bot-stats"><span><b>1,284</b> replies today</span><span><b>2m 41s</b> median reply</span><span><b>3,902</b> accounts have tagged it</span></div>
+        <ol class="steps">
+          <li><div><b>Tag @ApeCheckBot</b><p>Reply to a project's post with the tag, or tag the bot together with the project's account.</p></div></li>
+          <li><div><b>The agent runs the check</b><p>Same as the site: it opens the product, tests the claims, traces the team and reads the chain.</p></div></li>
+          <li><div><b>It replies with the verdict</b><p>Narrative score, coin score, one-line reason and a share card, with the full report on the site.</p></div></li>
+        </ol>
+        <p class="rules">Holders can reply to the bot to ask follow-ups like "who funded the deployer?". The account carries X's automated label and only answers when someone tags it, so it never shows up uninvited.</p>
+      </div>
+      <div class="thread">
+        <div class="post"><div class="pav" style="background:hsl(${it.hue} 72% var(--av-l));color:hsl(${it.hue} 58% var(--av-d))">${esc(it.title[0])}</div><div><div class="p-meta"><b>${esc(it.title)}</b><span>@${esc(it.handle)}</span><span>2h</span></div><p class="p-text">${esc(it.head)}. Live on ${CHAINS[it.chain].name} mainnet today. Contract and app in bio.</p></div></div>
+        <div class="post"><div class="pav" style="background:var(--panel2);color:var(--mute)">${esc(it.by[0].toUpperCase())}</div><div><div class="p-meta"><b>${esc(it.by)}</b><span>@${esc(it.by)}</span><span>14m</span></div><p class="p-text"><span class="tagx">@ApeCheckBot</span> real or larp?</p></div></div>
+        <div class="post"><div class="pav" style="background:var(--panel);border:1px solid var(--line2)">${LOGO}</div><div><div class="p-meta"><b>ApeCheck</b><span>@ApeCheckBot</span><span>11m</span></div><span class="p-auto">Automated account</span><p class="p-text">${nb(it.nar).label} (${it.nar}/100): ${esc(it.summary)}${it.hasCoin ? `<br>Coin: ${kb(it.coin).label} (${it.coin}/100)` : ''}<br><br>Checks the claims and the coin, not the team. DYOR.</p>${cardHTML(it)}</div></div>
+      </div>
+    </div>
+    <div class="sec2"><h2>Recent bot replies</h2>
+      <div class="tbl">${FEED_HEAD}${recent.map(rowHTML).join('')}</div>
+    </div>
+  </section>`;
+}
+
+/* ================= api ================= */
+function viewApi(){
+  app.innerHTML = `<section class="wrap page">
+    <div class="dev-g">
+      <div>
+        <h1 class="h-pg">Run checks from your own app or AI.</h1>
+        <p style="color:var(--mute);font-size:17px;margin:0;max-width:52ch">Same agent, same report, as JSON. Plug it into a trading bot, a Telegram group or your AI assistant.</p>
+        <ul class="dev-list">
+          <li><b>REST API</b>Start a check, poll it or wait for the result.</li>
+          <li><b>MCP server</b>Add it to Claude, ChatGPT or Cursor and ask "is this real?" in chat.</li>
+          <li><b>Webhooks</b>Get the verdict pushed to your server when a check finishes, or when a watched coin changes.</li>
+        </ul>
+      </div>
+      <div class="code">
+        <div class="code-tabs" role="tablist"><button type="button" role="tab" aria-selected="true" data-code="rest">REST</button><button type="button" role="tab" aria-selected="false" data-code="mcp">MCP</button><button type="button" role="tab" aria-selected="false" data-code="hook">Webhook</button></div>
+<pre id="code-rest"><span class="c"># start a check</span>
+curl -X POST https://api.apecheck.io/v1/checks \\
+  -H <span class="s">"Authorization: Bearer $APECHECK_KEY"</span> \\
+  -d <span class="s">'{"target":"orbitswap.xyz"}'</span>
+
+<span class="c"># result</span>
+{
+  <span class="k">"id"</span>: <span class="s">"chk_8f2a91"</span>,
+  <span class="k">"narrative"</span>: { <span class="k">"verdict"</span>: <span class="s">"PARTLY_REAL"</span>, <span class="k">"score"</span>: <span class="nn">48</span> },
+  <span class="k">"coin"</span>: { <span class="k">"verdict"</span>: <span class="s">"SKETCHY"</span>, <span class="k">"score"</span>: <span class="nn">44</span> },
+  <span class="k">"total"</span>: <span class="nn">46</span>,
+  <span class="k">"summary"</span>: <span class="s">"The app loads but the main flow stops at 'Coming soon'."</span>,
+  <span class="k">"claims"</span>: [ { <span class="k">"text"</span>: <span class="s">"Live on Base mainnet"</span>, <span class="k">"result"</span>: <span class="s">"not_seen"</span> } ],
+  <span class="k">"report_url"</span>: <span class="s">"https://apecheck.io/c/chk_8f2a91"</span>
+}</pre>
+<pre id="code-mcp" hidden><span class="c">// claude_desktop_config.json</span>
+{
+  <span class="k">"mcpServers"</span>: {
+    <span class="k">"probe"</span>: {
+      <span class="k">"url"</span>: <span class="s">"https://mcp.apecheck.io"</span>,
+      <span class="k">"headers"</span>: { <span class="k">"Authorization"</span>: <span class="s">"Bearer YOUR_KEY"</span> }
+    }
+  }
+}
+
+<span class="c">// tools</span>
+run_check(target)           <span class="c">→ narrative, coin, total, report</span>
+get_check(id)               <span class="c">→ full report with evidence</span>
+ask_followup(id, question)
+deployer_history(wallet)</pre>
+<pre id="code-hook" hidden><span class="c">POST https://your-server.com/apecheck  (signed)</span>
+{
+  <span class="k">"event"</span>: <span class="s">"check.completed"</span>,
+  <span class="k">"check"</span>: {
+    <span class="k">"id"</span>: <span class="s">"chk_8f2a91"</span>,
+    <span class="k">"target"</span>: <span class="s">"orbitswap.xyz"</span>,
+    <span class="k">"narrative"</span>: <span class="nn">48</span>, <span class="k">"coin"</span>: <span class="nn">44</span>, <span class="k">"total"</span>: <span class="nn">46</span>
+  },
+  <span class="k">"signature"</span>: <span class="s">"t=1729325580,v1=5c1e…"</span>
+}</pre>
+      </div>
+    </div>
+    <div class="sec2"><h2>Access</h2>${tiersHTML()}<p class="pay-note">Prefer not to hold? Pro and Max can also be paid monthly in USDC.</p></div>
+  </section>`;
+}
+
+/* ================= global events ================= */
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act],[data-tab],[data-view],[data-type],[data-ctab],[data-dchain],[data-code]');
+  if(!t) return;
+  if(t.dataset.tab && t.closest('#ftabs')){ S.tab = t.dataset.tab; S.limit = 25; $$('#ftabs [data-tab]').forEach(b => b.setAttribute('aria-selected', b === t)); renderRows(); return; }
+  if(t.dataset.view){ S.view = t.dataset.view; $$('[data-view]').forEach(b => b.setAttribute('aria-pressed', b === t)); renderRows(); return; }
+  if(t.dataset.type){ S.f.type = t.dataset.type; S.limit = 25; $$('[data-type]').forEach(b => b.setAttribute('aria-pressed', b === t)); renderRows(); return; }
+  if(t.dataset.ctab){ S.coinTab = t.dataset.ctab; $$('[data-ctab]').forEach(b => b.setAttribute('aria-pressed', b === t)); renderCoinRows(); return; }
+  if(t.dataset.dchain){ S.depChain = t.dataset.dchain; $$('[data-dchain]').forEach(b => b.setAttribute('aria-pressed', b === t)); renderDepRows(); return; }
+  if(t.dataset.code){ $$('[data-code]').forEach(b => b.setAttribute('aria-selected', b === t)); ['rest','mcp','hook'].forEach(k => $('#code-' + k).hidden = k !== t.dataset.code); return; }
+  const a = t.dataset.act, it = t.dataset.id ? BYID[t.dataset.id] : BYID[S.repId];
+  switch(a){
+    case 'access': openAccess(false); break;
+    case 'theme': setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); break;
+    case 'close': closeModal(); break;
+    case 'wallet': closeModal(); toast('Wallet connect is wired up in the build'); break;
+    case 'toast': e.preventDefault(); toast(t.dataset.msg); break;
+    case 'more': S.limit += 25; renderRows(); break;
+    case 'clearf': S.f = {q:'', type:'all', nar:'any', coin:'any', chain:'any'}; S.tab = S.tab === 'watch' ? 'latest' : S.tab; viewFeed(); break;
+    case 'tabjump': S.tab = t.dataset.tab; S.limit = 25; $$('#ftabs [data-tab]').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === S.tab)); renderRows(); $('#ftabs').scrollIntoView({behavior:'smooth', block:'start'}); break;
+    case 'dep': S.depOpen = t.dataset.a; break;
+    case 'deptoggle': S.depOpen = S.depOpen === t.dataset.a ? null : t.dataset.a; renderDepRows(); break;
+    case 'copy': navigator.clipboard && navigator.clipboard.writeText(t.dataset.v).catch(() => {}); toast('Contract address copied'); break;
+    case 'watch': if(S.watch.has(it.id)){ S.watch.delete(it.id); toast('Removed from your watchlist'); } else { S.watch.add(it.id); toast("Watching. You'll get a re-check when the site or contract changes."); } t.setAttribute('aria-pressed', S.watch.has(it.id)); t.textContent = S.watch.has(it.id) ? 'Watching' : 'Watch'; break;
+    case 'recheck': startCheck(it.ca || (it.kind === 'post' ? `x.com/${it.handle}/status/1` : it.domain)); break;
+    case 'share': openShare(it); break;
+    case 'rtab': if(!t.disabled) renderTab(it, t.dataset.t); break;
+    case 'skip': { const run = runOf(it); if(run) run.start = Date.now() - run.dur; break; }
+    case 'replay': $('#tp').innerHTML = tabRun(it); $('#runState').innerHTML = '<i class="pulse"></i>Replaying'; S.mount = {run:{item:it, start:Date.now(), dur:it.steps.length*800}, shown:0, replay:true}; break;
+    case 'helpful': { const n = it.notes[+t.dataset.i]; n.mine = !n.mine; n.help += n.mine ? 1 : -1; t.setAttribute('aria-pressed', n.mine); t.innerHTML = `Helpful <small>${n.help}</small>`; break; }
+  }
+});
+document.addEventListener('submit', e => {
+  if(e.target.matches('[data-act="askform"]')){ e.preventDefault(); toast('Follow-ups need Pro: hold 250,000 $APECHECK'); }
+});
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){ closeModal(); return; }
+  if(e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)){
+    e.preventDefault();
+    const h = $('#hq'); if(h && h.offsetParent) h.focus(); else { const t2 = $('#target'); if(t2) t2.focus(); else location.hash = '#/'; }
+  }
+});
+$('#hsearch').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = $('#hq').value.trim(); if(!v) return;
+  const lv = v.toLowerCase().replace(/^[$@]/, '');
+  const hit = ITEMS.find(i => !i.running && [i.ticker, i.handle, i.domain, i.ca].some(x => x && x.toLowerCase() === lv));
+  if(hit){ $('#hq').value = ''; location.hash = '#/c/' + hit.id; return; }
+  const d = detect(v);
+  if(d && d.kind !== 'bad' && (d.kind !== 'site' || v.includes('.'))){ $('#hq').value = ''; startCheck(v); return; }
+  S.f.q = v; S.tab = 'latest'; $('#hq').value = '';
+  if(cur().page === 'feed') viewFeed(); else location.hash = '#/';
+  setTimeout(() => { const r = $('#ftabs'); if(r) r.scrollIntoView({block:'start'}); }, 50);
+});
+
+/* ================= tick ================= */
+let ageTick = 0;
+setInterval(() => {
+  const now = Date.now();
+  tickMount(now, false);
+  for(const run of [...S.runs]) if(now - run.start >= run.dur) finishRun(run);
+  if(cur().page === 'feed') updateLive(now);
+  if(++ageTick % 150 === 0) $$('[data-age]').forEach(el => el.textContent = ago(+el.dataset.age));
+}, 200);
+
+(function(){ let t = 'light'; try { t = localStorage.getItem('apecheck-theme') || 'light'; } catch(e){} setTheme(t, true); })();
+renderCredits();
+route();
+})();
+</script>
+</body>
+</html>
