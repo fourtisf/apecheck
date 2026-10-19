@@ -13,6 +13,23 @@ export const SELECTORS = {
 /** mint(address,uint256), mint(uint256), _mint(address,uint256) exposed publicly */
 export const MINT_SELECTORS = ['40c10f19', 'a0712d68', '4e6ec247'];
 export const OWNER_SELECTORS = ['8da5cb5b', '893d20e8'];
+/**
+ * Role-based control without an owner(): OpenZeppelin AccessControl (hasRole, grantRole, getRoleAdmin,
+ * revokeRole, MINTER_ROLE()), AccessManaged (authority()) and the older MinterRole (isMinter, addMinter).
+ * A contract with these has someone in charge even though owner() reverts.
+ */
+export const ROLE_CONTROL_SELECTORS = ['91d14854', '2f2ff15d', '248a9ca3', 'd547741f', 'd5391393', 'bf7e214f', 'aa271e1a', '983b2d56'];
+
+/**
+ * "Renounced" for a contract whose owner()/getOwner() is absent: only when its bytecode is known and shows
+ * nothing that could still control the supply. No owner selector (owner() reverted for another reason),
+ * no role-based control, and no mint function, which a minter role, a bridge or anyone could still call.
+ * Otherwise who controls the token is unknown (null), never "renounced".
+ */
+export function ownerlessRenounced(code: string | null | undefined, hasMintFunction: boolean | null): boolean | null {
+  if (!code || hasMintFunction !== false) return null;
+  return hasAnySelector(code, [...OWNER_SELECTORS, ...ROLE_CONTROL_SELECTORS]) ? null : true;
+}
 
 export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 export const BURN_ADDRESSES = new Set([

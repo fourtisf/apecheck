@@ -71,6 +71,14 @@ describe('Tron adapter', () => {
     expect(info).toMatchObject({ owner: null, ownerRenounced: true, hasMintFunction: false });
   });
 
+  it('no owner() but a mint function or role-based control (AccessControl) → owner unknown, not renounced', async () => {
+    const base = fixture<Record<string, unknown>>('tron-getcontract.json');
+    const minter = { ...base, bytecode: '6080604052' + '6340c10f19' + '6391d14854' + '632f2ff15d' + '00' };
+    expect(await createTron(testEnv(), fakeHttp(trongrid({}, minter))).tokenInfo(USDT)).toMatchObject({ owner: null, ownerRenounced: null, hasMintFunction: true });
+    const roles = { ...base, bytecode: '6080604052' + '6391d14854' + '632f2ff15d' + '00' };
+    expect(await createTron(testEnv(), fakeHttp(trongrid({}, roles))).tokenInfo(USDT)).toMatchObject({ owner: null, ownerRenounced: null, hasMintFunction: false });
+  });
+
   it('unknown contract → null; HTTP failure → null with lastError; malformed address → no request', async () => {
     expect(await createTron(testEnv(), fakeHttp(trongrid({}, {}))).tokenInfo(USDT)).toBeNull();
     const tron = createTron(testEnv(), fakeHttp(() => ({ status: 503, text: 'busy' })));

@@ -121,7 +121,10 @@ export interface EvmTokenBasics {
   totalSupply: string | null;
   /** owner() result, null if no owner() */
   owner: string | null;
-  /** owner is 0x0 / dead / no owner function */
+  /**
+   * owner is 0x0 / dead, or no owner function and nothing else that controls the supply (no role-based
+   * access control, no mint function); null when who controls the token is unknown
+   */
   ownerRenounced: boolean | null;
   /** bytecode exposes a mint-like selector (mint(address,uint256) etc.) */
   hasMintFunction: boolean | null;
@@ -131,7 +134,11 @@ export interface EvmSource {
   readonly lastError?: string | null;
   /** chains with an RPC available (env RPC_* or a public fallback) */
   chains(): ChainKey[];
-  /** HANDOFF Stage A: try Base, Ethereum, BNB, Arbitrum, Robinhood Chain in order until code exists. */
+  /**
+   * HANDOFF Stage A: try Base, Ethereum, BNB, Arbitrum, Robinhood Chain in order until code exists. A chain
+   * whose RPC fails before the answer is retried once; chains that still didn't answer (and come before the
+   * returned chain, or all of them when it is null) are reported as `evm.getCode <chain>: …` errors.
+   */
   detectChain(address: string): Promise<ChainKey | null>;
   getCode(chain: ChainKey, address: string): Promise<string | null>;
   tokenBasics(chain: ChainKey, address: string): Promise<EvmTokenBasics | null>;
@@ -169,7 +176,7 @@ export interface TronSource {
     name: string | null; symbol: string | null; decimals: number | null; totalSupply: string | null; owner: string | null; creator: string | null;
     /** bytecode exposes a mint-like selector (same scan as EVM) */
     hasMintFunction?: boolean | null;
-    /** owner is the zero address or there is no owner function */
+    /** owner is the zero address, or no owner function and nothing else that controls the supply (see EvmTokenBasics) */
     ownerRenounced?: boolean | null;
   } | null>;
 }

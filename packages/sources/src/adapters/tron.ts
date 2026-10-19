@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import type { Env } from '@apecheck/core';
 import type { Http, TronSource } from '../types';
-import { MINT_SELECTORS, OWNER_SELECTORS, decodeAbiString, decodeAddress, decodeUint, hasAnySelector } from '../abi';
+import { MINT_SELECTORS, decodeAbiString, decodeAddress, decodeUint, hasAnySelector, ownerlessRenounced } from '../abi';
 import { tronFromHex } from '../base58';
 import { ErrorState, RE_TRON_ADDRESS } from '../util';
 
@@ -82,7 +82,8 @@ export class TronAdapter implements TronSource {
       const ownerAddr = ownerHex ? tronFromHex(ownerHex) : null;
       let ownerRenounced: boolean | null = null;
       if (ownerAddr) ownerRenounced = ownerAddr === TRON_ZERO_ADDRESS;
-      else if (code && !hasAnySelector(code, OWNER_SELECTORS)) ownerRenounced = true;
+      // no owner(): renounced only when nothing else (roles, a mint function) can control the supply
+      else ownerRenounced = ownerlessRenounced(code, hasMintFunction);
       const dec = decodeUint(decimals);
       const supply = decodeUint(totalSupply);
       return {

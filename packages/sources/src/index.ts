@@ -20,10 +20,10 @@ export {
   type SsrfOptions, type HostVetting, type UrlVetting,
 } from './ssrf';
 export { createHttp, HttpError, USER_AGENT, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_BYTES, MAX_REDIRECTS, type HttpEnv, type HttpOptions } from './http';
-export { captureErrors, TimeoutError } from './util';
+export { captureErrors, reportError, TimeoutError } from './util';
 export { coinFacts, solanaAuthorityText, contractAuthorityText, contractMintRenounced, SOLANA_AMM_AUTHORITIES, type CoinFactsDeps } from './coin-facts';
 export { createDexScreener, DexScreenerAdapter } from './adapters/dexscreener';
-export { createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC } from './adapters/evm';
+export { createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, DETECT_RETRY_DELAY_MS, type EvmOptions } from './adapters/evm';
 export { createSolana, SolanaAdapter, SOL_READ_METHODS, solanaRpcUrl } from './adapters/solana';
 export { createTron, TronAdapter } from './adapters/tron';
 export { createGitHub, GitHubAdapter, parseGitHubRef } from './adapters/github';

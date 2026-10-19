@@ -366,8 +366,11 @@ export function tunnelThrough(up: Upstream, host: string, port: number): Promise
  * When local DNS works we still refuse names resolving to blocked addresses; when it doesn't, we still
  * refuse IP literals in blocked ranges and local/metadata names, and let other names through to the
  * upstream. Allow-listed dev hosts always connect directly.
+ *
+ * `port` (default 0 = any free port): a fixed port, for a browser running as another user whose firewall lets it
+ * reach this port only (deploy/browser).
  */
-export async function startGuardProxy(opts: SsrfOptions & { upstreamProxy?: string | null }): Promise<GuardProxy> {
+export async function startGuardProxy(opts: SsrfOptions & { upstreamProxy?: string | null; port?: number }): Promise<GuardProxy> {
   const upstream = opts.upstreamProxy ? parseUpstream(opts.upstreamProxy) : null;
   const vetOpts: SsrfOptions = { ...opts, allowUnresolved: !!upstream };
   const blocked: { host: string; reason: string }[] = [];
@@ -510,7 +513,7 @@ export async function startGuardProxy(opts: SsrfOptions & { upstreamProxy?: stri
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(opts.port ?? 0, '127.0.0.1', () => {
       server.off('error', reject);
       resolve();
     });

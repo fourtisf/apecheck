@@ -7,8 +7,8 @@ import { CHAINS, EVM_DETECT_ORDER, type ChainKey, type Env } from '@apecheck/cor
 import { warnOnce } from '@apecheck/core/node';
 import type { EvmSource, EvmTokenBasics, EvmTxRequest, Http, SimResult } from '../types';
 import {
-  BURN_ADDRESSES, EIP1967_IMPL_SLOT, MINT_SELECTORS, OWNER_SELECTORS, SELECTORS,
-  decodeAbiString, decodeAddress, decodeRevert, decodeUint, hasAnySelector, minimalProxyTarget, toQuantity,
+  BURN_ADDRESSES, EIP1967_IMPL_SLOT, MINT_SELECTORS, SELECTORS,
+  decodeAbiString, decodeAddress, decodeRevert, decodeUint, hasAnySelector, minimalProxyTarget, ownerlessRenounced, toQuantity,
 } from '../abi';
 import { RpcError, jsonRpc } from '../rpc';
 import { ErrorState, RE_EVM_ADDRESS, errMsg, isoFromSeconds } from '../util';
@@ -51,6 +51,16 @@ const CreationZ = z.object({
 
 /** 'value' = returned data, 'absent' = reverted or empty (function not there), 'error' = transport failure */
 type CallOutcome = { kind: 'value'; data: string } | { kind: 'absent' } | { kind: 'error'; error: unknown };
+/** eth_getCode: the chain answered (code, '0x' or a malformed null) or it didn't */
+type CodeOutcome = { code: string | null } | { error: unknown };
+
+/** Wait before asking a chain whose RPC failed once more during detection. */
+export const DETECT_RETRY_DELAY_MS = 500;
+
+export interface EvmOptions {
+  /** delay before a failed chain is retried in detectChain (default DETECT_RETRY_DELAY_MS) */
+  detectRetryDelayMs?: number;
+}
 
 function revertReason(e: unknown): string {
   if (e instanceof RpcError) {
@@ -66,7 +76,7 @@ export class EvmAdapter implements EvmSource {
   private readonly errors = new ErrorState('evm');
   private readonly rpcUrls: Partial<Record<ChainKey, string>> = {};
 
-  constructor(private readonly env: EvmEnv, private readonly http: Http) {
+  constructor(private readonly env: EvmEnv, private readonly http: Http, private readonly opts: EvmOptions = {}) {
     for (const c of EVM_CHAINS) {
       const fromEnv = (env as Record<string, string | undefined>)[CHAINS[c].rpcEnv];
       const url = fromEnv || PUBLIC_EVM_RPC[c];
@@ -111,27 +121,62 @@ export class EvmAdapter implements EvmSource {
     }
   }
 
-  async getCode(chain: ChainKey, address: string): Promise<string | null> {
-    if (!RE_EVM_ADDRESS.test(address) || !this.rpcUrls[chain]) return null;
+  /** eth_getCode without recording a failure (detectChain decides which failures count) */
+  private async codeAt(chain: ChainKey, address: string): Promise<CodeOutcome> {
     try {
       const code = await this.rpc(chain, 'eth_getCode', [address, 'latest']);
-      return typeof code === 'string' ? code.toLowerCase() : null;
-    } catch (e) {
-      this.errors.fail(`getCode ${chain}`, e);
-      return null;
+      return { code: typeof code === 'string' ? code.toLowerCase() : null };
+    } catch (error) {
+      return { error };
     }
   }
 
+  async getCode(chain: ChainKey, address: string): Promise<string | null> {
+    if (!RE_EVM_ADDRESS.test(address) || !this.rpcUrls[chain]) return null;
+    const r = await this.codeAt(chain, address);
+    if ('code' in r) return r.code;
+    this.errors.fail(`getCode ${chain}`, r.error);
+    return null;
+  }
+
+  /**
+   * First chain in EVM_DETECT_ORDER with code at the address. All chains are asked at once. A chain whose
+   * RPC failed is never skipped silently: when it comes before the first hit (or there is no hit), it is
+   * asked once more before a later chain's answer is accepted. Only chains that never answered are reported
+   * (`evm.getCode <chain>: …` in lastError and the captureErrors scope), so a caller can tell "no code there"
+   * from "that RPC didn't answer", including when a later chain was chosen.
+   */
   async detectChain(address: string): Promise<ChainKey | null> {
     if (!RE_EVM_ADDRESS.test(address)) return null;
     const order = EVM_DETECT_ORDER.filter(c => !!this.rpcUrls[c]);
-    // all chains are asked at once; the answer still respects the detection order
-    const pending = order.map(c => this.getCode(c, address));
-    for (let i = 0; i < order.length; i++) {
-      const code = await pending[i];
-      if (code && code !== '0x') return order[i];
+    const hasCode = (r: CodeOutcome) => 'code' in r && !!r.code && r.code !== '0x';
+    const pending = order.map(c => this.codeAt(c, address));
+    const failed = new Map<ChainKey, unknown>();
+    let hit: ChainKey | null = null;
+    for (let i = 0; i < order.length && !hit; i++) {
+      const r = await pending[i];
+      if ('error' in r) failed.set(order[i], r.error);
+      else if (hasCode(r)) hit = order[i];
     }
-    return null;
+    if (failed.size) {
+      // rate limits (the public Base RPC) usually clear within a moment
+      await new Promise(res => setTimeout(res, this.opts.detectRetryDelayMs ?? DETECT_RETRY_DELAY_MS));
+      const retried = [...failed.keys()].map(c => [c, this.codeAt(c, address)] as const);
+      for (const [c, p] of retried) {
+        const r = await p;
+        if ('error' in r) failed.set(c, r.error);
+        else failed.delete(c);
+        // the earlier chain answered with code: it wins over the later hit
+        if (hasCode(r)) {
+          hit = c;
+          break;
+        }
+      }
+    }
+    for (const [c, e] of failed) {
+      if (!hit || order.indexOf(c) < order.indexOf(hit)) this.errors.fail(`getCode ${c}`, e);
+    }
+    return hit;
   }
 
   /** Implementation behind an EIP-1167 / EIP-1967 proxy, so selector scans see the real logic. */
@@ -173,7 +218,6 @@ export class EvmAdapter implements EvmSource {
       if (implCode && implCode !== '0x') scanCode = code + implCode.replace(/^0x/, '');
     }
     const hasMintFunction = scanCode ? hasAnySelector(scanCode, MINT_SELECTORS) : null;
-    const hasOwnerFunction = scanCode ? hasAnySelector(scanCode, OWNER_SELECTORS) : null;
 
     const val = (o: CallOutcome) => (o.kind === 'value' ? o.data : null);
     const dec = decodeUint(val(decimals));
@@ -186,8 +230,8 @@ export class EvmAdapter implements EvmSource {
       ownerAddr = decodeAddress(val(ownerHit));
       ownerRenounced = ownerAddr != null && BURN_ADDRESSES.has(ownerAddr);
     } else if (owner.kind === 'absent' && getOwner.kind === 'absent') {
-      // no owner function at all counts as renounced, unless the bytecode says one exists
-      ownerRenounced = hasOwnerFunction === true ? null : true;
+      // no owner function: renounced only when nothing else (roles, a mint function) can control the supply
+      ownerRenounced = ownerlessRenounced(scanCode, hasMintFunction);
     }
 
     return {
@@ -249,6 +293,6 @@ export class EvmAdapter implements EvmSource {
   }
 }
 
-export function createEvm(env: EvmEnv, http: Http): EvmAdapter {
-  return new EvmAdapter(env, http);
+export function createEvm(env: EvmEnv, http: Http, opts: EvmOptions = {}): EvmAdapter {
+  return new EvmAdapter(env, http, opts);
 }

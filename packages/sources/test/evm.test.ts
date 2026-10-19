@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createEvm, EVM_READ_METHODS, PUBLIC_EVM_RPC } from '../src/adapters/evm';
-import { bytecodeSelectors, decodeAbiString, decodeRevert, EIP1967_IMPL_SLOT } from '../src/abi';
+import { bytecodeSelectors, decodeAbiString, decodeRevert, EIP1967_IMPL_SLOT, ownerlessRenounced } from '../src/abi';
 import { jsonRpc } from '../src/rpc';
+import { captureErrors } from '../src/util';
 import { encAddress, encBytes32, encString, encUint, fakeHttp, rpcHandler, testEnv, word } from './helpers';
 
 const TOKEN = '0x4200000000000000000000000000000000000abc';
@@ -89,6 +90,61 @@ describe('EVM adapter: detectChain', () => {
     expect(await createEvm(testEnv(), http).detectChain('0x123')).toBeNull();
     expect(http.calls).toHaveLength(0);
   });
+
+  /** Base answers 429 for its first `failures` eth_getCode calls, then `baseCode`; Ethereum has code. */
+  function flakyBase(failures: number, baseCode: string) {
+    let baseCalls = 0;
+    const http = fakeHttp(
+      url => {
+        if (url.host !== 'mainnet.base.org') return undefined;
+        baseCalls++;
+        return baseCalls <= failures ? { status: 429, text: 'rate limited' } : { json: { jsonrpc: '2.0', id: 1, result: baseCode } };
+      },
+      rpcHandler('ethereum-rpc.publicnode.com', { eth_getCode: () => '0x6080604052' }),
+      rpcHandler('bsc-dataseed.binance.org', { eth_getCode: () => '0x' }),
+      rpcHandler('arb1.arbitrum.io', { eth_getCode: () => '0x' }),
+    );
+    const hosts = () => http.calls.map(c => new URL(c.url).host);
+    return { http, hosts, evm: createEvm(testEnv(), http, { detectRetryDelayMs: 0 }) };
+  }
+
+  it('a later chain is not accepted while an earlier chain is unanswered: the failed chain is asked once more', async () => {
+    const { evm, hosts } = flakyBase(1, '0x6080604052');
+    const r = await captureErrors(() => evm.detectChain(TOKEN));
+    expect(r.value).toBe('base');
+    // Base answered on the retry: nothing is reported as unavailable
+    expect(r.errors).toEqual([]);
+    expect(hosts().filter(h => h === 'mainnet.base.org')).toHaveLength(2);
+  });
+
+  it('retry answers "no code": the later chain wins and nothing is reported', async () => {
+    const { evm } = flakyBase(1, '0x');
+    const r = await captureErrors(() => evm.detectChain(TOKEN));
+    expect(r).toEqual({ value: 'eth', errors: [] });
+  });
+
+  it('an earlier chain that never answers is reported even though a later chain has code', async () => {
+    const { evm, hosts } = flakyBase(99, '0x');
+    const r = await captureErrors(() => evm.detectChain(TOKEN));
+    expect(r.value).toBe('eth');
+    expect(r.errors).toEqual(['evm.getCode base: HTTP 429 from mainnet.base.org']);
+    expect(evm.lastError).toBe('evm.getCode base: HTTP 429 from mainnet.base.org');
+    // only the failed chain is retried
+    expect(hosts().filter(h => h === 'mainnet.base.org')).toHaveLength(2);
+    expect(hosts().filter(h => h === 'ethereum-rpc.publicnode.com')).toHaveLength(1);
+  });
+
+  it('a chain that fails after the hit is neither retried nor reported', async () => {
+    const http = fakeHttp(
+      rpcHandler('mainnet.base.org', { eth_getCode: () => '0x6080' }),
+      url => (url.host === 'ethereum-rpc.publicnode.com' ? { status: 503, text: 'down' } : undefined),
+      rpcHandler('bsc-dataseed.binance.org', { eth_getCode: () => '0x' }),
+      rpcHandler('arb1.arbitrum.io', { eth_getCode: () => '0x' }),
+    );
+    const r = await captureErrors(() => createEvm(testEnv(), http, { detectRetryDelayMs: 0 }).detectChain(TOKEN));
+    expect(r).toEqual({ value: 'base', errors: [] });
+    expect(http.calls.filter(c => new URL(c.url).host === 'ethereum-rpc.publicnode.com')).toHaveLength(1);
+  });
 });
 
 describe('EVM adapter: tokenBasics', () => {
@@ -130,6 +186,40 @@ describe('EVM adapter: tokenBasics', () => {
   it('no owner()/getOwner() at all counts as renounced', async () => {
     const http = fakeHttp(evmNode('mainnet.base.org', { code: bytecode(ERC20), calls: { '0x313ce567': encUint(9) } }));
     expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ owner: null, ownerRenounced: true, hasMintFunction: false, decimals: 9 });
+  });
+
+  it('AccessControl (MINTER_ROLE) mint without owner(): owner unknown, never renounced', async () => {
+    // mint(address,uint256), hasRole, grantRole, getRoleAdmin, MINTER_ROLE(); owner() and getOwner() revert
+    const code = bytecode([...ERC20, '40c10f19', '91d14854', '2f2ff15d', '248a9ca3', 'd5391393']);
+    const http = fakeHttp(evmNode('mainnet.base.org', { code }));
+    expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ owner: null, ownerRenounced: null, hasMintFunction: true });
+  });
+
+  it('a mint function with no owner() and no known role scheme (custom minter, bridge, public mint) is not "renounced"', async () => {
+    const http = fakeHttp(evmNode('mainnet.base.org', { code: bytecode([...ERC20, 'a0712d68']) }));
+    expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ owner: null, ownerRenounced: null, hasMintFunction: true });
+  });
+
+  it('role-based control without a mint function: owner unknown (not "renounced")', async () => {
+    const http = fakeHttp(evmNode('mainnet.base.org', { code: bytecode([...ERC20, '91d14854', '2f2ff15d']) }));
+    expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ ownerRenounced: null, hasMintFunction: false });
+  });
+
+  it('role-based control in the implementation behind an EIP-1967 proxy is seen too', async () => {
+    const http = fakeHttp(
+      evmNode('mainnet.base.org', { code: '0x363d3d37' + 'aa'.repeat(40), storage: encAddress(IMPL), implCode: bytecode([...ERC20, '40c10f19', '91d14854']) }),
+    );
+    expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ ownerRenounced: null, hasMintFunction: true });
+  });
+
+  it('no owner() but the bytecode could not be read: unknown, not "renounced"', async () => {
+    const http = fakeHttp(
+      rpcHandler('mainnet.base.org', {
+        eth_getCode: () => ({ error: { code: -32000, message: 'header not found' } }),
+        eth_call: () => ({ error: { code: 3, message: 'execution reverted' } }),
+      }),
+    );
+    expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ owner: null, ownerRenounced: null, hasMintFunction: null });
   });
 
   it('getOwner() (BEP-20) is used when owner() reverts', async () => {
@@ -270,5 +360,14 @@ describe('ABI helpers', () => {
     const s = bytecodeSelectors(bytecode(['40c10f19'], { hideMintInPushData: false }));
     expect(s.has('40c10f19')).toBe(true);
     expect(bytecodeSelectors(bytecode([], { hideMintInPushData: true })).has('40c10f19')).toBe(false);
+  });
+  it('ownerlessRenounced: true only for known bytecode with no owner, role or mint selector', () => {
+    expect(ownerlessRenounced(bytecode(ERC20), false)).toBe(true);
+    expect(ownerlessRenounced(bytecode([...ERC20, '40c10f19']), true)).toBeNull();
+    for (const role of ['91d14854', '2f2ff15d', '248a9ca3', 'd547741f', 'd5391393', 'bf7e214f', 'aa271e1a', '983b2d56', '8da5cb5b']) {
+      expect(ownerlessRenounced(bytecode([...ERC20, role]), false)).toBeNull();
+    }
+    expect(ownerlessRenounced(null, null)).toBeNull();
+    expect(ownerlessRenounced(bytecode(ERC20), null)).toBeNull();
   });
 });

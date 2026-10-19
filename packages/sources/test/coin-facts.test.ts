@@ -299,4 +299,19 @@ describe('createSources', () => {
     expect(f.stubbed).toEqual(['fourtis', 'etherscan']);
     expect(f.errors).toEqual([]);
   });
+
+  it('EVM coin whose mint is gated by AccessControl (no owner()): authorities unknown, not "renounced"', async () => {
+    // PUSH4 mint(address,uint256), hasRole, grantRole; owner() and getOwner() revert
+    const http = fakeHttp(
+      url => (url.host === 'api.dexscreener.com' ? { json: [] } : undefined),
+      rpcHandler('mainnet.base.org', {
+        eth_getCode: () => '0x6080604052' + '6340c10f19' + '6391d14854' + '632f2ff15d' + '00',
+        eth_getStorageAt: () => '0x' + '0'.repeat(64),
+        eth_call: p => ((p[0] as { data: string }).data === '0x313ce567' ? encUint(18) : { error: { code: 3, message: 'execution reverted' } }),
+      }),
+    );
+    const f = await createSources(testEnv(), { http }).coinFacts('base', EVM_TOKEN);
+    expect(f.authorities).toEqual({ mintRenounced: null, freezeActive: null, owner: null, text: 'Mint function present, owner unknown', source: 'On-chain' });
+    expect(f.errors).toEqual([]);
+  });
 });

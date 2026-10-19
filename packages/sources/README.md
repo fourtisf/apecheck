@@ -50,10 +50,17 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
   `tokens(chain, list)`: batches of 30, map keyed by lowercase address. `search(q)`: `/latest/dex/search`.
 - **EVM** — read-only JSON-RPC (`eth_getCode`, `eth_getStorageAt`, `eth_call`, `eth_estimateGas`, `eth_chainId`,
   `eth_blockNumber`; anything else is refused before a request is built). `detectChain` asks every chain at once
-  and returns the first in `EVM_DETECT_ORDER` with code. `tokenBasics` decodes ABI and bytes32 strings, reads
+  and returns the first in `EVM_DETECT_ORDER` with code. A chain whose RPC failed before that answer (or when
+  nothing was found) is asked once more after 500 ms (`detectRetryDelayMs`) before a later chain is accepted, and
+  only chains that never answered are reported (`evm.getCode <chain>: …`), so the worker can say "Base RPC
+  unavailable" next to an Ethereum hit. `tokenBasics` decodes ABI and bytes32 strings, reads
   `owner()` (fallback `getOwner()`), and scans bytecode opcodes for `PUSH4` mint selectors (`0x40c10f19`,
   `0xa0712d68`, `0x4e6ec247`); behind EIP-1167 / EIP-1967 proxies the implementation is scanned too. Owner
-  `0x0` / `0x…dEaD` or no owner function → `ownerRenounced`. `simulate()` = `eth_call` + `eth_estimateGas` with
+  `0x0` / `0x…dEaD` → `ownerRenounced`. No `owner()`/`getOwner()` counts as renounced only when the bytecode is
+  known and shows nothing else that controls the supply: no owner selector, no role-based control (AccessControl
+  `hasRole`/`grantRole`/`getRoleAdmin`/`revokeRole`/`MINTER_ROLE()`, AccessManaged `authority()`, MinterRole
+  `isMinter`/`addMinter`) and no mint function. Otherwise `ownerRenounced` is `null` (a minter role, bridge or
+  anyone may still mint: "Mint function present, owner unknown", authorities unknown → warn). `simulate()` = `eth_call` + `eth_estimateGas` with
   the decoded `Error(string)` / `Panic(uint256)` reason. **Never `eth_sendTransaction` / `eth_sendRawTransaction`.**
 - **Solana** — `mintInfo` (`getAccountInfo` jsonParsed, SPL Token and Token-2022), `largestHolders`
   (`getTokenLargestAccounts` + `getTokenSupply` + `getMultipleAccounts` for owners, % of supply),
@@ -97,7 +104,7 @@ chain's public fallbacks. **Fourtis values win**; every section records its `sou
 | bundle | BundleScan | none (`null`) |
 | holders | WhaleFlow | Solana: top-10 % from the largest accounts, leaving out the DexScreener pair and known AMM vault authorities (Raydium AMM v4 / CPMM / LaunchLab, Meteora DAMM v2) and the incinerator |
 | lp | WhaleFlow | none (`null`) |
-| authorities | — | Solana: mint/freeze authority ("Renounced" / "Mint renounced, freeze active" / "Mint still active"); EVM/Tron: mint renounced = no mint function OR owner renounced |
+| authorities | — | Solana: mint/freeze authority ("Renounced" / "Mint renounced, freeze active" / "Mint still active"); EVM/Tron: mint renounced = no mint function OR owner renounced (an ownerless contract with a mint function is unknown, not renounced) |
 | market | DexScreener | — |
 
 `stubbed` lists the adapters that ran as stubs for this coin (`fourtis`, `etherscan` for EVM, `rpc-rh`);
