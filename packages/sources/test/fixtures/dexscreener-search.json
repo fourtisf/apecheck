@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0.0",
+  "pairs": [
+    { "chainId": "base", "dexId": "uniswap", "url": "https://dexscreener.com/base/0xaaa", "pairAddress": "0xaaa0000000000000000000000000000000000001",
+      "baseToken": { "address": "0x00000000000000000000000000000000000000a1", "name": "Kairo", "symbol": "KAIRO" }, "priceUsd": "0.5", "liquidity": { "usd": 1000 } },
+    { "chainId": "solana", "dexId": "raydium", "url": "https://dexscreener.com/solana/masi", "pairAddress": "MASi45ub7Qe4ZE36UT5G6cU4ud8Fhhe4deS4F3cw9KTA",
+      "baseToken": { "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "name": "Kairo", "symbol": "KAIRO" }, "priceUsd": "0.002345", "liquidity": { "usd": 145678.9 } },
+    { "chainId": "solana", "dexId": "meteora", "url": "https://dexscreener.com/solana/b8dl", "pairAddress": "b8dLcukC7edhDQ7cn5d4gEYkbUrMWeWQLGsCmrG6dLaY",
+      "baseToken": { "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "name": "Kairo", "symbol": "KAIRO" }, "priceUsd": "0.0023", "liquidity": { "usd": 18200 } },
+    { "chainId": "sui", "dexId": "cetus", "url": "https://dexscreener.com/sui/x", "pairAddress": "0xsui",
+      "baseToken": { "address": "0xsui::kairo::KAIRO", "name": "Kairo", "symbol": "KAIRO" }, "priceUsd": "1", "liquidity": { "usd": 5000000 } }
+  ]
+}

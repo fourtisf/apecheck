@@ -1,0 +1,25 @@
+{
+  "context": { "apiVersion": "2.2.3", "slot": 371234567 },
+  "value": {
+    "data": {
+      "parsed": {
+        "info": {
+          "decimals": 9,
+          "extensions": [{ "extension": "metadataPointer", "state": { "authority": "PM6oQ2NcWVn2RNagKZ58sFy76HJ3zrCJq9uUwkuHSAbZ" } }],
+          "freezeAuthority": null,
+          "isInitialized": true,
+          "mintAuthority": "PM6oQ2NcWVn2RNagKZ58sFy76HJ3zrCJq9uUwkuHSAbZ",
+          "supply": "1000000000000000000"
+        },
+        "type": "mint"
+      },
+      "program": "spl-token-2022",
+      "space": 400
+    },
+    "executable": false,
+    "lamports": 3800000,
+    "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "rentEpoch": 18446744073709551615,
+    "space": 400
+  }
+}

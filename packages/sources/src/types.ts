@@ -100,6 +100,8 @@ export interface DexTokenInfo {
 }
 export interface DexScreenerSource {
   configured: boolean;
+  /** last non-fatal error (also reported to the current captureErrors() scope) */
+  readonly lastError?: string | null;
   /** Best (most liquid) pair for a token. chain=null searches every chain. */
   token(chain: ChainKey | null, address: string): Promise<DexTokenInfo | null>;
   /** Many tokens at once (price tracker). Returns a map keyed by lowercase address. */
@@ -125,6 +127,8 @@ export interface EvmTokenBasics {
   hasMintFunction: boolean | null;
 }
 export interface EvmSource {
+  /** last non-fatal error (also reported to the current captureErrors() scope) */
+  readonly lastError?: string | null;
   /** chains with an RPC available (env RPC_* or a public fallback) */
   chains(): ChainKey[];
   /** HANDOFF Stage A: try Base, Ethereum, BNB, Arbitrum, Robinhood Chain in order until code exists. */
@@ -148,6 +152,8 @@ export interface SolMintInfo {
 }
 export interface SolanaSource {
   configured: boolean;
+  /** last non-fatal error (also reported to the current captureErrors() scope) */
+  readonly lastError?: string | null;
   mintInfo(mint: string): Promise<SolMintInfo | null>;
   /** top accounts by balance with % of supply (getTokenLargestAccounts + owners) */
   largestHolders(mint: string): Promise<{ owner: string | null; account: string; amount: string; pct: number }[]>;
@@ -157,7 +163,15 @@ export interface SolanaSource {
 
 export interface TronSource {
   configured: boolean;
-  tokenInfo(address: string): Promise<{ name: string | null; symbol: string | null; decimals: number | null; totalSupply: string | null; owner: string | null; creator: string | null } | null>;
+  /** last non-fatal error (also reported to the current captureErrors() scope) */
+  readonly lastError?: string | null;
+  tokenInfo(address: string): Promise<{
+    name: string | null; symbol: string | null; decimals: number | null; totalSupply: string | null; owner: string | null; creator: string | null;
+    /** bytecode exposes a mint-like selector (same scan as EVM) */
+    hasMintFunction?: boolean | null;
+    /** owner is the zero address or there is no owner function */
+    ownerRenounced?: boolean | null;
+  } | null>;
 }
 
 /* ---------------- GitHub ---------------- */
@@ -180,6 +194,8 @@ export interface RepoFacts {
 }
 export interface GitHubSource {
   configured: boolean;
+  /** last non-fatal error (also reported to the current captureErrors() scope) */
+  readonly lastError?: string | null;
   /** owner/repo or https://github.com/owner[/repo] → facts for that repo or the owner's top repos */
   fromUrl(url: string): Promise<RepoFacts[]>;
   /** fallback: search orgs/repos by project name; returns the best matches (max 3) */
@@ -224,6 +240,8 @@ export interface XPost {
 export interface XSource {
   /** reads need X_BEARER_TOKEN */
   configured: boolean;
+  /** last non-fatal error (also reported to the current captureErrors() scope) */
+  readonly lastError?: string | null;
   /** posting/media need the OAuth 1.0a user keys (bot, M2) */
   canPost: boolean;
   getPost(id: string): Promise<XPost | null>;
@@ -257,6 +275,8 @@ export interface WhaleFlowFacts {
 }
 export interface FourtisSource {
   configured: boolean;
+  /** last non-fatal error (also reported to the current captureErrors() scope) */
+  readonly lastError?: string | null;
   devRadar(chain: ChainKey, address: string): Promise<DevRadarFacts | null>;
   bundleScan(chain: ChainKey, address: string): Promise<BundleScanFacts | null>;
   whaleFlow(chain: ChainKey, address: string): Promise<WhaleFlowFacts | null>;

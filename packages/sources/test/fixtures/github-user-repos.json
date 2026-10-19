@@ -1,0 +1,7 @@
+[
+  { "full_name": "kairolabs/old-site", "html_url": "https://github.com/kairolabs/old-site", "fork": false, "stargazers_count": 2, "created_at": "2025-01-01T00:00:00Z", "pushed_at": "2025-02-01T00:00:00Z", "description": null },
+  { "full_name": "kairolabs/forked-sdk", "html_url": "https://github.com/kairolabs/forked-sdk", "fork": true, "stargazers_count": 0, "created_at": "2026-01-01T00:00:00Z", "pushed_at": "2026-10-18T00:00:00Z", "description": "fork" },
+  { "full_name": "kairolabs/kairo-core", "html_url": "https://github.com/kairolabs/kairo-core", "fork": false, "stargazers_count": 214, "created_at": "2025-04-01T09:12:00Z", "pushed_at": "2026-10-17T19:58:41Z", "description": "Kairo protocol contracts and SDK" },
+  { "full_name": "kairolabs/kairo-app", "html_url": "https://github.com/kairolabs/kairo-app", "fork": false, "stargazers_count": 40, "created_at": "2025-06-01T00:00:00Z", "pushed_at": "2026-10-10T00:00:00Z", "description": "Web app" },
+  { "full_name": "kairolabs/docs", "html_url": "https://github.com/kairolabs/docs", "fork": false, "stargazers_count": 5, "created_at": "2025-06-02T00:00:00Z", "pushed_at": "2026-09-01T00:00:00Z", "description": "Docs" }
+]

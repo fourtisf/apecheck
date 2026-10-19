@@ -1,0 +1,59 @@
+[
+  {
+    "chainId": "solana",
+    "dexId": "meteora",
+    "url": "https://dexscreener.com/solana/b8dlcukc7edhdq7cn5d4geykburmwewqlgscmrg6dlay",
+    "pairAddress": "b8dLcukC7edhDQ7cn5d4gEYkbUrMWeWQLGsCmrG6dLaY",
+    "labels": ["DLMM"],
+    "baseToken": { "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "name": "Kairo", "symbol": "KAIRO" },
+    "quoteToken": { "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "name": "USD Coin", "symbol": "USDC" },
+    "priceNative": "0.002301",
+    "priceUsd": "0.002301",
+    "txns": { "m5": { "buys": 1, "sells": 0 }, "h24": { "buys": 40, "sells": 31 } },
+    "volume": { "h24": 9120.5, "h6": 2001, "h1": 310, "m5": 12.4 },
+    "priceChange": { "m5": 0, "h1": -0.4, "h6": 2.1, "h24": -11.9 },
+    "liquidity": { "usd": 18200.11, "base": 3900000, "quote": 9100 },
+    "fdv": 2301000,
+    "marketCap": 2301000,
+    "pairCreatedAt": 1759900000000
+  },
+  {
+    "chainId": "solana",
+    "dexId": "raydium",
+    "url": "https://dexscreener.com/solana/masi45ub7qe4ze36ut5g6cu4ud8fhhe4des4f3cw9kta",
+    "pairAddress": "MASi45ub7Qe4ZE36UT5G6cU4ud8Fhhe4deS4F3cw9KTA",
+    "labels": ["CPMM"],
+    "baseToken": { "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "name": "Kairo", "symbol": "KAIRO" },
+    "quoteToken": { "address": "So11111111111111111111111111111111111111112", "name": "Wrapped SOL", "symbol": "SOL" },
+    "priceNative": "0.00001198",
+    "priceUsd": "0.002345",
+    "txns": { "m5": { "buys": 4, "sells": 2 }, "h24": { "buys": 811, "sells": 760 } },
+    "volume": { "h24": 412345.67, "h6": 90122.1, "h1": 14022.9, "m5": 1520.25 },
+    "priceChange": { "m5": 0.42, "h1": -1.3, "h6": 3.05, "h24": -12.34 },
+    "liquidity": { "usd": 145678.9, "base": 31000000, "quote": 370.2 },
+    "fdv": 2345000,
+    "marketCap": 2101000,
+    "pairCreatedAt": 1759881600000,
+    "info": {
+      "imageUrl": "https://dd.dexscreener.com/ds-data/tokens/solana/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263.png",
+      "header": "https://dd.dexscreener.com/ds-data/tokens/solana/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263/header.png",
+      "websites": [{ "label": "Website", "url": "https://kairo.xyz" }, { "label": "Docs", "url": "https://docs.kairo.xyz" }],
+      "socials": [{ "type": "twitter", "url": "https://x.com/kairolabs" }, { "type": "telegram", "url": "https://t.me/kairolabs" }]
+    },
+    "boosts": { "active": 0 }
+  },
+  {
+    "chainId": "solana",
+    "dexId": "orca",
+    "url": "https://dexscreener.com/solana/ync",
+    "pairAddress": "yNoVKf58ZTBqNAYT3j5qcdsyuMNmPfYetW5v6JXmj54o",
+    "baseToken": { "address": "So11111111111111111111111111111111111111112", "name": "Wrapped SOL", "symbol": "SOL" },
+    "quoteToken": { "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "name": "Kairo", "symbol": "KAIRO" },
+    "priceNative": "83400",
+    "priceUsd": "195.1",
+    "liquidity": { "usd": 999999999 },
+    "fdv": 1,
+    "pairCreatedAt": 1700000000000
+  },
+  { "chainId": "solana", "dexId": "broken", "baseToken": { "name": "no address field" } }
+]

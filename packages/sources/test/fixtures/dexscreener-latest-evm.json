@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0.0",
+  "pairs": [
+    {
+      "chainId": "polygon",
+      "dexId": "quickswap",
+      "url": "https://dexscreener.com/polygon/0x1111111111111111111111111111111111111111",
+      "pairAddress": "0x1111111111111111111111111111111111111111",
+      "baseToken": { "address": "0x4200000000000000000000000000000000000abc", "name": "Bridged Thing", "symbol": "BTHING" },
+      "quoteToken": { "address": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", "name": "USDC", "symbol": "USDC" },
+      "priceUsd": "1.10",
+      "liquidity": { "usd": 9000000 },
+      "fdv": 100
+    },
+    {
+      "chainId": "base",
+      "dexId": "aerodrome",
+      "url": "https://dexscreener.com/base/0x2222222222222222222222222222222222222222",
+      "pairAddress": "0x2222222222222222222222222222222222222222",
+      "baseToken": { "address": "0x4200000000000000000000000000000000000ABC", "name": "Thing", "symbol": "THING" },
+      "quoteToken": { "address": "0x4200000000000000000000000000000000000006", "name": "Wrapped Ether", "symbol": "WETH" },
+      "priceNative": "0.0000004",
+      "priceUsd": "0.00123",
+      "volume": { "h24": 50000, "m5": 0 },
+      "priceChange": { "h24": 5.5 },
+      "liquidity": { "usd": 88000 },
+      "fdv": 1230000,
+      "pairCreatedAt": 1760054400000,
+      "info": { "socials": [{ "platform": "twitter", "handle": "thingonbase" }] }
+    }
+  ]
+}

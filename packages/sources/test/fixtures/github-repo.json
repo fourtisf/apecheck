@@ -1,0 +1,23 @@
+{
+  "id": 812345678,
+  "name": "kairo-core",
+  "full_name": "kairolabs/kairo-core",
+  "private": false,
+  "owner": { "login": "kairolabs", "id": 170000001, "type": "Organization" },
+  "html_url": "https://github.com/kairolabs/kairo-core",
+  "description": "Kairo protocol contracts and SDK",
+  "fork": false,
+  "url": "https://api.github.com/repos/kairolabs/kairo-core",
+  "created_at": "2025-04-01T09:12:00Z",
+  "updated_at": "2026-10-17T20:01:00Z",
+  "pushed_at": "2026-10-17T19:58:41Z",
+  "homepage": "https://kairo.xyz",
+  "size": 4120,
+  "stargazers_count": 214,
+  "watchers_count": 214,
+  "language": "TypeScript",
+  "forks_count": 31,
+  "open_issues_count": 7,
+  "default_branch": "main",
+  "visibility": "public"
+}
