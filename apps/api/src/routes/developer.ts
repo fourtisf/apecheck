@@ -180,7 +180,7 @@ export function registerDeveloperRoutes(app: FastifyInstance, deps: AppDeps) {
   app.get('/v1/webhooks/:id/deliveries', rate(DEVELOPER_RATE.deliveries), async (request, reply): Promise<{ items: WebhookDeliveryDTO[] }> => {
     const user = await maxUser(request);
     const { id } = IdParamsZ.parse(request.params);
-    await userBurst(redis, 'webhooks', user.id);
+    await userBurst(redis, 'webhookDeliveries', user.id);
     const hook = await ownWebhook(user.id, id);
     const rows = await prisma.webhookDelivery.findMany({ where: { webhookId: hook.id }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: DELIVERIES_SHOWN });
     // WebhookDelivery.checkId is the internal Check.id; a shortId stored there is shown as is

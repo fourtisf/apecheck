@@ -12,6 +12,10 @@
  *  - 2xx = delivered. Any other answer, a timeout or a connection error = a failed attempt, retried (WEBHOOK_MAX_ATTEMPTS,
  *    events.ts webhookRetryDelayMs); an SSRF refusal (private / loopback / metadata address, a blocked name) or a plain
  *    http URL in production fails at once, without a request. A ping (the API page's "Send test") is tried once.
+ *  - Fairness: with DeliverDeps.acquire (the webhooks worker's Redis slots, index.ts) at most one request per webhook is
+ *    in flight, at most a few per user, and one test ping per user; a delivery that finds its slot taken comes back
+ *    as `busy` without a request (the worker puts its job back for a moment, no attempt used), so an endpoint that
+ *    never answers holds one of the shared slots at a time, not all of them.
  *  - Health: every attempt sets Webhook.lastDeliveryAt / lastStatus (null when nothing answered); a delivery that
  *    succeeds resets failCount; one that fails for good adds 1, and WEBHOOK_DISABLE_AFTER in a row set disabledAt (the
  *    webhook then gets no new events and its pending deliveries fail without a request, until the API re-enables it).
@@ -39,6 +43,18 @@ export interface DeliverDeps {
   http: Http;
   log: Logger;
   now?: () => number;
+  /**
+   * Take the slots one request to this webhook needs (index.ts deliverySlots: the webhook's, its owner's, a ping's);
+   * resolves to the function that gives them back, or null when one is taken (the delivery is then `busy`). Without
+   * it every delivery is sent at once.
+   */
+  acquire?: (d: DeliverySlotRequest) => Promise<(() => Promise<void>) | null>;
+}
+
+export interface DeliverySlotRequest {
+  webhookId: string;
+  userId: string;
+  ping: boolean;
 }
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -49,7 +65,9 @@ export type DeliveryOutcome =
   | { status: 'retry'; code: number | null; error: string }
   /** failed for good; `requested`: a request went out (false: refused or skipped before any) */
   | { status: 'failed'; code: number | null; error: string; requested: boolean }
-  | { status: 'skipped'; reason: string };
+  | { status: 'skipped'; reason: string }
+  /** not sent now: another request to the same webhook (or too many of its owner's) is in flight; try again shortly */
+  | { status: 'busy' };
 
 /** BullMQ's view of the attempt (the stored WebhookDelivery.attempts counts too: a re-queued job starts at 0) */
 export interface AttemptInfo {
@@ -178,13 +196,12 @@ export async function processDelivery(deps: DeliverDeps, deliveryId: string, att
     where: { id: deliveryId },
     select: {
       id: true, event: true, checkId: true, targetId: true, status: true, attempts: true, createdAt: true,
-      webhook: { select: { id: true, url: true, secret: true, disabledAt: true } },
+      webhook: { select: { id: true, userId: true, url: true, secret: true, disabledAt: true } },
     },
   });
   if (!d) return { status: 'skipped', reason: 'delivery gone (webhook deleted)' };
   if (d.status !== 'pending') return { status: 'skipped', reason: `already ${d.status}` };
   const ping = d.event === EVENT_PING;
-  const now = () => new Date(deps.now ? deps.now() : Date.now());
 
   // only this run's view of the row is written (another run of the same job that got here first wins)
   const settle = (
@@ -206,6 +223,33 @@ export async function processDelivery(deps: DeliverDeps, deliveryId: string, att
     await settle({ status: 'failed', tried: false, error: 'Not sent: the webhook was disabled after repeated failures' });
     return { status: 'failed', code: null, error: 'webhook disabled', requested: false };
   }
+  const release = deps.acquire ? await deps.acquire({ webhookId: d.webhook.id, userId: d.webhook.userId, ping }) : async () => undefined;
+  if (!release) return { status: 'busy' };
+  try {
+    return await send(deps, d, ping, settle, attempt);
+  } finally {
+    await release().catch(e => log.warn(`webhook ${d.webhook.id}: could not give its delivery slot back (it expires by itself): ${errText(e)}`));
+  }
+}
+
+type Loaded = {
+  id: string;
+  event: string;
+  checkId: string | null;
+  targetId: string | null;
+  attempts: number;
+  createdAt: Date;
+  webhook: { id: string; url: string; secret: string };
+};
+type Settle = (
+  data: { status: 'pending' | 'ok' | 'failed'; tried: boolean; code?: number | null; error?: string | null; deliveredAt?: Date | null },
+  db?: Db,
+) => Promise<{ count: number }>;
+
+/** Build, sign and POST one pending delivery, and record what happened (processDelivery, holding its slots). */
+async function send(deps: DeliverDeps, d: Loaded, ping: boolean, settle: Settle, attempt: AttemptInfo): Promise<DeliveryOutcome> {
+  const { prisma, log } = deps;
+  const now = () => new Date(deps.now ? deps.now() : Date.now());
   const payload = await buildPayload(deps, d);
   if (!payload) {
     await settle({ status: 'failed', tried: false, error: 'Not sent: what this event was about no longer exists' });

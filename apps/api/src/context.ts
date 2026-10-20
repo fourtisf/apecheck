@@ -15,7 +15,7 @@ export interface ApiSources {
   dex: Pick<DexScreenerSource, 'token'>;
   evm: Pick<EvmWalletSource, 'tokenBalance' | 'isValidSignature'>;
   sol: Pick<SolanaWalletSource, 'tokenBalance'>;
-  /** M4: DNS for the webhook URL check (SSRF guard); unset = the system resolver. Tests pass a fake. */
+  /** M4: DNS for the webhook URL check (SSRF guard); unset = the guard's c-ares resolver (sources createDnsLookup). Tests pass a fake. */
   lookup?: SsrfOptions['lookup'];
 }
 

@@ -10,7 +10,7 @@
  * resolve (unless OUTBOUND_PROXY resolves names), and SSRF_ALLOW_HOSTS lets local test servers through outside
  * production only. The guard runs again on every delivery (DNS can change).
  */
-import { QUEUES, isProd, type Env, type WebhookJob } from '@apecheck/core';
+import { QUEUES, WEBHOOK_PING_PRIORITY, isProd, type Env, type WebhookJob } from '@apecheck/core';
 import { checkUrl } from '@apecheck/sources';
 import type { FastifyBaseLogger } from 'fastify';
 import type { AppDeps } from './context';
@@ -23,10 +23,12 @@ export const newWebhookSecret = () => WEBHOOK_SECRET_PREFIX + randomBase62(32);
 
 /**
  * Options of the test-ping job: one attempt, so the deliveries list shows the result within seconds (the worker's
- * event jobs retry with backoff instead).
+ * event jobs retry with backoff instead), and a priority below every event delivery (those carry none), so pings
+ * never hold up anyone's check.completed / watch.changed; the worker also runs one ping per user at a time.
  */
 export const PING_JOB_OPTIONS = {
   attempts: 1,
+  priority: WEBHOOK_PING_PRIORITY,
   removeOnComplete: { age: 24 * 3600, count: 1000 },
   removeOnFail: { age: 7 * 24 * 3600, count: 1000 },
 };

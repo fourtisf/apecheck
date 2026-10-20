@@ -9,21 +9,28 @@
  *    a request and not retried; https only in production; redirects not followed;
  *  - pings: one attempt, never held against the webhook;
  *  - watch.changed from the change detector (Max watchers' webhooks only);
- *  - the sweep re-queues lost deliveries; Stage F and the failure path queue check.completed.
+ *  - the sweep re-queues lost deliveries (paging past ones waiting for a retry); Stage F and the failure path queue
+ *    check.completed; the sweep's catch-up writes check.completed rows a database error kept from being written;
+ *  - check.completed also reaches Max users whose request joined the check and every Max watcher an automatic
+ *    re-check ran for;
+ *  - fairness: one request per webhook and a few per user at a time, one ping per user, pings after events, so an
+ *    endpoint that never answers can't hold up anyone else's deliveries.
  */
 import http from 'node:http';
 import net from 'node:net';
 import { createHmac } from 'node:crypto';
+import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { WEBHOOK_SIGNATURE_HEADER, type WebhookPayload } from '@apecheck/core';
+import { CHECK_JOINED_INDEX, QUEUES, WEBHOOK_PING_PRIORITY, WEBHOOK_SIGNATURE_HEADER, checkJoinersKey, type WebhookJob, type WebhookPayload } from '@apecheck/core';
 import { verifyWebhook } from '@apecheck/core/node';
 import { createHttp } from '@apecheck/sources';
 import { memoryLogger } from '../src/log';
 import { runCheck, type PipelineDeps } from '../src/pipeline';
-import { fireCheckWebhooks } from '../src/pipeline/save';
+import { afterFinish, fireCheckWebhooks } from '../src/pipeline/save';
 import { processRecheck, type RecheckDeps } from '../src/watch/recheck';
 import {
+  PER_USER_IN_FLIGHT,
   WEBHOOK_DISABLE_AFTER,
   WEBHOOK_JOB_OPTIONS,
   WEBHOOK_MAX_ATTEMPTS,
@@ -31,8 +38,11 @@ import {
   deliveryIdFor,
   enqueueDeliveries,
   processDelivery,
+  readJoiners,
   startWebhooksWorker,
+  sweepLostDeliveries,
   webhookRetryDelayMs,
+  type SweepState,
   type WebhooksWorkerHandle,
 } from '../src/webhooks/index';
 import { closedPort, serveHandler, type FixtureSite } from './fixture-server';
@@ -51,20 +61,32 @@ interface Received {
   body: string;
   at: number;
 }
-type Responder = (r: Received, n: number) => { status: number; body?: string; headers?: Record<string, string> };
+/** what a route answers; 'hang': accept the request and never answer (until release()) */
+type Responder = (r: Received, n: number) => { status: number; body?: string; headers?: Record<string, string> } | 'hang';
 
 async function receiver() {
   const requests: Received[] = [];
   const routes = new Map<string, Responder>();
+  const hanging = new Set<http.ServerResponse>();
+  // +1 when a request arrives, -1 when its connection is answered or closed: how many were open at once
+  const timeline: { path: string; d: 1 | -1 }[] = [];
   const server = http.createServer((req, res) => {
+    const path = req.url ?? '/';
+    timeline.push({ path, d: 1 });
+    res.on('close', () => timeline.push({ path, d: -1 }));
     const chunks: Buffer[] = [];
     req.on('data', c => chunks.push(c));
     req.on('end', () => {
-      const r: Received = { path: req.url ?? '/', method: req.method ?? '', headers: req.headers, body: Buffer.concat(chunks).toString('utf8'), at: Date.now() };
+      const r: Received = { path, method: req.method ?? '', headers: req.headers, body: Buffer.concat(chunks).toString('utf8'), at: Date.now() };
       requests.push(r);
       const n = requests.filter(x => x.path === r.path).length;
       const ok: Responder = () => ({ status: 200, body: 'ok' });
       const out = (routes.get(r.path) ?? ok)(r, n);
+      if (out === 'hang') {
+        hanging.add(res);
+        res.on('close', () => hanging.delete(res));
+        return;
+      }
       res.writeHead(out.status, { 'content-type': 'text/plain', ...out.headers });
       res.end(out.body ?? '');
     });
@@ -77,6 +99,20 @@ async function receiver() {
     routes,
     url: (path: string) => `http://127.0.0.1:${port}${path}`,
     on: (path: string) => requests.filter(r => r.path === path),
+    /** requests open at once, at most, among the paths `match` accepts */
+    peak: (match: (path: string) => boolean) => {
+      let open = 0;
+      let peak = 0;
+      for (const e of timeline) if (match(e.path)) peak = Math.max(peak, (open += e.d));
+      return peak;
+    },
+    /** requests hanging right now */
+    hangingNow: () => hanging.size,
+    /** drop every hanging request (the client sees the connection reset) */
+    release: () => {
+      for (const res of hanging) res.socket?.destroy();
+      hanging.clear();
+    },
     close: () => new Promise<void>(r => { server.closeAllConnections(); server.close(() => r()); }),
   };
 }
@@ -92,7 +128,10 @@ function hook(userId: string, url: string, events: string[], extra: { disabledAt
   return prisma.webhook.create({ data: { userId, url, secret: SECRET, events, ...extra } });
 }
 /** a finished check (Partly real 48 · coin 44 · total 46) requested by `requesterId` */
-async function finished(requesterId: string | null, o: { status?: 'DONE' | 'FAILED' | 'RUNNING'; isPrivate?: boolean; finishedAt?: Date; raw?: string } = {}) {
+async function finished(
+  requesterId: string | null,
+  o: { status?: 'DONE' | 'FAILED' | 'RUNNING'; isPrivate?: boolean; finishedAt?: Date; createdAt?: Date; raw?: string } = {},
+) {
   seq++;
   const raw = o.raw ?? `orbit${seq}.xyz`;
   const target = await prisma.target.create({ data: { key: `site:${raw}`, kind: 'SITE', domain: raw, name: raw } });
@@ -106,6 +145,7 @@ async function finished(requesterId: string | null, o: { status?: 'DONE' | 'FAIL
       status,
       requesterId,
       isPrivate: o.isPrivate ?? false,
+      ...(o.createdAt ? { createdAt: o.createdAt } : o.finishedAt ? { createdAt: new Date(o.finishedAt.getTime() - 2 * 60_000) } : {}),
       finishedAt: status === 'RUNNING' ? null : (o.finishedAt ?? new Date()),
       ...(done
         ? { narScore: 48, narBand: 'partly', coinScore: 44, coinBand: 'sketchy', totalScore: 46, summary: "The app loads but the main flow stops at 'Coming soon'." }
@@ -126,6 +166,16 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false> | T | 
   }
 }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const ago = (ms: number) => new Date(Date.now() - ms);
+
+/** prisma whose webhookDelivery.createMany goes through `hook` (a database error, a webhook deleted meanwhile) */
+function withCreateMany(hook: (call: number, real: () => Promise<unknown>) => Promise<unknown>): typeof prisma {
+  let call = 0;
+  const delegate = new Proxy(prisma.webhookDelivery, {
+    get: (d, m) => (m === 'createMany' ? (args: unknown) => hook(++call, () => d.createMany(args as never)) : Reflect.get(d, m)),
+  });
+  return new Proxy(prisma, { get: (t, k) => (k === 'webhookDelivery' ? delegate : Reflect.get(t, k)) });
+}
 const delivery = (id: string) => prisma.webhookDelivery.findUniqueOrThrow({ where: { id } });
 const settled = (id: string) => waitFor(async () => { const d = await delivery(id); return d.status !== 'pending' ? d : null; }, 20_000, `delivery ${id}`);
 
@@ -219,6 +269,88 @@ describe('check.completed: who gets it', () => {
   });
 });
 
+describe('check.completed: who else asked for it', () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+
+  it("Max users whose request joined it while it ran get it too (the API's Redis joiners); never for a private check", async () => {
+    const joiner = await user('MAX');
+    const jw = await hook(joiner.id, 'https://joiner.example/hook', ['check.completed']);
+    const pro = await user('PRO');
+    await hook(pro.id, 'https://pro.example/hook', ['check.completed']);
+    const req = await user('MAX');
+    const rw = await hook(req.id, 'https://requester.example/hook', ['check.completed']);
+
+    // started by an anonymous visitor, joined by a Max developer's key (and a Pro user, who can't have webhooks)
+    const c = await finished(null);
+    expect(await checkCompletedDeliveries(prisma, c.id)).toEqual([]);
+    await redis.sadd(checkJoinersKey(c.id), joiner.id, pro.id);
+    const queued: string[] = [];
+    await fireCheckWebhooks({ prisma, log: memoryLogger(), redis, hooks: { enqueueWebhooks: async ids => void queued.push(...ids) } }, c.id);
+    expect(queued).toEqual([deliveryIdFor(jw.id, 'check.completed', c.id)]);
+
+    // a requester who also "joined" their own check, plus a joiner: one delivery each
+    const c2 = await finished(req.id);
+    await redis.sadd(checkJoinersKey(c2.id), joiner.id, req.id);
+    const joiners = await readJoiners(redis, c2.id);
+    expect(joiners.sort()).toEqual([joiner.id, req.id].sort());
+    expect((await checkCompletedDeliveries(prisma, c2.id, { joiners })).sort()).toEqual(
+      [deliveryIdFor(rw.id, 'check.completed', c2.id), deliveryIdFor(jw.id, 'check.completed', c2.id)].sort(),
+    );
+
+    // a private check stays its owner's
+    const priv = await finished(req.id, { isPrivate: true });
+    expect(await checkCompletedDeliveries(prisma, priv.id, { joiners: [joiner.id] })).toEqual([deliveryIdFor(rw.id, 'check.completed', priv.id)]);
+
+    // Redis down: the requester's deliveries still go out
+    const broken = { smembers: async () => { throw new Error('connect ECONNREFUSED'); } } as unknown as Pick<Redis, 'smembers'>;
+    const log = memoryLogger();
+    expect(await readJoiners(broken, c2.id, log)).toEqual([]);
+    expect(log.lines.some(l => /could not read who joined/.test(l))).toBe(true);
+  });
+
+  it('an automatic re-check reaches every Max watcher it ran for (their "changed" alert links it), and nobody else', async () => {
+    const a = await user('MAX');
+    const b = await user('MAX');
+    const outsider = await user('MAX');
+    const pro = await user('PRO');
+    const [aw, bw] = [await hook(a.id, 'https://a.example/h', ['check.completed']), await hook(b.id, 'https://b.example/h', ['check.completed'])];
+    await hook(outsider.id, 'https://o.example/h', ['check.completed']);
+    await hook(pro.id, 'https://p.example/h', ['check.completed']);
+    // recheck.ts makes the first eligible watcher its requester, and links every eligible watcher's alert to it
+    const c = await finished(a.id);
+    const note = (userId: string, checkId: string | null) =>
+      prisma.notification.create({ data: { userId, targetId: c.targetId, kind: 'changed', checkId, text: 'orbit changed since its last check; re-checking it now' } });
+    for (const u of [a, b, pro]) await note(u.id, c.id);
+    // the outsider's own alert of the same target doesn't link this check
+    await note(outsider.id, null);
+    expect((await checkCompletedDeliveries(prisma, c.id)).sort()).toEqual(
+      [deliveryIdFor(aw.id, 'check.completed', c.id), deliveryIdFor(bw.id, 'check.completed', c.id)].sort(),
+    );
+    expect(await prisma.webhookDelivery.count()).toBe(2);
+
+    // the run some anonymous visitor started, joined as the watchers' re-check: theirs too
+    const joined = await finished(null);
+    await note(b.id, joined.id);
+    expect(await checkCompletedDeliveries(prisma, joined.id)).toEqual([deliveryIdFor(bw.id, 'check.completed', joined.id)]);
+  });
+
+  it('a webhook deleted while the rows are written: the other webhooks still get theirs', async () => {
+    const a = await user('MAX');
+    const keep = await hook(a.id, 'https://a.example/keep', ['check.completed']);
+    const gone = await hook(a.id, 'https://a.example/gone', ['check.completed']);
+    const c = await finished(a.id);
+    // DELETE /v1/webhooks/:id lands between reading the receivers and the insert: a foreign-key error (P2003)
+    const racing = withCreateMany(async (call, real) => {
+      if (call === 1) await prisma.webhook.delete({ where: { id: gone.id } });
+      return real();
+    });
+    expect(await checkCompletedDeliveries(racing, c.id)).toEqual([deliveryIdFor(keep.id, 'check.completed', c.id)]);
+    expect(await prisma.webhookDelivery.findMany({ select: { webhookId: true } })).toEqual([{ webhookId: keep.id }]);
+  });
+});
+
 /* ---------------- delivery through the real queue ---------------- */
 
 describe('delivery', () => {
@@ -241,9 +373,10 @@ describe('delivery', () => {
     rx.requests.length = 0;
     rx.routes.clear();
     log.lines.length = 0;
-    wk = await startWebhooksWorker({ env, prisma, log, retryDelayMs: () => RETRY_MS, sweepEveryMs: 0 });
+    wk = await startWebhooksWorker({ env, prisma, log, retryDelayMs: () => RETRY_MS, sweepEveryMs: 0, busyDelayMs: () => 50 });
   });
   afterEach(async () => {
+    rx.release();
     await wk.close();
   });
 
@@ -510,6 +643,194 @@ describe('delivery', () => {
     expect(rx.on('/swept')).toHaveLength(1);
     expect(w.id).toBeTruthy();
   });
+  it('fairness: an endpoint that never answers holds one slot at a time; pings to it queue up, and another user is not held up', async () => {
+    const a = await user('MAX');
+    const b = await user('MAX');
+    const slow = await hook(a.id, rx.url('/hang'), ['check.completed']);
+    const fast = await hook(b.id, rx.url('/fast'), ['check.completed']);
+    rx.routes.set('/hang', () => 'hang');
+    // 16 "Send test" pings to an endpoint that accepts and never answers, queued the way the API does
+    const pings: string[] = [];
+    for (let i = 0; i < 16; i++) {
+      const p = await prisma.webhookDelivery.create({ data: { webhookId: slow.id, event: 'ping' } });
+      await wk.queue.add('deliver', { deliveryId: p.id }, { jobId: p.id, attempts: 1, priority: WEBHOOK_PING_PRIORITY });
+      pings.push(p.id);
+    }
+    await waitFor(() => rx.hangingNow() === 1, 5000, 'the first ping to hang');
+
+    // B's check finishes right after: delivered at once (it waited ~20 s while A's pings held all 8 slots)
+    const c = await finished(b.id);
+    const t0 = Date.now();
+    await complete(c.id);
+    expect(await settled(deliveryIdFor(fast.id, 'check.completed', c.id))).toMatchObject({ status: 'ok', attempts: 1 });
+    expect(Date.now() - t0).toBeLessThan(3000);
+    await sleep(300);
+    expect(rx.hangingNow()).toBe(1);
+    expect(rx.peak(path => path === '/hang')).toBe(1);
+
+    // the endpoint answers again: the waiting pings go one by one, each on its single attempt (waiting for the slot
+    // used none); the one that hung fails with the reset connection
+    rx.routes.set('/hang', () => ({ status: 200 }));
+    rx.release();
+    const outcomes = [];
+    for (const id of pings) outcomes.push(await settled(id));
+    for (const d of outcomes) expect(d.attempts).toBe(1);
+    expect(outcomes.filter(d => d.status === 'ok')).toHaveLength(15);
+    expect(outcomes.filter(d => d.status === 'failed')).toHaveLength(1);
+    expect(rx.peak(path => path === '/hang')).toBe(1);
+    // pings never count against the webhook
+    expect(await prisma.webhook.findUniqueOrThrow({ where: { id: slow.id } })).toMatchObject({ failCount: 0, disabledAt: null });
+  });
+
+  it("one user's webhooks: at most PER_USER_IN_FLIGHT requests at once", async () => {
+    const a = await user('MAX');
+    const b = await user('MAX');
+    const paths = ['/stuck1', '/stuck2', '/stuck3'];
+    const hooksA = [];
+    for (const p of paths) {
+      rx.routes.set(p, () => 'hang');
+      hooksA.push(await hook(a.id, rx.url(p), ['check.completed']));
+    }
+    const fast = await hook(b.id, rx.url('/other'), ['check.completed']);
+    const ca = await finished(a.id);
+    await complete(ca.id);
+    await waitFor(() => rx.hangingNow() === PER_USER_IN_FLIGHT, 5000, `${PER_USER_IN_FLIGHT} requests hanging`);
+    await sleep(300);
+    expect(rx.hangingNow()).toBe(PER_USER_IN_FLIGHT);
+
+    const cb = await finished(b.id);
+    await complete(cb.id);
+    expect(await settled(deliveryIdFor(fast.id, 'check.completed', cb.id))).toMatchObject({ status: 'ok' });
+
+    for (const p of paths) rx.routes.set(p, () => ({ status: 200 }));
+    rx.release();
+    // the reset ones are retried like any failed attempt; every one arrives
+    for (const h of hooksA) expect(await settled(deliveryIdFor(h.id, 'check.completed', ca.id))).toMatchObject({ status: 'ok' });
+    expect(rx.peak(path => paths.includes(path))).toBe(PER_USER_IN_FLIGHT);
+  });
+
+  it('pings wait behind event deliveries (WEBHOOK_PING_PRIORITY)', async () => {
+    await wk.close();
+    const a = await user('MAX');
+    const b = await user('MAX');
+    const pinged = await hook(a.id, rx.url('/pinged'), ['check.completed']);
+    const ev = await hook(b.id, rx.url('/event'), ['check.completed']);
+    // queued while no worker runs: three pings first, then an event
+    const conn = new Redis(process.env.REDIS_URL!, { maxRetriesPerRequest: null });
+    const q = new Queue<WebhookJob>(QUEUES.webhooks, { connection: conn });
+    const pings: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const p = await prisma.webhookDelivery.create({ data: { webhookId: pinged.id, event: 'ping' } });
+      await q.add('deliver', { deliveryId: p.id }, { jobId: p.id, attempts: 1, priority: WEBHOOK_PING_PRIORITY });
+      pings.push(p.id);
+    }
+    const c = await finished(b.id);
+    const ids = await checkCompletedDeliveries(prisma, c.id);
+    await enqueueDeliveries(q, ids);
+    await q.close();
+    await conn.quit();
+
+    wk = await startWebhooksWorker({ env, prisma, log, retryDelayMs: () => RETRY_MS, sweepEveryMs: 0, busyDelayMs: () => 50, concurrency: 1 });
+    for (const id of [...ids, ...pings]) await settled(id);
+    expect(rx.requests.map(r => r.path)).toEqual(['/event', '/pinged', '/pinged', '/pinged']);
+    expect(ids).toEqual([deliveryIdFor(ev.id, 'check.completed', c.id)]);
+  });
+
+  it('the sweep pages past deliveries waiting for a retry, so a lost one behind them is found; a sweep that stops early goes on next time', async () => {
+    const u = await user('MAX');
+    const w = await hook(u.id, rx.url('/paged'), ['check.completed']);
+    // seven deliveries waiting for their retry (live delayed jobs), older than the lost ones
+    const waiting: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const c = await finished(u.id);
+      const id = deliveryIdFor(w.id, 'check.completed', c.id);
+      await prisma.webhookDelivery.create({ data: { id, webhookId: w.id, event: 'check.completed', checkId: c.id, attempts: 2, createdAt: ago(3 * HOUR - i * 1000) } });
+      await wk.queue.add('deliver', { deliveryId: id }, { jobId: id, ...WEBHOOK_JOB_OPTIONS, delay: HOUR });
+      waiting.push(id);
+    }
+    const lostRow = async () => {
+      const c = await finished(u.id);
+      const id = deliveryIdFor(w.id, 'check.completed', c.id);
+      await prisma.webhookDelivery.create({ data: { id, webhookId: w.id, event: 'check.completed', checkId: c.id, createdAt: ago(10 * 60_000) } });
+      return id;
+    };
+    const lost = await lostRow();
+
+    // pages of 3: the first page is all live jobs (before, the sweep read one page and stopped there)
+    const state: SweepState = { cursor: null };
+    expect(await sweepLostDeliveries({ prisma, log }, wk.queue, state, { page: 3 })).toBe(1);
+    expect(state.cursor).toBeNull();
+    expect(await settled(lost)).toMatchObject({ status: 'ok', attempts: 1 });
+    for (const id of waiting) expect(await (await wk.queue.getJob(id))!.getState()).toBe('delayed');
+
+    // at most 4 rows looked at per sweep: the first sweep stops among the live ones and leaves its place
+    const lost2 = await lostRow();
+    const s2: SweepState = { cursor: null };
+    expect(await sweepLostDeliveries({ prisma, log }, wk.queue, s2, { page: 2, scanMax: 4 })).toBe(0);
+    expect(s2.cursor).not.toBeNull();
+    expect(await sweepLostDeliveries({ prisma, log }, wk.queue, s2, { page: 2, scanMax: 4 })).toBe(1);
+    expect(await settled(lost2)).toMatchObject({ status: 'ok' });
+    expect(await sweepLostDeliveries({ prisma, log }, wk.queue, s2, { page: 2, scanMax: 4 })).toBe(0);
+    expect(s2.cursor).toBeNull();
+    expect(rx.on('/paged')).toHaveLength(2);
+  });
+
+  it('the catch-up writes the check.completed rows a database error kept afterFinish from writing (requester, re-check watchers, joiners), and only those', async () => {
+    const twoDays = 2 * 24 * HOUR;
+    const u = await user('MAX');
+    const w = await hook(u.id, rx.url('/caught'), ['check.completed'], { createdAt: ago(twoDays) });
+    const tenMin = ago(10 * 60_000);
+
+    // the check finished; then the database failed while its webhooks were written (logged, nothing written)
+    const c = await finished(u.id, { finishedAt: tenMin });
+    const failing = withCreateMany(async () => {
+      throw Object.assign(new Error('Timed out fetching a new connection from the connection pool'), { code: 'P2024' });
+    });
+    await afterFinish({ prisma: failing, log, redis, hooks: { enqueueWebhooks: ids => enqueueDeliveries(wk.queue, ids) } }, c.id);
+    expect(log.lines.some(l => /could not queue the check\.completed webhooks/.test(l))).toBe(true);
+    expect(await prisma.webhookDelivery.count()).toBe(0);
+
+    // also owed: their private check, an automatic re-check that ran for a watcher, a check a Max developer joined
+    const priv = await finished(u.id, { finishedAt: tenMin, isPrivate: true });
+    const watcher = await user('MAX');
+    const ww = await hook(watcher.id, rx.url('/watcher'), ['check.completed'], { createdAt: ago(twoDays) });
+    const recheck = await finished(null, { finishedAt: tenMin });
+    await prisma.notification.create({
+      data: { userId: watcher.id, targetId: recheck.targetId, kind: 'changed', checkId: recheck.id, text: 'changed; re-checking it now', createdAt: ago(13 * 60_000) },
+    });
+    const joiner = await user('MAX');
+    const jw = await hook(joiner.id, rx.url('/joiner'), ['check.completed'], { createdAt: ago(twoDays) });
+    const joined = await finished(null, { finishedAt: tenMin });
+    const stillRunning = await finished(null, { status: 'RUNNING' });
+    for (const j of [joined, stillRunning]) {
+      await redis.sadd(checkJoinersKey(j.id), joiner.id);
+      await redis.zadd(CHECK_JOINED_INDEX, Date.now() - 15 * 60_000, j.id);
+    }
+    // not owed or not yet: finished a minute ago (its own end is on it), seven hours ago, already written, someone
+    // else's without a webhook, anonymous, a webhook added after the check finished
+    await finished(u.id, { finishedAt: ago(60_000) });
+    await finished(u.id, { finishedAt: ago(7 * HOUR) });
+    const written = await finished(u.id, { finishedAt: tenMin });
+    expect(await checkCompletedDeliveries(prisma, written.id)).toHaveLength(1);
+    await finished((await user('MAX')).id, { finishedAt: tenMin });
+    await finished(null, { finishedAt: tenMin });
+    const late = await user('MAX');
+    await finished(late.id, { finishedAt: tenMin });
+    await hook(late.id, rx.url('/late'), ['check.completed']);
+
+    expect(await wk.catchUp()).toBe(4);
+    const rows = await prisma.webhookDelivery.findMany({ where: { checkId: { not: written.id } }, select: { id: true, webhookId: true, checkId: true } });
+    expect(rows.map(r => `${r.webhookId}:${r.checkId}`).sort()).toEqual(
+      [`${w.id}:${c.id}`, `${w.id}:${priv.id}`, `${ww.id}:${recheck.id}`, `${jw.id}:${joined.id}`].sort(),
+    );
+    for (const r of rows) expect(await settled(r.id)).toMatchObject({ status: 'ok', attempts: 1 });
+    expect(rx.on('/late')).toHaveLength(0);
+    // done: nothing more to catch up; the finished joined check left the index, the running one waits there
+    expect(await wk.catchUp()).toBe(0);
+    expect(await redis.zscore(CHECK_JOINED_INDEX, joined.id)).toBeNull();
+    expect(await redis.zscore(CHECK_JOINED_INDEX, stillRunning.id)).not.toBeNull();
+    expect(log.lines.some(l => /wrote the missing check\.completed deliveries of 4 check/.test(l))).toBe(true);
+  });
 });
 
 /* ---------------- watch.changed from the change detector ---------------- */
@@ -597,6 +918,60 @@ describe('watch.changed', () => {
       target: { id: target.id, name: 'watched.test', change: 'site' },
     } satisfies WebhookPayload);
     expect(rx.requests.map(r => r.path)).toEqual(['/changed']);
+  });
+  it("an automatic re-check's check.completed reaches every Max watcher it ran for, created or joined, and nobody else", async () => {
+    html = '<html><head><title>Orbit</title></head><body><h1>Orbit v3 is live</h1></body></html>';
+    const target = await prisma.target.create({ data: { key: 'site:watched.test', kind: 'SITE', domain: 'watched.test', name: 'watched.test' } });
+    await prisma.check.create({
+      data: { shortId: 'wch0002', targetId: target.id, targetRaw: site.url, status: 'DONE', finishedAt: new Date(Date.now() - 24 * HOUR), narScore: 48, narBand: 'partly', isLatest: true },
+    });
+    const a = await user('MAX');
+    const b = await user('MAX');
+    const outsider = await user('MAX');
+    for (const u of [a, b]) await prisma.watch.create({ data: { userId: u.id, targetId: target.id } });
+    const aw = await hook(a.id, rx.url('/rc-a'), ['check.completed']);
+    const bw = await hook(b.id, rx.url('/rc-b'), ['check.completed']);
+    await hook(outsider.id, rx.url('/rc-outsider'), ['check.completed']);
+    const deps: RecheckDeps = {
+      env,
+      prisma,
+      redis,
+      sources: fakeSources(env, { allowHosts: [site.host] }),
+      log,
+      enqueueCheck: async () => undefined,
+      enqueueWebhooks: ids => enqueueDeliveries(wk.queue, ids),
+      confirmDelayMs: 0,
+    };
+    const change = async (text: string) => {
+      await prisma.target.update({ where: { id: target.id }, data: { fingerprintAt: new Date(Date.now() - 7 * HOUR) } });
+      await prisma.watch.updateMany({ where: { targetId: target.id }, data: { lastRecheckAt: null } });
+      html = html.replace(/<h1>.*<\/h1>/, `<h1>${text}</h1>`);
+      const out = await processRecheck(deps, target.id);
+      expect(out).toMatchObject({ status: 'changed', alerted: 2 });
+      return (out as { recheckId: string }).recheckId;
+    };
+    const finish = async (checkId: string) => {
+      await prisma.check.update({ where: { id: checkId }, data: { status: 'DONE', finishedAt: new Date(), narScore: 72, narBand: 'likely' } });
+      await fireCheckWebhooks({ prisma, log, redis, hooks: { enqueueWebhooks: ids => enqueueDeliveries(wk.queue, ids) } }, checkId);
+    };
+    expect(await processRecheck(deps, target.id)).toEqual({ status: 'first' });
+
+    // a re-check it created (requesterId = the first of them): both watchers, not only its requester
+    const created = await change('Orbit v3: join the waitlist');
+    expect((await prisma.check.findUniqueOrThrow({ where: { id: created } })).requesterId).toBe(a.id);
+    await finish(created);
+    for (const w of [aw, bw]) expect(await settled(deliveryIdFor(w.id, 'check.completed', created))).toMatchObject({ status: 'ok' });
+
+    // a run someone else already had in progress, joined as their re-check: theirs too once it finishes
+    const running = await prisma.check.create({
+      data: { shortId: 'wch0003', targetId: target.id, targetRaw: site.url, status: 'RUNNING', startedAt: new Date() },
+    });
+    expect(await change('Orbit v3 is back')).toBe(running.id);
+    await finish(running.id);
+    for (const w of [aw, bw]) expect(await settled(deliveryIdFor(w.id, 'check.completed', running.id))).toMatchObject({ status: 'ok' });
+
+    expect(rx.on('/rc-outsider')).toHaveLength(0);
+    expect(rx.on('/rc-a').map(r => (JSON.parse(r.body) as WebhookPayload).check?.id).sort()).toEqual(['wch0003', (await prisma.check.findUniqueOrThrow({ where: { id: created } })).shortId].sort());
   });
 });
 

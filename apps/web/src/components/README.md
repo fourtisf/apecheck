@@ -184,8 +184,12 @@ an older URL after Back.
     ("HTTP 200 · 5m ago", `responseText`), Send test (Enable when disabled, the same button node so focus stays),
     Deliveries (expands `.dep-more` with the last 50: `deliveryStatus` pill Delivered / Pending / Retrying / Failed,
     event, HTTP code, attempts, Report link, error) and Delete → "Yes, delete". Send test opens the deliveries and
-    looks again every 1.5 s (40 times) until that ping settles, then re-reads the row's own status; only the newest
-    deliveries answer is shown.
+    looks again until that ping settles, then re-reads the row's own status; only the newest deliveries answer is
+    shown. The looks back off (`testPollDelay`: 1.5 s twice, 3 s twice, 6 s twice, then 10 s; `TEST_POLL_MAX` 10, about
+    a minute), so every webhook tested at once stays under the API's 60 deliveries reads a minute, and stop at a 429,
+    401/403 or 404 (`pollStops`). Delete of a webhook already deleted in another tab (404) takes the row away like a
+    delete; deleting the webhook whose secret is on show hides the secret. A 401/403 from Revoke or Delete re-reads
+    `/v1/me` like the lists do, so a page signed out meanwhile falls back to the Max line.
   - Buttons waiting for a request are `aria-disabled` (not `disabled`), so keyboard focus never drops to `<body>`.
   - Columns have fixed widths (each `.tr` is its own grid); up to 1000px rows stack (name and status, then the dates in
     `.c-mob`, then the actions).
@@ -254,6 +258,8 @@ pnpm --filter @apecheck/web typecheck   # src and test/
   Pro, the code tabs' shapes, a Max wallet creating a key (shown once and copied, then only its prefix; the key calls
   the API and shows "last used"; revoked, it gets 401 `invalid_key`), adding a webhook (a malformed and a private URL
   refused, the secret shown once), Send test delivered by the worker with a valid `ApeCheck-Signature`, a disabled
-  webhook enabled again, focus kept on Send test, the Coin tab's clusters for Pro and not for a signed-out reader, and
+  webhook enabled again, focus kept on Send test, Send test backing off from a stuck ping and stopping at a 429, Delete
+  of a webhook another tab deleted first (row and secret gone), Revoke after the session ended (back to the Max line),
+  the Coin tab's clusters for Pro and not for a signed-out reader, and
   /api as Max and signed out at 1440, 900 and 390px, light and dark (no sideways scroll, header columns aligned;
   screenshots in the log folder's `m4-shots/`).

@@ -2,7 +2,8 @@
  * MCP server (M4, Max; HANDOFF §9 and the /api page): Streamable HTTP at `POST /mcp`, which mcp.apecheck.io proxies
  * to. Stateless: every POST gets a fresh McpServer + StreamableHTTPServerTransport (no session id), the response is
  * an SSE stream (keep-alive comments every 15 s while a tool runs); `GET` and `DELETE /mcp` answer 405. Off when
- * MCP_ENABLED is false (404).
+ * MCP_ENABLED is false (404). One JSON-RPC message per POST: a batch (an array, dropped from MCP in 2025-06-18) is
+ * refused with 400 / -32600, so the per-key and per-IP limits count every tool call.
  *
  * Auth: the same Bearer API key as the REST routes (plugins/apiKeys.ts: per-key rate limit, Max only, lastUsedAt).
  * No key → 401 key_required; a bad or revoked key → 401 invalid_key; not Max → 403 max_required (plain HTTP errors,
@@ -10,10 +11,12 @@
  *
  * Tools (failures are MCP tool errors, `isError: true` with the reason as text, never HTTP 500s):
  *  - run_check(target): starts a check as POST /v1/checks does with the key (via API, one of the owner's
- *    MAX_CHECKS_PER_DAY, same-target reuse and cache) and waits up to 150 s for it to finish →
+ *    MAX_CHECKS_PER_DAY, same-target reuse and cache, and the same RATE.createCheckPerMin a minute per account:
+ *    USER_RATE.apiChecks, shared with keyed POST /v1/checks) and waits up to 150 s for it to finish →
  *    { id, status: "done", target, narrative, coin, total, verdict, summary, report_url } (the webhook payload's
- *    `check`), or { id, status: "running", report_url } when it takes longer. Sends notifications/progress with the
- *    live log when the client asked for progress (`_meta.progressToken`).
+ *    `check`), or { id, status: "running", report_url } when it takes longer, or at once when the owner already has
+ *    MCP_WAITS_PER_USER run_check calls waiting. Sends notifications/progress with the live log when the client asked
+ *    for progress (`_meta.progressToken`); the progress value rises with every notification, as MCP requires.
  *  - get_check(id): the full report JSON (GET /v1/checks/:id as the key's owner).
  *  - ask_followup(id, question): a follow-up answered from the check's record (POST /v1/checks/:id/asks rules).
  *  - deployer_history(wallet): what is known about the wallet as a deployer (DevRadar record) and the coins of it
@@ -39,6 +42,7 @@ import { createCheck, loadReport } from './checks';
 import type { AppDeps } from './context';
 import { ApiError, MSG } from './errors';
 import { SHORT_ID_RE } from './ids';
+import { slidingLimit, userBurst } from './limits';
 import { coinVerdictOf, narrativeOf, toCheckResult, toDeployerDTO, type CheckResult, type Viewer } from './mappers';
 import { askOnCheck } from './routes/community';
 import { publicDeployerWhere } from './routes/insights';
@@ -46,8 +50,15 @@ import { viewerOf } from './routes/util';
 
 /** how long run_check waits for the check to finish */
 export const MCP_RUN_WAIT_MS = 150_000;
-/** run_check also polls the database this often (the "done" message is the fast path) */
-const RUN_POLL_MS = 3_000;
+/**
+ * run_check calls of one account that may wait at the same time (any keys, any IPs); more answer "running" at once.
+ * Each wait holds a pub/sub listener and polls the Check row, and same-target calls reuse a running check for free.
+ */
+export const MCP_WAITS_PER_USER = 5;
+/** Redis sorted set of an account's waiting run_check calls (members expire on their own if a process dies) */
+export const mcpWaitsKey = (userId: string) => `mcp:waits:user:${userId}`;
+/** run_check also polls the database this often, in case a "done" message is missed (it is the fast path) */
+const RUN_POLL_MS = 10_000;
 const COINS_MAX = 50;
 
 export const MCP_TOOLS = ['run_check', 'get_check', 'ask_followup', 'deployer_history'] as const;
@@ -125,6 +136,21 @@ const sleep = (ms: number, signal: AbortSignal) =>
 type Progress = (progress: number, message: string) => void;
 
 /**
+ * notifications/progress values for one tool call. MCP requires the value to rise with every notification, but the
+ * worker repeats its progress (0..1) on every step of a stage: a repeat goes up by 0.01. `total` (100) is left out
+ * once a value would pass it.
+ */
+export function progressCounter(): (progress: number) => { progress: number; total?: number } {
+  let last = -1; // hundredths of a percent
+  return progress => {
+    const p = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
+    last = Math.max(Math.round(p * 10_000), last + 1);
+    const value = last / 100;
+    return value <= 100 ? { progress: value, total: 100 } : { progress: value };
+  };
+}
+
+/**
  * Wait until the check (internal id) is DONE or FAILED, at most `ms`: the worker's "done" message on check:{id} ends
  * the wait at once, a status poll every RUN_POLL_MS covers a missed message. Returns the final status, or null.
  */
@@ -187,6 +213,10 @@ const resultSelect = {
 } satisfies Prisma.CheckSelect;
 
 async function runCheck(deps: AppDeps, request: FastifyRequest, target: string, signal: AbortSignal, onProgress?: Progress): Promise<CallToolResult> {
+  const userId = request.viewer.user?.id;
+  if (!userId) throw new ApiError(401, 'key_required', MSG.keyRequired);
+  // the per-IP limit of POST /v1/checks, per account (every call counts, like every POST there)
+  await userBurst(deps.redis, 'apiChecks', userId, MSG.apiChecksRateLimited);
   // the key's owner is Max (plugins/apiKeys.ts): their credits, their priority, via API
   const created = await createCheck(deps, { target, via: 'API' }, creditSubject(request, 'max'), request.log);
   const shortId = created.body.id;
@@ -194,15 +224,22 @@ async function runCheck(deps: AppDeps, request: FastifyRequest, target: string, 
   let row = await deps.prisma.check.findUnique({ where: { shortId }, select: resultSelect });
   if (!row) throw new ApiError(404, 'not_found', MSG.notFound);
   if (row.status !== 'DONE' && row.status !== 'FAILED') {
-    const status = await waitForCheck(deps, row.id, deps.mcpWaitMs ?? MCP_RUN_WAIT_MS, signal, onProgress);
-    if (!status) {
-      return ok({
-        id: shortId,
-        status: 'running',
-        report_url: reportUrl,
-        message: 'The check is still running. Call get_check with this id in a minute.',
-      });
+    const waitMs = deps.mcpWaitMs ?? MCP_RUN_WAIT_MS;
+    const running = (message: string) => ok({ id: shortId, status: 'running', report_url: reportUrl, message });
+    // a slot among the account's waiting calls; it lapses on its own a little after the longest wait
+    const slot = await slidingLimit(deps.redis, mcpWaitsKey(userId), MCP_WAITS_PER_USER, waitMs + 30_000);
+    if (!slot.ok) {
+      return running(
+        `The check is running. You already have ${MCP_WAITS_PER_USER} run_check calls waiting, so this one doesn't wait. Call get_check with this id in a minute.`,
+      );
     }
+    let status: Awaited<ReturnType<typeof waitForCheck>>;
+    try {
+      status = await waitForCheck(deps, row.id, waitMs, signal, onProgress);
+    } finally {
+      await slot.release();
+    }
+    if (!status) return running('The check is still running. Call get_check with this id in a minute.');
     row = await deps.prisma.check.findUnique({ where: { id: row.id }, select: resultSelect });
     if (!row) throw new ApiError(404, 'not_found', MSG.notFound);
   }
@@ -335,11 +372,12 @@ export function buildMcpServer(deps: AppDeps, request: FastifyRequest, signal: A
       guarded(request, 'run_check', () => {
         const token = extra._meta?.progressToken;
         const both = AbortSignal.any([signal, extra.signal]);
+        const next = progressCounter();
         const onProgress: Progress | undefined =
           token != null
             ? (progress, message) => {
                 void extra
-                  .sendNotification({ method: 'notifications/progress', params: { progressToken: token, progress: Math.round(progress * 100), total: 100, message } })
+                  .sendNotification({ method: 'notifications/progress', params: { progressToken: token, ...next(progress), message } })
                   .catch(() => undefined);
               }
             : undefined;
@@ -414,6 +452,12 @@ export function registerMcpRoutes(app: FastifyInstance, deps: AppDeps, registry:
     if (!request.viewer.apiKeyId) {
       reply.header('WWW-Authenticate', 'Bearer realm="apecheck"');
       throw new ApiError(401, 'key_required', MSG.keyRequired);
+    }
+    // One message per request. The SDK would run a JSON-RPC batch (up to 100 messages, tools/call without initialize
+    // in stateless mode) for the one hit the per-key and per-IP limits counted. MCP dropped batching in 2025-06-18 and
+    // the SDK clients never send one.
+    if (Array.isArray(request.body)) {
+      return reply.code(400).send({ jsonrpc: '2.0', error: { code: -32600, message: 'Batch requests are not supported. Send one JSON-RPC message per request.' }, id: null });
     }
     // headers set by hooks (CORS, rate limits) are carried over: a hijacked reply skips Fastify's send path
     const carried = Object.entries(reply.getHeaders()).filter(([, v]) => v != null) as [string, string | number | string[]][];

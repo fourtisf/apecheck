@@ -4,7 +4,8 @@
  * - checkUrl / assertPublicUrl: vet a URL before a server-side fetch. Only http(s); IP literals in any
  *   spelling are normalised by the WHATWG URL parser (2130706433, 0177.0.0.1, 0x7f000001 → 127.0.0.1)
  *   and checked against the blocked ranges; names are refused if they are local/metadata names or if ANY
- *   resolved A/AAAA address is blocked. The vetted addresses are returned so the caller can pin them.
+ *   resolved A/AAAA address is blocked. The vetted addresses are returned so the caller can pin them. Names are
+ *   resolved with c-ares (createDnsLookup), not getaddrinfo: a user's slow name server can't tie up the threadpool.
  * - startGuardProxy: a local forward proxy for Chromium (--proxy-server) applying the same rules to every
  *   CONNECT, absolute-URI and upgrade request, connecting to the vetted IP itself (no DNS rebinding window).
  */
@@ -24,7 +25,10 @@ export class SsrfError extends Error {
 export interface SsrfOptions {
   /** DEV/TEST ONLY host[:port] allow-list (env SSRF_ALLOW_HOSTS); ignored when NODE_ENV=production */
   allowHosts?: string[];
-  /** custom resolver for tests */
+  /**
+   * Resolver override (tests). Default: createDnsLookup() (c-ares, off the libuv threadpool) for every name a user or
+   * page supplies; getaddrinfo only for names on the dev allow-list (they may live in /etc/hosts).
+   */
   lookup?: (host: string) => Promise<string[]>;
   /** force production rules (allowHosts ignored). process.env.NODE_ENV=production always forces them. */
   production?: boolean;
@@ -145,6 +149,65 @@ function hostNameReason(host: string): string | null {
 
 const LOOKUP_TIMEOUT_MS = 5_000;
 
+/** Overall deadline of one name's resolution (A and AAAA together); the queries still running then are cancelled. */
+export const DNS_LOOKUP_TIMEOUT_MS = 5_000;
+/** c-ares timeout of one query attempt (it doubles each round through the name servers) */
+export const DNS_QUERY_TIMEOUT_MS = 2_000;
+/** c-ares tries per name server */
+export const DNS_QUERY_TRIES = 2;
+
+export interface DnsLookupOptions {
+  /** name servers ("8.8.8.8", "127.0.0.1:5300", "[::1]:53"); default: the system's (/etc/resolv.conf) */
+  servers?: string[];
+  /** overall deadline (default DNS_LOOKUP_TIMEOUT_MS) */
+  timeoutMs?: number;
+  /** per-attempt timeout (default DNS_QUERY_TIMEOUT_MS) */
+  queryTimeoutMs?: number;
+  /** tries per name server (default DNS_QUERY_TRIES) */
+  tries?: number;
+}
+
+/**
+ * The guard's resolver for names that come from users and pages (webhook URLs, pasted links, every hop of a guarded
+ * fetch, every CONNECT of the guard proxy): A + AAAA over c-ares (dns.Resolver), never dns.lookup.
+ *
+ * dns.lookup is getaddrinfo on libuv's threadpool, where at most half of the threads (2 of the default 4) may do DNS
+ * at once, and racing it against a timer only stops the waiting: a name whose name servers never answer keeps its
+ * thread until the system resolver gives up (resolv.conf timeout × attempts × servers, 10 s and more). Two such names
+ * would stall every other host-name lookup of the process (RPC balance reads, DexScreener, X, price tracking). c-ares
+ * queries are sockets on the event loop, and they are cancelled at the deadline.
+ *
+ * Both families are asked at once and merged; one of them failing is fine (no AAAA record, a server that drops AAAA
+ * queries). Rejects when neither gives an address. Reads no /etc/hosts: it is for public names (the allow-listed dev
+ * hosts keep the system resolver). Every call gets its own resolver, so a deadline cancels only that call's queries.
+ */
+export function createDnsLookup(opts: DnsLookupOptions = {}): (host: string) => Promise<string[]> {
+  const deadline = opts.timeoutMs ?? DNS_LOOKUP_TIMEOUT_MS;
+  const options = { timeout: opts.queryTimeoutMs ?? DNS_QUERY_TIMEOUT_MS, tries: opts.tries ?? DNS_QUERY_TRIES };
+  return async (host: string) => {
+    const resolver = new dns.promises.Resolver(options);
+    if (opts.servers?.length) resolver.setServers(opts.servers);
+    // cancel() rejects the pending queries at once (ECANCELLED), so allSettled settles at the deadline at the latest
+    const timer = setTimeout(() => resolver.cancel(), deadline);
+    let settled: PromiseSettledResult<string[]>[];
+    try {
+      settled = await Promise.allSettled([resolver.resolve4(host), resolver.resolve6(host)]);
+    } finally {
+      clearTimeout(timer);
+    }
+    const addresses = settled.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
+    if (addresses.length) return addresses;
+    const codes = settled.map(r => (r.status === 'rejected' ? String((r.reason as { code?: unknown })?.code ?? 'error') : 'no address'));
+    throw Object.assign(new Error(`could not resolve ${host} (${[...new Set(codes)].join(', ')})`), {
+      code: codes.includes('ECANCELLED') ? 'ETIMEOUT' : codes[0],
+    });
+  };
+}
+
+/** Default resolver of vetHost for every name that is not on the dev allow-list. */
+const publicLookup = createDnsLookup();
+
+/** getaddrinfo (honours /etc/hosts): only for the operator's own SSRF_ALLOW_HOSTS names, never for a user's name. */
 async function systemLookup(host: string): Promise<string[]> {
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -184,12 +247,11 @@ export interface HostVetting {
 export async function vetHost(hostname: string, port: number, opts: SsrfOptions = {}): Promise<HostVetting> {
   const host = canonicalHost(hostname);
   if (!host) return { ok: false, host: String(hostname), reason: 'invalid host', addresses: [] };
-  const lookup = opts.lookup ?? systemLookup;
 
   if (allowListed(host, port, opts)) {
     let addresses: string[] = [];
     if (net.isIP(host)) addresses = [host];
-    else addresses = await lookup(host).catch(() => []);
+    else addresses = await (opts.lookup ?? systemLookup)(host).catch(() => []);
     return { ok: true, host, addresses, allowListed: true };
   }
   if (net.isIP(host)) {
@@ -201,7 +263,8 @@ export async function vetHost(hostname: string, port: number, opts: SsrfOptions 
 
   let addresses: string[] = [];
   try {
-    addresses = await lookup(host);
+    // a name a user or page chose: c-ares, never getaddrinfo (createDnsLookup says why)
+    addresses = await (opts.lookup ?? publicLookup)(host);
   } catch {
     addresses = [];
   }

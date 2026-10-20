@@ -28,7 +28,7 @@ import { buildEvidence } from './record';
 import { pgSafe } from './pgsafe';
 import { RunSuperseded } from './steps';
 import { completeAutoRechecks } from '../watch/notify';
-import { checkCompletedDeliveries } from '../webhooks/events';
+import { checkCompletedDeliveries, readJoiners } from '../webhooks/events';
 import type { CheckEvidence } from '@apecheck/core';
 
 export interface SavedCheck {
@@ -302,24 +302,30 @@ export async function enqueueBotReply(deps: Pick<PipelineDeps, 'prisma' | 'log' 
 }
 
 /**
- * M4: the check.completed webhooks of a finished check (its requester's enabled webhooks, Max only; webhooks/events.ts).
- * Idempotent: the delivery ids are derived from webhook + check, so a second call makes no second delivery.
+ * M4: the check.completed webhooks of a finished check (webhooks/events.ts: its requester's, those of Max users whose
+ * request joined it while it ran, and those of the Max watchers it ran for as their automatic re-check; enabled
+ * webhooks, Max only). Idempotent: the delivery ids are derived from webhook + check, so a second call makes no second
+ * delivery. Rows this could not write (a database error) are written by the webhooks sweep's catch-up.
  */
-export async function fireCheckWebhooks(deps: Pick<PipelineDeps, 'prisma' | 'log' | 'hooks'>, checkId: string) {
-  const ids = await checkCompletedDeliveries(deps.prisma, checkId);
+export async function fireCheckWebhooks(deps: FinishDeps, checkId: string) {
+  const joiners = await readJoiners(deps.redis, checkId, deps.log);
+  const ids = await checkCompletedDeliveries(deps.prisma, checkId, { joiners });
   if (ids.length && deps.hooks?.enqueueWebhooks) await deps.hooks.enqueueWebhooks(ids);
 }
+
+/** What afterFinish needs (redis: who joined the check, for its webhooks; without it only the requester and watchers) */
+export type FinishDeps = Pick<PipelineDeps, 'prisma' | 'log' | 'hooks'> & { redis?: Pick<PipelineDeps['redis'], 'smembers'> };
 
 /**
  * Every finished check (done or failed, also one ended by the stuck-check recovery or found finished by a re-run of
  * its job): the bot replies still waiting on it, the "rechecked" notifications of the watchers whose automatic
- * re-check it is (watch/notify.ts; idempotent, a no-op for checks nobody watches) and the requester's check.completed
- * webhooks (M4; idempotent, a no-op for checks without a requester).
+ * re-check it is (watch/notify.ts; idempotent, a no-op for checks nobody watches) and its check.completed webhooks
+ * (M4; idempotent, a no-op for checks nobody with a webhook asked for).
  */
-export async function afterFinish(deps: Pick<PipelineDeps, 'prisma' | 'log' | 'hooks'>, checkId: string) {
+export async function afterFinish(deps: FinishDeps, checkId: string) {
   await enqueueBotReply(deps, checkId);
   await completeAutoRechecks(deps, checkId).catch(e => deps.log.warn('could not complete the re-check notifications', e));
-  await fireCheckWebhooks(deps, checkId).catch(e => deps.log.warn('could not queue the check.completed webhooks', e));
+  await fireCheckWebhooks(deps, checkId).catch(e => deps.log.warn('could not queue the check.completed webhooks (the webhooks sweep catches up)', e));
 }
 
 /** After a check finished DONE: everything afterFinish does (bot reply, re-check notifications, webhooks). */

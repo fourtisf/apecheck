@@ -29,6 +29,21 @@ export interface WebhookJob { deliveryId: string }
 export const WEBHOOK_SIGNATURE_HEADER = 'ApeCheck-Signature';
 /** API keys: "ak_live_" + 32 random base62 chars; stored as sha256 hex; prefix = first 12 chars shown in the UI */
 export const API_KEY_PREFIX = 'ak_live_';
+/**
+ * BullMQ priority of a test ping on queue "webhooks". Event deliveries carry none, and BullMQ takes every job without a
+ * priority before any prioritized one, so a stream of "Send test" pings never delays someone's check.completed.
+ */
+export const WEBHOOK_PING_PRIORITY = 10;
+/**
+ * M4: Max users whose request (POST /v1/checks from the site or a key, MCP run_check) joined a check of the same
+ * project that was already running, by internal Check.id: a Redis set of user ids, written by the API, kept
+ * CHECK_JOINERS_TTL_S. They asked for that check as much as its requester did, so its check.completed webhooks reach
+ * them too (worker webhooks/events.ts).
+ */
+export const checkJoinersKey = (checkId: string) => `check:${checkId}:joiners`;
+/** Sorted set of the checks that have joiners (score = ms of the latest join): the webhooks sweep catches up on them. */
+export const CHECK_JOINED_INDEX = 'webhooks:joined';
+export const CHECK_JOINERS_TTL_S = 2 * 24 * 3600;
 
 /** BullMQ priorities: lower number = earlier. Pro/Max users get the priority queue. */
 export const PRIORITY = { max: 1, pro: 2, free: 5, bot: 5, recheck: 8 } as const;

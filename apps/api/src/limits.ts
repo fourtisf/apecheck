@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import { nextUtcMidnight, utcDay } from '@apecheck/core';
 import { ApiError, MSG } from './errors';
+import { RATE } from './plugins/rateLimit';
 
 const SLIDING_LUA = `
 local now = tonumber(ARGV[1])
@@ -99,10 +100,16 @@ export const USER_RATE = {
   keys: 30,
   webhooks: 30,
   webhookTest: 10,
+  // M4: reading a webhook's deliveries (the /api page looks again while a test ping is on its way): a bucket of its
+  // own, as wide as the route's per-IP limit, so waiting on pings can never lock Add, Enable or Delete
+  webhookDeliveries: 60,
+  // M4: checks started with an API key (POST /v1/checks with a key, MCP run_check), one bucket per account whatever
+  // the key, IP or transport: the per-IP limit of POST /v1/checks, which run_check never passes through
+  apiChecks: RATE.createCheckPerMin,
 } as const;
 
 /** One per-minute burst hit for this user on `name`; 429 rate_limited when over. */
-export async function userBurst(redis: Redis, name: keyof typeof USER_RATE, userId: string): Promise<void> {
+export async function userBurst(redis: Redis, name: keyof typeof USER_RATE, userId: string, message: string = MSG.rateLimited): Promise<void> {
   const hit = await slidingLimit(redis, userLimitKey(name, userId), USER_RATE[name], 60_000);
-  if (!hit.ok) throw new ApiError(429, 'rate_limited', MSG.rateLimited);
+  if (!hit.ok) throw new ApiError(429, 'rate_limited', message);
 }

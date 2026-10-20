@@ -14,7 +14,7 @@ import http from 'node:http';
 import path from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
-import { WEBHOOK_SIGNATURE_HEADER } from '@apecheck/core';
+import { WEBHOOK_SIGNATURE_HEADER, type WebhookDeliveryDTO } from '@apecheck/core';
 import { API_URL, HOOK_PORT, WEB_URL, flushRedis, openDb, playwright } from './env';
 import { EVM_MAX_KEY, EVM_PRO_KEY, installFakeWallets, type FakeWalletOpts } from './wallets';
 
@@ -347,6 +347,100 @@ describe('/api for a Max wallet', () => {
     const hook = await db.webhook.findFirstOrThrow({});
     expect(hook.disabledAt).toBeNull();
     expect(hook.failCount).toBe(0);
+  });
+
+  it('Send test looks for a stuck ping less and less often, and stops at a 429', async () => {
+    const page = await newPage({ evmKey: EVM_MAX_KEY });
+    await go(page, '/api');
+    await signIn(page);
+    await page.fill('#webhooks .dev-field input', `http://127.0.0.1:${HOOK_PORT}/stuck`);
+    await page.click('#webhooks button:has-text("Add webhook")');
+    await page.waitForSelector('#webhooks .dev-once');
+    await page.click('#webhooks .dev-once button:has-text("Done")');
+
+    // the ping stays pending (worker-prices down or backlogged): every read of the deliveries says so, until the API
+    // starts answering 429 (with the API's own CORS headers, so the page reads the 429 and not a network error)
+    const reads: number[] = [];
+    let limited = false;
+    await page.route(`${API_URL}/v1/webhooks/*/deliveries`, async route => {
+      const refuse = limited;
+      reads.push(Date.now());
+      const res = await route.fetch();
+      if (refuse) return route.fulfill({ response: res, status: 429, json: { code: 'rate_limited', error: 'Too many requests. Wait a minute and try again.' } });
+      const { items } = (await res.json()) as { items: WebhookDeliveryDTO[] };
+      return route.fulfill({ response: res, json: { items: items.map(d => ({ ...d, status: 'pending', attempts: 0, responseCode: null, error: null, deliveredAt: null })) } });
+    });
+
+    const row = page.locator('#webhooks [data-hook-id]');
+    const clicked = Date.now();
+    await row.locator('button:has-text("Send test")').click();
+    await toastSays(page, 'Test ping sent');
+    // the deliveries open (one read), then the page looks again 1.5 s, 3 s and 6 s after the ping went out (not every 1.5 s)
+    await until(() => reads.length, n => n >= 4, 'reads of the deliveries');
+    expect(reads[1] - clicked).toBeGreaterThanOrEqual(1500);
+    expect(reads[3] - clicked).toBeGreaterThanOrEqual(6000);
+    expect(await page.$('#webhooks .dlv li[data-delivery="pending"]')).not.toBeNull();
+
+    // the next look is refused: the panel says so and the page stops looking
+    limited = true;
+    const before = reads.length;
+    await page
+      .waitForFunction(() => /Too many requests/.test(document.querySelector('#webhooks .dev-more')?.textContent ?? ''), null, { timeout: 15_000 })
+      .catch(async () => {
+        throw new Error(`no 429 shown: ${await page.textContent('#webhooks .dev-more')} (${logs()})`);
+      });
+    expect(reads.length).toBe(before + 1);
+    await page.waitForTimeout(7_000); // past the next look (6 s on)
+    expect(reads.length).toBe(before + 1);
+    await page.unroute(`${API_URL}/v1/webhooks/*/deliveries`);
+  });
+
+  it('Delete takes a webhook and its secret off the page, also when another tab deleted it first', async () => {
+    const page = await newPage({ evmKey: EVM_MAX_KEY });
+    await go(page, '/api');
+    await signIn(page);
+    const row = page.locator('#webhooks [data-hook-id]');
+
+    // deleted straight after adding it: the secret shown for it goes too
+    await page.fill('#webhooks .dev-field input', `http://127.0.0.1:${HOOK_PORT}/first`);
+    await page.click('#webhooks button:has-text("Add webhook")');
+    await page.waitForSelector('#webhooks .dev-once');
+    await row.locator('button:has-text("Delete")').click();
+    await row.locator('button:has-text("Yes, delete")').click();
+    await toastSays(page, 'Webhook deleted');
+    await page.waitForSelector('#webhooks .tbl-empty:has-text("No webhooks yet")');
+    expect(await page.$('#webhooks .dev-once')).toBeNull();
+
+    // deleted in another tab while this one still shows it (404): what was asked for is done, so the row goes
+    await page.fill('#webhooks .dev-field input', `http://127.0.0.1:${HOOK_PORT}/second`);
+    await page.click('#webhooks button:has-text("Add webhook")');
+    await page.waitForSelector('#webhooks .dev-once');
+    expect(await db.webhook.deleteMany({})).toEqual({ count: 1 });
+    await row.locator('button:has-text("Delete")').click();
+    await row.locator('button:has-text("Yes, delete")').click();
+    await toastSays(page, 'Webhook deleted');
+    await page.waitForSelector('#webhooks .tbl-empty:has-text("No webhooks yet")');
+    expect(await page.$('#webhooks [data-hook-id]')).toBeNull();
+    expect(await page.$('#webhooks .dev-once')).toBeNull();
+  });
+
+  it('signed out meanwhile: Revoke takes the page back to the Max line, the new key with it', async () => {
+    const page = await newPage({ evmKey: EVM_MAX_KEY });
+    await go(page, '/api');
+    await signIn(page);
+    await page.click('#keys .dev-field button:has-text("Create key")');
+    await page.waitForSelector('#keys .dev-once');
+    const key = await page.inputValue('#keys .dev-once input');
+    // the session ends elsewhere (signed out in another tab, or expired): the API no longer knows it
+    flushRedis();
+    await page.click('#keys [data-key-id] button:has-text("Revoke")');
+    await page.click('#keys [data-key-id] button:has-text("Yes, revoke")');
+    await page.waitForSelector('.dev-note .btn:has-text("Connect wallet")', { timeout: 15_000 }).catch(async () => {
+      throw new Error(`the page stayed signed in: ${await page.textContent('.dev-g')} (${logs()})`);
+    });
+    expect(await page.$('#keys')).toBeNull();
+    expect(await page.$('#webhooks')).toBeNull();
+    expect(await page.content()).not.toContain(key);
   });
 });
 

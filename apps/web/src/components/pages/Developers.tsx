@@ -37,9 +37,26 @@ import { useToast } from '../Toast';
 export const MAX_LINE = 'API keys, webhooks and MCP are part of Max.';
 /** the API's limit on key names (apps/api KEY_NAME_MAX) */
 export const KEY_NAME_MAX = 40;
-/** how long "Send test" keeps looking for the ping's result */
+/**
+ * How "Send test" looks for the ping's result: soon at first (the worker usually delivers within a second or two),
+ * then less and less often, for about a minute in all. Every look is a read of the deliveries, which the API limits per
+ * IP and per account (60 a minute): even with every webhook (WEBHOOKS_PER_USER, 5) tested at once, a minute of looking
+ * stays under that.
+ */
 export const TEST_POLL_MS = 1500;
-export const TEST_POLL_MAX = 40;
+export const TEST_POLL_CAP_MS = 10_000;
+export const TEST_POLL_MAX = 10;
+/** the wait before look `n` (0-based): 1.5 s twice, 3 s twice, 6 s twice, then 10 s */
+export const testPollDelay = (n: number) => Math.min(TEST_POLL_MS * 2 ** Math.floor(Math.max(0, n) / 2), TEST_POLL_CAP_MS);
+
+/**
+ * After a failed look, is another one pointless? Yes after 429 (it would only add to the count and lock the panel
+ * longer), 401/403 (signed out or no longer Max) and 404 (the webhook was deleted elsewhere). A network blip or a 5xx
+ * is looked past.
+ */
+export function pollStops(e: unknown): boolean {
+  return isApiError(e) && (e.status === 429 || e.status === 401 || e.status === 403 || e.status === 404);
+}
 
 export type DevViewer = 'max' | 'signed-in' | 'signed-out';
 
@@ -291,7 +308,12 @@ function KeysPanel({ me, onDenied }: { me: MeDTO; onDenied: (e: ApiRequestError)
       input.current?.focus();
     } catch (err) {
       toast(errText(err));
-      if (isApiError(err, 'not_found')) void reload();
+      if (isApiError(err, 'not_found')) {
+        setCreated(c => (c?.id === k.id ? null : c));
+        void reload();
+      }
+      // signed out meanwhile: the page follows (DevTools goes, the line under the code comes back)
+      if (isApiError(err) && (err.status === 401 || err.status === 403)) onDenied(err);
     } finally {
       setRevoking(null);
     }
@@ -429,22 +451,27 @@ function HookRow({ h, onChange, onRemoved, onDenied }: { h: WebhookDTO; onChange
   const changed = useRef(onChange);
   changed.current = onChange;
 
-  /** only the newest load is shown (a slow older answer must not put a delivery back to pending) */
+  /**
+   * Only the newest load is shown (a slow older answer must not put a delivery back to pending). Resolves false when
+   * looking again is pointless (pollStops).
+   */
   const seq = useRef(0);
   const loadDeliveries = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal?: AbortSignal): Promise<boolean> => {
       const my = ++seq.current;
       try {
         const res = await webhookDeliveries(h.id, { signal });
-        if (my !== seq.current) return null;
+        if (my !== seq.current) return true;
         setDeliveries(res.items);
         setDErr(null);
-        return res.items;
+        return true;
       } catch (e) {
-        if (isAbortError(e) || my !== seq.current) return null;
+        if (isAbortError(e) || my !== seq.current) return true;
         setDErr(errText(e));
         if (isApiError(e) && (e.status === 401 || e.status === 403)) onDenied(e);
-        return null;
+        // deleted in another tab: the list is read again, which drops this row
+        if (isApiError(e, 'not_found')) changed.current(null);
+        return !pollStops(e);
       }
     },
     [h.id, onDenied],
@@ -469,14 +496,14 @@ function HookRow({ h, onChange, onRemoved, onDenied }: { h: WebhookDTO; onChange
     }
   }, [deliveries, awaiting]);
 
-  // until then, look again every TEST_POLL_MS (at most TEST_POLL_MAX times)
+  // until then, look again after testPollDelay (at most TEST_POLL_MAX times); a 429, 401/403 or 404 ends the wait
   useEffect(() => {
     if (!awaiting || awaiting.left <= 0) return;
-    const id = awaiting.id;
+    const { id, left } = awaiting;
     const t = window.setTimeout(async () => {
-      await loadDeliveries();
-      setAwaiting(a => (a && a.id === id ? { id, left: a.left - 1 } : a));
-    }, TEST_POLL_MS);
+      const goOn = await loadDeliveries();
+      setAwaiting(a => (a && a.id === id ? (goOn ? { id, left: a.left - 1 } : null) : a));
+    }, testPollDelay(TEST_POLL_MAX - left));
     return () => window.clearTimeout(t);
   }, [awaiting, loadDeliveries]);
 
@@ -522,7 +549,14 @@ function HookRow({ h, onChange, onRemoved, onDenied }: { h: WebhookDTO; onChange
       toast('Webhook deleted');
       onRemoved();
     } catch (e) {
+      // already deleted (in another tab): what was asked for is done, so the row goes (and with it this component)
+      if (isApiError(e, 'not_found')) {
+        toast('Webhook deleted');
+        onRemoved();
+        return;
+      }
       toast(errText(e));
+      if (isApiError(e) && (e.status === 401 || e.status === 403)) onDenied(e);
       setBusy(null);
     }
   }
@@ -594,7 +628,7 @@ function WebhooksPanel({ onDenied }: { onDenied: (e: ApiRequestError) => void })
   const [events, setEvents] = useState<WebhookEvent[]>(['check.completed']);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [created, setCreated] = useState<{ secret: string; url: string } | null>(null);
+  const [created, setCreated] = useState<{ id: string; secret: string; url: string } | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   async function add(e: FormEvent) {
@@ -611,7 +645,7 @@ function WebhooksPanel({ onDenied }: { onDenied: (e: ApiRequestError) => void })
     try {
       const res = await createWebhook({ url: url.trim(), events });
       const { secret, ...row } = res;
-      setCreated({ secret, url: row.url });
+      setCreated({ id: row.id, secret, url: row.url });
       setItems(list => [row, ...(list ?? []).filter(x => x.id !== row.id)]);
       setUrl('');
     } catch (err) {
@@ -707,6 +741,8 @@ function WebhooksPanel({ onDenied }: { onDenied: (e: ApiRequestError) => void })
               onChange={next => replace(h.id, next)}
               onRemoved={() => {
                 setItems(list => (list ?? []).filter(x => x.id !== h.id));
+                // the secret of a deleted webhook signs nothing any more
+                setCreated(c => (c?.id === h.id ? null : c));
                 input.current?.focus();
               }}
               onDenied={onDenied}

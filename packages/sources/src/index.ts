@@ -17,7 +17,8 @@ import { coinFacts } from './coin-facts';
 export * from './types';
 export {
   SsrfError, isBlockedIp, ipBlockReason, checkUrl, assertPublicUrl, startGuardProxy, vetHost, vetUrl, isProduction,
-  type SsrfOptions, type HostVetting, type UrlVetting,
+  createDnsLookup, DNS_LOOKUP_TIMEOUT_MS, DNS_QUERY_TIMEOUT_MS, DNS_QUERY_TRIES,
+  type SsrfOptions, type HostVetting, type UrlVetting, type DnsLookupOptions,
 } from './ssrf';
 export { createHttp, HttpError, USER_AGENT, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_BYTES, MAX_REDIRECTS, type HttpEnv, type HttpOptions } from './http';
 export { captureErrors, reportError, TimeoutError } from './util';

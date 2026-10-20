@@ -8,7 +8,22 @@ import { describe, expect, it } from 'vitest';
 import type { MeDTO } from '@apecheck/core';
 import { MeProvider } from '@/components/Me';
 import { CodeTabs } from '@/components/pages/CodeTabs';
-import { DevNote, DevTools, MAX_LINE, deliveryStatus, devViewer, hookStatus, keyShown, responseText, webhookUrlProblem } from '@/components/pages/Developers';
+import {
+  DevNote,
+  DevTools,
+  MAX_LINE,
+  TEST_POLL_MAX,
+  TEST_POLL_MS,
+  deliveryStatus,
+  devViewer,
+  hookStatus,
+  keyShown,
+  pollStops,
+  responseText,
+  testPollDelay,
+  webhookUrlProblem,
+} from '@/components/pages/Developers';
+import { ApiRequestError } from '@/lib/api';
 import { CoinTab } from '@/components/report/CoinTab';
 import { report } from './fixtures';
 
@@ -89,6 +104,41 @@ describe('/api: keys and webhooks are for Max', () => {
     expect(webhookUrlProblem('ftp://your-server.com/hook')).toBe('Enter the full URL of your endpoint, starting with https://.');
     expect(webhookUrlProblem(' https://your-server.com/apecheck ')).toBeNull();
     expect(webhookUrlProblem('http://127.0.0.1:4612/hook')).toBeNull();
+  });
+});
+
+describe('"Send test" waits for the ping within the API limits', () => {
+  /** the API's limits on GET /v1/webhooks/:id/deliveries: per IP (DEVELOPER_RATE.deliveries) and per account
+   *  (USER_RATE.webhookDeliveries), both 60 a minute; and WEBHOOKS_PER_USER's default */
+  const DELIVERY_READS_PER_MIN = 60;
+  const WEBHOOKS_PER_USER = 5;
+  const delays = Array.from({ length: TEST_POLL_MAX }, (_, n) => testPollDelay(n));
+  /** when each look happens, counted from the click (the deliveries open with one read at 0) */
+  const at = delays.map((_, n) => delays.slice(0, n + 1).reduce((a, b) => a + b, 0));
+
+  it('soon at first, then less and less often, for about a minute', () => {
+    expect(delays[0]).toBe(TEST_POLL_MS);
+    for (let n = 1; n < delays.length; n++) expect(delays[n]).toBeGreaterThanOrEqual(delays[n - 1]);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(10_000);
+    expect(at[at.length - 1]).toBeGreaterThanOrEqual(60_000);
+    expect(at[at.length - 1]).toBeLessThanOrEqual(90_000);
+  });
+
+  it('every webhook tested at once stays under the reads the API allows in any minute', () => {
+    const reads = [0, ...at];
+    const most = Math.max(...reads.map(t => reads.filter(x => x >= t && x < t + 60_000).length));
+    expect(most * WEBHOOKS_PER_USER).toBeLessThanOrEqual(DELIVERY_READS_PER_MIN);
+  });
+
+  it('stops after 429, 401, 403 or 404; looks past a network blip or a 5xx', () => {
+    const err = (status: number, code: string) => new ApiRequestError(status, { code, error: 'x' });
+    expect(pollStops(err(429, 'rate_limited'))).toBe(true);
+    expect(pollStops(err(401, 'sign_in_required'))).toBe(true);
+    expect(pollStops(err(403, 'max_required'))).toBe(true);
+    expect(pollStops(err(404, 'not_found'))).toBe(true);
+    expect(pollStops(err(0, 'network'))).toBe(false);
+    expect(pollStops(err(502, 'internal'))).toBe(false);
+    expect(pollStops(new Error('boom'))).toBe(false);
   });
 });
 

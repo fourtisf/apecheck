@@ -6,6 +6,7 @@ import type { AppDeps } from '../context';
 import { createCheck, loadReport } from '../checks';
 import { ApiError, MSG } from '../errors';
 import { SHORT_ID_RE } from '../ids';
+import { userBurst } from '../limits';
 import { isProViewer } from '../mappers';
 import { viaKey } from '../plugins/apiKeys';
 import { RATE } from '../plugins/rateLimit';
@@ -23,6 +24,8 @@ export function registerCheckRoutes(app: FastifyInstance, deps: AppDeps) {
   /**
    * Credits by tier: anonymous visitors per cookie + IP (FREE_CHECKS_PER_DAY); signed-in users per user with their
    * tier's limit (a Free user keeps counting per cookie + IP as well). Job priority by tier. `private: true` is Max only.
+   * With an API key (M4) the owner also has RATE.createCheckPerMin a minute across all their keys and IPs, a bucket
+   * shared with the MCP tool run_check (USER_RATE.apiChecks).
    */
   app.post(
     '/v1/checks',
@@ -34,8 +37,10 @@ export function registerCheckRoutes(app: FastifyInstance, deps: AppDeps) {
         if (missingTarget) throw new ApiError(400, 'bad_target', MSG.badTarget);
         throw parsed.error;
       }
+      const keyed = viaKey(request);
+      if (keyed && request.viewer.user) await userBurst(deps.redis, 'apiChecks', request.viewer.user.id, MSG.apiChecksRateLimited);
       const tier = await viewerTier(deps, request);
-      const via = viaKey(request) ? 'API' : 'WEB';
+      const via = keyed ? 'API' : 'WEB';
       const res = await createCheck(deps, { ...parsed.data, via }, creditSubject(request, tier?.tier ?? 'free'), request.log);
       return reply.code(res.statusCode).send(res.body);
     },

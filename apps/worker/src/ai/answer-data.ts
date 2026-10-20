@@ -1,10 +1,24 @@
 /**
  * The stored data of one finished check, shaped for AiAdapter.answer() (M3 asks on the site, M2 bot
  * follow-ups). Answers only ever see this record, never the live page.
+ *
+ * Answers are public: every viewer of the report reads its follow-ups (asksList) and the bot posts them on X. So this
+ * record holds only what every viewer may see: evidence the API shows to some viewers only (VIEWER_GATED_EVIDENCE,
+ * e.g. M4's Pro/Max holder clusters) never reaches the answerer, or a question could read it out to everyone.
  */
 import { deployerLine, lpLabel, recordFromDb, sigFromDb, claimStatusFromDb, kindFromDb, type CheckEvidence } from '@apecheck/core';
 import type { PrismaClient } from '@apecheck/db';
 import type { AnswerData } from './types';
+
+/** Evidence keys the API serves to some viewers only (apps/api mappers: clusters → Pro/Max): never in an answer. */
+export const VIEWER_GATED_EVIDENCE = ['clusters'] as const satisfies readonly (keyof CheckEvidence)[];
+
+/** The check's evidence without what only some viewers may see (see the header). */
+export function publicEvidence(ev: CheckEvidence | null | undefined): CheckEvidence {
+  const out: CheckEvidence = { ...(ev ?? {}) };
+  for (const k of VIEWER_GATED_EVIDENCE) delete out[k];
+  return out;
+}
 
 export async function loadAnswerData(prisma: PrismaClient, checkId: string): Promise<AnswerData | null> {
   const c = await prisma.check.findUnique({
@@ -24,7 +38,7 @@ export async function loadAnswerData(prisma: PrismaClient, checkId: string): Pro
     summary: c.summary,
     coinSummary: c.coinSummary,
     signals: { launch: sigFromDb(c.sigLaunch), flow: sigFromDb(c.sigFlow), docs: sigFromDb(c.sigDocs), acct: sigFromDb(c.sigAcct), git: sigFromDb(c.sigGit) },
-    evidence: (c.evidence ?? {}) as CheckEvidence,
+    evidence: publicEvidence(c.evidence as CheckEvidence | null),
     claims: c.claims.map(x => ({ text: x.text, status: claimStatusFromDb(x.status), evidence: x.evidence })),
     coin: f
       ? {

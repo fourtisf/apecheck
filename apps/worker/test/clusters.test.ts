@@ -7,6 +7,9 @@ import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { CheckEvidence } from '@apecheck/core';
 import type { CoinRawFacts, HolderCluster } from '@apecheck/sources';
+import { loadAnswerData } from '../src/ai';
+import { publicEvidence } from '../src/ai/answer-data';
+import { answerUserText } from '../src/ai/prompts';
 import { memoryLogger } from '../src/log';
 import { runCheck, type PipelineDeps } from '../src/pipeline';
 import { fakeSources } from './fakes';
@@ -71,6 +74,31 @@ describe('holder clusters (M4)', () => {
     const log = c.steps.map(s => s.text).join('\n');
     expect(log).not.toMatch(/Cluster A|Binance hot wallet|cluster/i);
     expect(log).toContain('Top 10 holders own 31%');
+  });
+
+  it('follow-up answers never see the clusters: answers are public (every viewer, the bot on X), clusters Pro/Max only', async () => {
+    const clusters: HolderCluster[] = [
+      { label: 'Cluster A', wallets: 14, pct: 22.5, fundedFrom: 'Binance hot wallet' },
+      { label: 'Cluster B', wallets: 4, pct: 6.5, fundedFrom: '0xfeedfacefeedfacefeedfacefeedfacefeedface' },
+    ];
+    const c = await coinCheck(facts({ clusters }));
+    // still stored for the API's Pro/Max viewers
+    expect((c.evidence as CheckEvidence).clusters).toEqual(clusters);
+
+    const data = (await loadAnswerData(prisma, c.id))!;
+    expect(data).not.toBeNull();
+    expect('clusters' in data.evidence).toBe(false);
+    // the rest of the evidence still reaches the answerer
+    expect(data.evidence.stepsExpected).toBe((c.evidence as CheckEvidence).stepsExpected);
+    const prompt = answerUserText('are the top holders funded from one wallet?', data);
+    expect(prompt).not.toMatch(/Cluster A|Cluster B|Binance hot wallet|0xfeedface|22\.5|"clusters"/);
+    expect(prompt).toContain('check_data');
+
+    // the helper drops only the viewer-gated keys and never touches the stored object
+    const ev = { launch: 'x', clusters } as CheckEvidence;
+    expect(publicEvidence(ev)).toEqual({ launch: 'x' });
+    expect(ev.clusters).toBe(clusters);
+    expect(publicEvidence(null)).toEqual({});
   });
 
   it('no clusters from WhaleFlow (none sent, WhaleFlow down or unconfigured) → nothing stored, nothing invented', async () => {

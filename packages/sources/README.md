@@ -266,8 +266,15 @@ drops `Authorization`/`Cookie`; 303 (and 301/302 after POST) turn into GET. `jso
   `instance-data`, `instance-data.ec2.internal`, `localhost`, `*.localhost`, `*.internal`, `*.local`,
   `*.localdomain`, and single-label names (they resolve through search domains to internal hosts).
   `169.254.169.254`, `100.100.100.200` and `fd00:ec2::254` are caught by the address rules.
-- Other names are resolved (A + AAAA, `dns.lookup all`); **any** blocked address refuses the URL; a DNS failure
-  refuses it ("could not resolve").
+- Other names are resolved (A + AAAA); **any** blocked address refuses the URL; a DNS failure refuses it ("could not
+  resolve").
+- Resolution of user/page names is `createDnsLookup()`: c-ares (`dns.Resolver`, 2 s per query, 2 tries per name
+  server, both families at once and merged, the queries cancelled at a 5 s deadline), **never `dns.lookup`**.
+  `dns.lookup` is getaddrinfo on libuv's threadpool (at most 2 of its 4 threads do DNS) and a timeout only stops the
+  waiting, so a webhook or site host whose name servers never answer would hold those threads for 10 s+ and stall
+  every other host-name lookup of the process (RPC, DexScreener, X, price tracking). c-ares reads no `/etc/hosts`;
+  `SSRF_ALLOW_HOSTS` names (the operator's own dev hosts) keep the system resolver. `opts.lookup` overrides both
+  (tests).
 - `SSRF_ALLOW_HOSTS` (`host` or `host:port`) lets local fixtures through **only when `NODE_ENV !== 'production'`**
   (both the env passed in and `process.env.NODE_ENV` are checked).
 

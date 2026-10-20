@@ -18,8 +18,13 @@ import {
   type CheckReportDTO,
   type CreateApiKeyResponse,
 } from '@apecheck/core';
+import { MSG } from '../src/errors';
+import { USER_RATE } from '../src/limits';
+import { MCP_WAITS_PER_USER, mcpWaitsKey, progressCounter } from '../src/mcp';
+import { keyLimitKey } from '../src/plugins/apiKeys';
+import { RATE } from '../src/plugins/rateLimit';
 import { TEST_REDIS_URL } from './global-setup';
-import { Client, EvmWallet, SolWallet, makeHarness, resetState, seedCheck, seedCoinFacts, seedDeployer, seedTarget, signedIn, type Harness } from './helpers';
+import { Client, EvmWallet, SolWallet, makeHarness, parseSse, resetState, seedCheck, seedCoinFacts, seedDeployer, seedTarget, signedIn, type Harness } from './helpers';
 
 const maxW = new EvmWallet();
 const max2W = new SolWallet();
@@ -50,12 +55,13 @@ const initialize = {
   method: 'initialize',
   params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'raw', version: '1' } },
 };
-const rawPost = (base: string, headers: Record<string, string>) =>
+const rawPost = (base: string, headers: Record<string, string>, body: unknown = initialize) =>
   fetch(`${base}/mcp`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
-    body: JSON.stringify(initialize),
+    body: JSON.stringify(body),
   });
+const toolCall = (id: number, name: string, args: Record<string, unknown>) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
 
 describe('MCP server', () => {
   let h: Harness;
@@ -65,7 +71,7 @@ describe('MCP server', () => {
   let checksWorker: Worker<CheckJob> | null = null;
   let asksWorker: Worker<AskJob, AskJobResult> | null = null;
   const conns: Redis[] = [];
-  let checkMode: 'done' | 'fail' | 'hang' = 'done';
+  let checkMode: 'done' | 'fail' | 'hang' | 'repeat' = 'done';
   const clients: McpClient[] = [];
 
   beforeAll(async () => {
@@ -92,7 +98,14 @@ describe('MCP server', () => {
         await h.prisma.check.update({ where: { id }, data: { status: 'RUNNING', startedAt: new Date() } });
         // late enough for run_check to be listening
         await sleep(300);
-        await h.publisher.publish(checkChannel(id), JSON.stringify({ type: 'step', step: { idx: 0, t: 10, status: 'info', text: 'Opening the site' }, progress: 0.5 }));
+        if (checkMode === 'repeat') {
+          // the pipeline repeats the stage's progress on every step of the stage
+          const steps: [string, number][] = [['Reading the X account', 0.05], ['Reading the site', 0.05], ['Testing the swap', 0.05], ['Reading the contract', 0.5], ['Holders', 0.5]];
+          for (const [idx, [text, progress]] of steps.entries())
+            await h.publisher.publish(checkChannel(id), JSON.stringify({ type: 'step', step: { idx, t: 10 * idx, status: 'info', text }, progress }));
+        } else {
+          await h.publisher.publish(checkChannel(id), JSON.stringify({ type: 'step', step: { idx: 0, t: 10, status: 'info', text: 'Opening the site' }, progress: 0.5 }));
+        }
         await sleep(50);
         if (checkMode === 'fail') {
           await h.prisma.check.update({ where: { id }, data: { status: 'FAILED', finishedAt: new Date(), error: "The site didn't load. (net::ERR_TIMED_OUT at https://x)" } });
@@ -185,6 +198,98 @@ describe('MCP server', () => {
     const again = await call(c, 'run_check', { target: 'https://orbitswap.xyz/' });
     expect(again.structuredContent).toMatchObject({ id: check.shortId, status: 'done' });
     expect(await h.redis.get(creditsKeyUser(userId))).toBe('1');
+  });
+
+  it('progress notifications rise with every notification, also while the worker repeats a stage value', async () => {
+    checkMode = 'repeat';
+    const c = await mcp();
+    const progress: { progress: number; total?: number; message?: string }[] = [];
+    const res = await call(c, 'run_check', { target: 'stages.xyz' }, { onprogress: (p: { progress: number; total?: number; message?: string }) => progress.push(p) });
+    expect(res.structuredContent).toMatchObject({ status: 'done' });
+    expect(progress).toEqual([
+      { progress: 5, total: 100, message: 'Reading the X account' },
+      { progress: 5.01, total: 100, message: 'Reading the site' },
+      { progress: 5.02, total: 100, message: 'Testing the swap' },
+      { progress: 50, total: 100, message: 'Reading the contract' },
+      { progress: 50.01, total: 100, message: 'Holders' },
+    ]);
+  });
+
+  it('one JSON-RPC message per request: a batch is refused before any tool runs, so every call counts against the key', async () => {
+    const auth = { authorization: `Bearer ${key}` };
+    const apiKey = await h.prisma.apiKey.findFirstOrThrow({ where: { userId } });
+    const batch = Array.from({ length: 30 }, (_, i) => toolCall(i + 1, 'run_check', { target: `batch${i}.xyz` }));
+    const res = await rawPost(base, auth, batch);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ jsonrpc: '2.0', error: { code: -32600, message: 'Batch requests are not supported. Send one JSON-RPC message per request.' }, id: null });
+    // a one-message array too, and an initialize inside one
+    expect((await rawPost(base, auth, [toolCall(1, 'get_check', { id: 'zzzzzzz' })])).status).toBe(400);
+    expect((await rawPost(base, auth, [initialize])).status).toBe(400);
+    expect(await h.prisma.check.count()).toBe(0);
+    expect(await h.redis.get(creditsKeyUser(userId))).toBeNull();
+    expect(await h.redis.zcard(keyLimitKey(apiKey.id))).toBe(3);
+
+    // a single tools/call (no initialize needed when stateless) is one request and one hit
+    const one = await rawPost(base, auth, toolCall(7, 'deployer_history', { wallet: '0x1111111111111111111111111111111111111111' }));
+    expect(one.status).toBe(200);
+    const [msg] = parseSse(await one.text()) as { data: { id: number; result: ToolResult } }[];
+    expect(msg.data).toMatchObject({ id: 7, result: { structuredContent: { known: false } } });
+    expect(await h.redis.zcard(keyLimitKey(apiKey.id))).toBe(4);
+  });
+
+  it('run_check: RATE.createCheckPerMin checks a minute per account, one bucket with POST /v1/checks through any key', async () => {
+    expect(USER_RATE.apiChecks).toBe(RATE.createCheckPerMin);
+    checkMode = 'hang';
+    const site = new Client(h.app, '198.51.100.200');
+    await signedIn(site, maxW);
+    const key2 = (await site.post('/v1/keys', { name: 'second' })).json<CreateApiKeyResponse>().key;
+    // REST through two keys from as many IPs (each IP far below its own limit)
+    for (let i = 0; i < RATE.createCheckPerMin - 1; i++) {
+      const res = await new Client(h.app, `198.51.100.${i + 1}`).post('/v1/checks', { target: `burst${i}.xyz` }, { authorization: `Bearer ${i % 2 ? key2 : key}` });
+      expect(res.statusCode, `check ${i}`).toBe(201);
+    }
+    const c = await mcp();
+    const last = await call(c, 'run_check', { target: 'burst-last.xyz' });
+    expect(last.isError).toBeFalsy();
+    expect(last.structuredContent).toMatchObject({ status: 'running' });
+
+    const over = await call(c, 'run_check', { target: 'burst-over.xyz' });
+    expect(over).toMatchObject({ isError: true, content: [{ type: 'text', text: MSG.apiChecksRateLimited }], structuredContent: { code: 'rate_limited' } });
+    const rest = await new Client(h.app, '198.51.100.99').post('/v1/checks', { target: 'burst-rest.xyz' }, { authorization: `Bearer ${key2}` });
+    expect(rest.statusCode).toBe(429);
+    expect(rest.json()).toEqual({ code: 'rate_limited', error: MSG.apiChecksRateLimited });
+    // nothing was created or charged past the limit
+    expect(await h.prisma.check.count({ where: { via: 'API' } })).toBe(RATE.createCheckPerMin);
+    expect(await h.redis.get(creditsKeyUser(userId))).toBe(String(RATE.createCheckPerMin));
+    // the site itself (a session, no key) is not in this bucket
+    expect((await site.post('/v1/checks', { target: 'from-the-site.xyz' })).statusCode).toBe(201);
+  });
+
+  it(`run_check: at most ${MCP_WAITS_PER_USER} calls of an account wait at once; more answer "running" at once`, async () => {
+    checkMode = 'hang';
+    const c = await mcp();
+    const waiting = Array.from({ length: MCP_WAITS_PER_USER }, (_, i) => call(c, 'run_check', { target: `waiter${i}.xyz` }));
+    for (let i = 0; i < 100 && (await h.redis.zcard(mcpWaitsKey(userId))) < MCP_WAITS_PER_USER; i++) await sleep(20);
+    expect(await h.redis.zcard(mcpWaitsKey(userId))).toBe(MCP_WAITS_PER_USER);
+
+    const t0 = Date.now();
+    const extra = await call(c, 'run_check', { target: 'one-too-many.xyz' });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    const check = await h.prisma.check.findFirstOrThrow({ where: { targetRaw: 'one-too-many.xyz' } });
+    expect(extra.isError).toBeFalsy();
+    expect(extra.structuredContent).toEqual({
+      id: check.shortId,
+      status: 'running',
+      report_url: `http://app.test/c/${check.shortId}`,
+      message: `The check is running. You already have ${MCP_WAITS_PER_USER} run_check calls waiting, so this one doesn't wait. Call get_check with this id in a minute.`,
+    });
+
+    for (const r of await Promise.all(waiting)) expect(r.structuredContent).toMatchObject({ status: 'running', message: 'The check is still running. Call get_check with this id in a minute.' });
+    // the slots were given back
+    expect(await h.redis.zcard(mcpWaitsKey(userId))).toBe(0);
+    const t1 = Date.now();
+    await call(c, 'run_check', { target: 'waits-again.xyz' });
+    expect(Date.now() - t1).toBeGreaterThanOrEqual(1900);
   });
 
   it('run_check returns { status: "running" } when the check takes longer than the wait', async () => {
@@ -359,6 +464,25 @@ describe('MCP server', () => {
       expect(res.headers.get('allow')).toBe('POST');
       expect(await res.json()).toEqual({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null });
     }
+  });
+});
+
+describe('progressCounter', () => {
+  it('rises with every value, keeps total while it fits and clamps bad input', () => {
+    const next = progressCounter();
+    const out = [0, 0, 0.05, 0.05, 0.049, 0.5, 1, 1, Number.NaN].map(next);
+    expect(out).toEqual([
+      { progress: 0, total: 100 },
+      { progress: 0.01, total: 100 },
+      { progress: 5, total: 100 },
+      { progress: 5.01, total: 100 },
+      { progress: 5.02, total: 100 },
+      { progress: 50, total: 100 },
+      { progress: 100, total: 100 },
+      { progress: 100.01 },
+      { progress: 100.02 },
+    ]);
+    for (let i = 1; i < out.length; i++) expect(out[i].progress).toBeGreaterThan(out[i - 1].progress);
   });
 });
 

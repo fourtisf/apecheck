@@ -219,14 +219,17 @@ describe('credits', () => {
   });
 
   it('expires counters an hour after the next UTC midnight', async () => {
-    const now = new Date('2026-10-19T22:30:00Z');
+    // 22:30 UTC tomorrow: the expiry must still be ahead of the real clock, or Redis drops the key at once
+    const day = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const now = new Date(`${day}T22:30:00Z`);
+    const midnight = new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000);
     const subject = { sid: 'sid-expiry', ip: '10.1.1.1' };
     await consumeCredit(h.redis, h.env, subject, now);
-    const exp = await h.redis.expiretime(creditsKeySid(subject.sid, '2026-10-19'));
-    expect(exp).toBe(Date.parse('2026-10-20T01:00:00Z') / 1000);
-    expect(await h.redis.get(creditsKeyIp(subject.ip, '2026-10-19'))).toBe('1');
+    const exp = await h.redis.expiretime(creditsKeySid(subject.sid, day));
+    expect(exp).toBe(midnight.getTime() / 1000 + 3600);
+    expect(await h.redis.get(creditsKeyIp(subject.ip, day))).toBe('1');
     const state = await getCredits(h.redis, h.env, subject, now);
-    expect(state).toEqual({ credits: 4, max: 5, resetsAt: new Date('2026-10-20T00:00:00Z') });
+    expect(state).toEqual({ credits: 4, max: 5, resetsAt: midnight });
   });
 });
 

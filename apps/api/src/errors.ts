@@ -54,6 +54,7 @@ export const MSG = {
   invalidKey: "This API key isn't valid or was revoked. Create a new one on apecheck.io/api.",
   keyNotForManagement: "API keys can't manage keys or webhooks. Sign in on apecheck.io/api to do that.",
   keyRateLimited: 'Too many requests with this API key. Wait a minute and try again.',
+  apiChecksRateLimited: 'Too many checks started with your API keys in the last minute. Wait a minute and try again.',
   keyNotFound: "This API key doesn't exist.",
   keyName: 'Give the key a name of up to 40 characters.',
   webhookNotFound: "This webhook doesn't exist.",

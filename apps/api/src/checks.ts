@@ -5,8 +5,11 @@
  */
 import {
   CHECK_JOB_OPTIONS,
+  CHECK_JOINED_INDEX,
+  CHECK_JOINERS_TTL_S,
   PRIORITY,
   QUEUES,
+  checkJoinersKey,
   detect,
   progressKey,
   statusFromDb,
@@ -41,8 +44,27 @@ export interface CreateResult {
 }
 
 /**
+ * M4: a Max user whose request joined a check that was already running asked for it as much as its requester did:
+ * the worker sends them its check.completed webhooks too (webhooks/events.ts reads checkJoinersKey; the sweep catches
+ * up through CHECK_JOINED_INDEX). Internal Check.id. Best effort: a Redis error is logged and never fails the request.
+ */
+async function recordJoiner(deps: Pick<AppDeps, 'redis'>, checkId: string, userId: string, log?: FastifyBaseLogger) {
+  const key = checkJoinersKey(checkId);
+  const now = Date.now();
+  await deps.redis
+    .multi()
+    .sadd(key, userId)
+    .expire(key, CHECK_JOINERS_TTL_S)
+    .zadd(CHECK_JOINED_INDEX, now, checkId)
+    .zremrangebyscore(CHECK_JOINED_INDEX, '-inf', now - CHECK_JOINERS_TTL_S * 1000)
+    .exec()
+    .catch(err => log?.warn({ err, checkId }, 'could not record who joined the check'));
+}
+
+/**
  * Same target already running → that check; a public verdict younger than CACHE_HOURS (unless Re-check) → that
- * one (both free); else spend a credit, create Target + Check (shared with the bot) and enqueue the job.
+ * one (both free); else spend a credit, create Target + Check (shared with the bot) and enqueue the job. A Max user
+ * who joins a running check gets its check.completed webhooks too (recordJoiner); a cached verdict sends none.
  */
 export async function createCheck(deps: AppDeps, input: CreateInput, subject: CreditSubject, log?: FastifyBaseLogger): Promise<CreateResult> {
   const { env, prisma, redis, queue } = deps;
@@ -61,6 +83,7 @@ export async function createCheck(deps: AppDeps, input: CreateInput, subject: Cr
       privateFor: isPrivate ? subject.userId : null,
     });
     if (reuse) {
+      if (reuse.reason === 'running' && subject.userId && subject.tier === 'max') await recordJoiner(deps, reuse.id, subject.userId, log);
       const c = await getCredits(redis, env, subject);
       return reuse.reason === 'running'
         ? { statusCode: 200, body: { id: reuse.shortId, status: statusFromDb(reuse.status), cached: false, credits: c.credits } }

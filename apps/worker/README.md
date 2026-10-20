@@ -38,9 +38,9 @@ whose check another run took over, stops without writing, publishing or replying
 | A resolve | no | `detect()` the input. EVM → `evm.detectChain` (Base, Ethereum, BNB, Arbitrum, Robinhood); X post → `x.getPost` (links, cashtags, contracts; the author's profile as fallback); X profile → `x.getUser`; website → normalised. Gaps: contract → DexScreener token info → website + X handle; website → the page HTML (guarded fetch) for a contract address and an X link; post → linked site / contract. A lookup still running at the stage's timeout writes nothing (its steps are dropped, no `run.*` field changes). After the stage, `runCheck` gives the Target its canonical key (`ca:<chain>:<address>`, …); if another Target already owns it, the check is moved there and `checkCount` fixed. A coin's `coinFacts()` is asked right then, so it runs alongside the browser. |
 | B browse | `AI_MODEL_JUDGE` | Fresh context, open the site (network idle, max 20 s), screenshot, hero/footer/links. A bot challenge (Cloudflare `cf-mitigated` / "Just a moment...", DDoS-Guard, Vercel checkpoint, 429) gets up to 8 s to solve itself; if it doesn't, the site is "could not be checked" (`site.infraError`, `degraded: browse:blocked`), never "didn't load". Bounded exploration (`browser/agent.ts`): at most `CHECK_MAX_AGENT_ACTIONS` actions and 60 s, tools `click(text)`, `scroll()`, `open_link(url)`, `done(reason)`, a screenshot step after every action. Once an app screen is reached, an empty amount field gets a small amount (as a tester would) so a main button waiting for input can be tried. A captured transaction is simulated within what is left of the stage. The verdict uses a snapshot of what the explorer saw when the stage ended: an action still in flight can't change it later; a transaction captured but not recorded in time gets its own step ("not simulated in time"). Then the docs: same-site links to depth 2 / 15 pages. |
 | C claims | `AI_MODEL_FAST` | Up to `TUNING.maxClaims` claims from the hero, footer, docs, post and X bio. `ClaimsOutZ` + `normaliseClaims`. |
-| D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin". M4: WhaleFlow's holder clusters (`coinFacts().clusters`) are kept in `Check.evidence.clusters` for the API to show Pro/Max viewers ("deep holder clusters"); they never enter the public step log or the score, and nothing is stored when WhaleFlow is unconfigured or sent none. |
+| D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin". M4: WhaleFlow's holder clusters (`coinFacts().clusters`) are kept in `Check.evidence.clusters` for the API to show Pro/Max viewers ("deep holder clusters"); they never enter the public step log, the score or a follow-up answer (answers are public: `loadAnswerData` drops every viewer-gated evidence key, `VIEWER_GATED_EVIDENCE`), and nothing is stored when WhaleFlow is unconfigured or sent none. |
 | E judge | `AI_MODEL_JUDGE` | Claim statuses with one-sentence evidence citing a step, `acct`/`git` (used only where Stage D could not decide, and never above `warn`), summary ≤ 180 chars, coin summary. `JudgeOutZ` + `normaliseJudge`. The model never sees or picks a score. A judge that times out, or a model that fails and is replaced by the stand-in (claims or judge), leaves a `warn` step ("Claim review timed out; used the simple rules"). |
-| F save | no | `scoreCheck()` from core. One transaction: signals, `CheckEvidence`, scores, bands, areas, claims (in extraction order, `Claim.idx` 0..n-1), `CoinFacts` (with `deployerAddress` whenever the wallet is known), Deployer upsert (never from a private check: the deployers page lists every row, so a private check only links a row the public already knows), `priceAtCheck`/`mcAtCheck`, first `PricePoint`, `Target.last*`, `isLatest` moved to this check (a private check never takes or clears `isLatest` and leaves `Target.lastCheckedAt` / `checkCount` alone: the public verdict stays the public one). Then the share card (`GET WEB_INTERNAL_URL/card/<shortId>.png`, 5 s, skipped with a log line when the web app is down) → `SCREENSHOT_DIR/cards/<shortId>.png`, `done` on `check:{id}`, `end` on `live`, a `bot-replies` job for every X mention still waiting on the check (`BotMention` `QUEUED`, done or failed), the `rechecked` notifications of the watchers whose automatic re-check this is (see Re-check alerts; also after a failure), and the requester's `check.completed` webhooks (see Webhooks; also after a failure). |
+| F save | no | `scoreCheck()` from core. One transaction: signals, `CheckEvidence`, scores, bands, areas, claims (in extraction order, `Claim.idx` 0..n-1), `CoinFacts` (with `deployerAddress` whenever the wallet is known), Deployer upsert (never from a private check: the deployers page lists every row, so a private check only links a row the public already knows), `priceAtCheck`/`mcAtCheck`, first `PricePoint`, `Target.last*`, `isLatest` moved to this check (a private check never takes or clears `isLatest` and leaves `Target.lastCheckedAt` / `checkCount` alone: the public verdict stays the public one). Then the share card (`GET WEB_INTERNAL_URL/card/<shortId>.png`, 5 s, skipped with a log line when the web app is down) → `SCREENSHOT_DIR/cards/<shortId>.png`, `done` on `check:{id}`, `end` on `live`, a `bot-replies` job for every X mention still waiting on the check (`BotMention` `QUEUED`, done or failed), the `rechecked` notifications of the watchers whose automatic re-check this is (see Re-check alerts; also after a failure), and its `check.completed` webhooks (requester, Max joiners, re-check watchers: see Webhooks; also after a failure). |
 
 An unrecoverable error (e.g. input that isn't a target) marks the check `FAILED` with a final `fail` step and a
 `done` message. `Check.error` (public through the API) only ever holds that plain sentence ("The check hit an error
@@ -317,7 +317,9 @@ worker-prices on queue `rechecks` (`startWatchWorker`).
   finished before the re-check was created; without one just the new verdict), or "The re-check of orbitswap.xyz
   couldn't finish; the last verdict stands" for a failed run. Idempotent (a Postgres advisory lock per check and an
   existence check per user), durable (no Redis state to lose), and cheap for the checks nobody watches (three indexed
-  reads). A joined run that finished while the alerts were being written is completed right away by the scan job.
+  reads). The same link sends the check's `check.completed` webhooks to every one of those Max watchers (M4, see
+  Webhooks), not only to the one named as requester. A joined run that finished while the alerts were being written is
+  completed right away by the scan job (the `rechecked` notifications and those webhooks).
 - `Notification.checkId` holds the internal `Check.id`; the API maps it to the shortId of `NotificationDTO.checkId`
   (null → the target's latest check).
 
@@ -327,23 +329,33 @@ Max: "Get the verdict pushed to your server when a check finishes, or when a wat
 webhooks (`POST /v1/webhooks`: URL vetted with the SSRF guard, https in production, `whsec_` secret) and queues the
 "Send test" ping; this worker makes the event deliveries and sends every one. One `WebhookDelivery` row per (webhook,
 event) and one job on queue `webhooks` per row (`WebhookJob { deliveryId }`, jobId = delivery id), consumed in
-**worker-prices** (`startWebhooksWorker`, concurrency 8).
+**worker-prices** (`startWebhooksWorker`, concurrency 8; see Fairness).
 
 **Events** (`webhooks/events.ts`). Only webhooks that are enabled (`disabledAt` null), subscribed to the event and owned
 by a user whose `User.tier` is `MAX` right now (kept current by the tier refresh) get deliveries.
 - `check.completed` — every finished check (DONE or FAILED: Stage F, a failure, the stuck-check recovery, a job re-run
-  that finds it finished: `afterFinish` → `fireCheckWebhooks`) goes to the webhooks of its requester
-  (`Check.requesterId`: a check started on the site, through the API or MCP, by a linked X account through the bot, and
-  the Max automatic re-check started on a watcher's behalf), and only to those: someone else's check of the same
-  target never reaches them, and a private check only ever reaches its owner. A webhook added after the check finished
-  doesn't get it. Delivery ids are derived from (webhook, event, check) (`deliveryIdFor`, `wd_<24 hex>`), so a check
-  finished twice never makes a second delivery. `WebhookDelivery.checkId` is the internal `Check.id` (the API maps it to
-  the shortId). A request that joined someone else's running check, or got a cached verdict, makes no event (the API
-  answered it at once, or the requester is the other person).
+  that finds it finished: `afterFinish` → `fireCheckWebhooks`) goes to the webhooks of everyone who asked for it, and
+  only to those:
+  - its requester (`Check.requesterId`: a check started on the site, through the API or MCP, by a linked X account
+    through the bot);
+  - a Max user whose request (site, API key, MCP `run_check`) joined it while it was running: the API answered with
+    this check's id instead of starting another and recorded them in Redis (`checkJoinersKey(checkId)`, a set of user
+    ids kept 2 days, and `CHECK_JOINED_INDEX`; `readJoiners`). A request answered with a cached verdict
+    (`cached: true`) makes no event;
+  - every Max watcher it ran for as their automatic re-check (their `changed` notification links it, Re-check alerts),
+    not only the first of them that the re-check names as requester; also when the re-check joined a run already in
+    progress (and, when that run had already finished while the alerts were written, recheck.ts sends it right away).
+  Someone else's check of the same target never reaches anyone else, and a private check only ever reaches its owner.
+  A webhook added after the check finished doesn't get it. Delivery ids are derived from (webhook, event, check)
+  (`deliveryIdFor`, `wd_<24 hex>`), so a check finished twice, or a user who is both requester and joiner, never makes
+  a second delivery. `WebhookDelivery.checkId` is the internal `Check.id` (the API maps it to the shortId). A webhook
+  deleted while the rows are written (a foreign-key error) makes the receivers be read again once, so the others still
+  get theirs.
 - `watch.changed` — the change detector's `changed` notification (Re-check alerts) for a Max watcher; written in the
   same transaction as the notifications (an alert and its webhooks exist together or not at all), `targetId` set, id
   derived from (webhook, event, notification).
-- `ping` — the API's row and job (`attempts: 1`).
+- `ping` — the API's row and job (`attempts: 1`, `priority: WEBHOOK_PING_PRIORITY`: BullMQ takes every job without a
+  priority — all event deliveries — before any prioritized one, so pings never hold up an event).
 
 **Payload** (`WebhookPayload`, rebuilt from the database on each attempt: every attempt carries the same `id` = the
 delivery id and the same `created` = when the event happened; delivery is at least once, so receivers dedupe on `id`):
@@ -389,10 +401,27 @@ https only in production (checked again here).
   transaction, so whoever sees a delivery settled (the /api page after "Send test") also sees the webhook as it now is.
   Logs name the webhook id and URL host only (a path or query may carry a token); the secret never leaves the HMAC.
 
+**Fairness** (`deliverySlots`, Redis, shared by every worker-prices process). Each request holds slots: its webhook's
+(one request in flight per webhook), its owner's (`PER_USER_IN_FLIGHT` = 2 across their webhooks) and, for a ping, its
+owner's ping slot (one test in flight per user). A delivery whose slot is taken is `busy`: its job goes back to the
+queue for 1–2 s (`moveToDelayed` + `DelayedError`: no attempt used, no worker slot held). So an endpoint that accepts
+connections and never answers holds one of the 8 slots for at most 10 s at a time, however many pings or events are
+queued for it, and one account holds at most 2: everyone else's deliveries go on. A slot frees itself after 30 s (a
+worker that died holding it). When Redis can't be asked the delivery goes ahead.
+
 **Lost deliveries.** A repeatable `sweep` job (every 5 minutes) queues again any delivery still `pending` 5+ minutes
 after it was written whose job is gone, failed or completed (a crash between the row and the enqueue); one older than a
-day, or with every attempt used, is marked `failed` ("Not delivered in time"). Any job on the queue that isn't `sweep`
-is a `WebhookJob`. While worker-prices is down, deliveries wait in the queue.
+day, or with every attempt used, is marked `failed` ("Not delivered in time"). It reads the ids of every live job once
+and pages through all pending rows in (`createdAt`, `id`) order, so deliveries waiting hours for a retry never hide a
+lost one behind them; a sweep that stops early (20 000 rows looked at, 500 queued again) leaves its place and the next
+one goes on from there. Any job on the queue that isn't `sweep` is a `WebhookJob`. While worker-prices is down,
+deliveries wait in the queue.
+
+**Catch-up.** The same sweep writes `check.completed` rows that were never written: `afterFinish` runs after the check
+is already DONE/FAILED and announced, so a database error there (a pool timeout) is only logged. `missedCheckCompleted`
+finds checks finished between 6 h and 5 minutes ago that a receiving webhook (of the requester, a re-check watcher, or a
+joiner from `CHECK_JOINED_INDEX`) has no row for, and `checkCompletedDeliveries` writes and queues them (idempotent). A
+webhook re-enabled within those 6 h can therefore get the events of checks that finished while it was off.
 
 ## Deployer records (`src/maintenance/deployers.ts`, M3)
 
@@ -577,7 +606,11 @@ database: report since % and chart series, feed since % and sparkline, the "Sinc
 
 M4: `test/webhooks.test.ts` (the real `webhooks` queue and the real SSRF-guarded client against a local receiver
 allow-listed with `SSRF_ALLOW_HOSTS`: who gets `check.completed` — the requester's enabled, subscribed webhooks, Max only,
-once per check, a private check only its owner; the WebhookPayload, headers and a signature verified with `verifyWebhook`
+once per check, a private check only its owner; Max joiners and every Max watcher an automatic re-check ran for (created
+or joined, through `processRecheck`); a webhook deleted mid-write; fairness: an endpoint that never answers holds one
+slot while 16 pings queue for it and another user's delivery goes straight through, at most 2 requests per user, pings
+after events; the sweep paging past live jobs and resuming where it stopped; the catch-up after a database error in
+`afterFinish`; the WebhookPayload, headers and a signature verified with `verifyWebhook`
 and an HMAC computed in the test; a failed check; retries on 500/503 with spaced attempts and one delivery id; no retry
 storm — exactly 6 attempts, one `failCount`, nothing after; redirects not followed; 20 failed deliveries disable the
 webhook, after which no events are made and a waiting delivery fails without a request; loopback, private, metadata and

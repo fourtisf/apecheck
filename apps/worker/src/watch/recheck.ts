@@ -23,7 +23,9 @@
  *                                    first of them, PRIORITY.recheck, never charged to anyone's daily credits; a run of
  *                                    the same target already in progress is joined instead), Watch.lastRecheckAt, and
  *                                    their "changed" notification points at it (notify.ts: that row is the marker the
- *                                    "rechecked" notification completes when the check finishes).
+ *                                    "rechecked" notification completes when the check finishes, and M4: the marker
+ *                                    that sends the check.completed webhooks of every one of them, not only the
+ *                                    requester's: webhooks/events.ts).
  * Only targets with a public verdict are re-checked automatically (a Max user's private check is never re-run in
  * public); their watchers still get the "changed" alert.
  */
@@ -34,7 +36,7 @@ import type { Redis } from 'ioredis';
 import { errText, type Logger } from '../log';
 import { fingerprintKind, fingerprintScheme, fingerprintTarget, type FingerprintKind, type WatchedTarget } from './fingerprint';
 import { NOTIFY_CHANGED, changedText, completeAutoRechecks } from './notify';
-import { watchChangedDeliveries } from '../webhooks/events';
+import { checkCompletedDeliveries, readJoiners, watchChangedDeliveries } from '../webhooks/events';
 
 export const SCAN_EVERY_MS = 15 * 60_000;
 /** a watch is re-checked automatically at most this often */
@@ -348,11 +350,22 @@ async function alertWatchers(
   }
   log.info(`watch ${t.name}: automatic re-check ${recheck.checkId} ${recheck.created ? 'queued' : 'joined'} for ${eligible.length} Max watcher(s)`);
   if (!recheck.created) {
-    // the joined run may have finished while the alerts were written: complete them now (idempotent)
+    // the joined run may have finished while the alerts were written (its own end found nobody linked yet): complete
+    // them now, and send the linked watchers' check.completed webhooks (both idempotent)
     const st = await prisma.check.findUnique({ where: { id: recheck.checkId }, select: { status: true } });
-    if (st && (st.status === 'DONE' || st.status === 'FAILED')) await completeAutoRechecks(deps, recheck.checkId).catch(e => log.warn(`could not complete the re-check alerts: ${errText(e)}`));
+    if (st && (st.status === 'DONE' || st.status === 'FAILED')) {
+      await completeAutoRechecks(deps, recheck.checkId).catch(e => log.warn(`could not complete the re-check alerts: ${errText(e)}`));
+      await completedWebhooks(deps, recheck.checkId).catch(e => log.warn(`could not queue the re-check's check.completed webhooks (the webhooks sweep catches up): ${errText(e)}`));
+    }
   }
   return { status: 'changed', alerted: watchers.length, recheckId: recheck.checkId };
+}
+
+/** check.completed of a finished check (webhooks/events.ts), queued when the webhooks queue is wired. */
+async function completedWebhooks(deps: RecheckDeps, checkId: string) {
+  const joiners = await readJoiners(deps.redis, checkId, deps.log);
+  const ids = await checkCompletedDeliveries(deps.prisma, checkId, { joiners });
+  if (ids.length && deps.enqueueWebhooks) await deps.enqueueWebhooks(ids);
 }
 
 /** queue "checks" options of an automatic re-check */

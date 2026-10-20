@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { QUEUES, type CreateWebhookResponse, type WebhookDTO, type WebhookDeliveryDTO, type WebhookJob } from '@apecheck/core';
+import { USER_RATE } from '../src/limits';
+import { DEVELOPER_RATE } from '../src/routes/developer';
 import { TEST_REDIS_URL } from './global-setup';
 import { Client, EvmWallet, SolWallet, makeHarness, resetState, seedCheck, seedTarget, signedIn, type Harness } from './helpers';
 
@@ -242,6 +244,29 @@ describe('webhooks (dev)', () => {
     expect([...times].sort((a, b) => b - a)).toEqual(times);
     const other = await maxClient(h, max2W);
     expect((await other.c.get(`/v1/webhooks/${hook.id}/deliveries`)).statusCode).toBe(404);
+  });
+
+  it('reading deliveries has a per-user bucket of its own: waiting on a test ping never locks the webhook writes', async () => {
+    expect(USER_RATE.webhookDeliveries).toBeGreaterThanOrEqual(DEVELOPER_RATE.deliveries);
+    const { c } = await maxClient(h);
+    const hook = await addHook(c);
+    // what the /api page used to do while a ping stayed pending: 40 reads in a minute, more than USER_RATE.webhooks
+    for (let i = 0; i < 40; i++) expect((await c.get(`/v1/webhooks/${hook.id}/deliveries`)).statusCode).toBe(200);
+    expect((await c.get('/v1/webhooks')).statusCode).toBe(200);
+    expect((await c.post(`/v1/webhooks/${hook.id}/enable`)).statusCode).toBe(200);
+    const second = await addHook(c, { url: `https://${PUBLIC_IP}/second`, events: ['watch.changed'] });
+    expect((await c.delete(`/v1/webhooks/${second.id}`)).statusCode).toBe(200);
+
+    // the reads are still capped per account, whatever the IP (a second browser with the same session)
+    const elsewhere = new Client(h.app, '203.0.113.77');
+    elsewhere.cookie = c.cookie;
+    for (let i = 40; i < USER_RATE.webhookDeliveries; i++) expect((await elsewhere.get(`/v1/webhooks/${hook.id}/deliveries`)).statusCode).toBe(200);
+    const over = await elsewhere.get(`/v1/webhooks/${hook.id}/deliveries`);
+    expect(over.statusCode).toBe(429);
+    expect(over.json().code).toBe('rate_limited');
+    // and running out of them leaves the writes alone
+    expect((await c.post(`/v1/webhooks/${hook.id}/enable`)).statusCode).toBe(200);
+    expect((await c.get('/v1/webhooks')).statusCode).toBe(200);
   });
 });
 

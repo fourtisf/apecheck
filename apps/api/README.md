@@ -290,7 +290,11 @@ after is caught.
 - Rate limits in Redis: 120 req/min per IP globally, 10/min for `POST /v1/checks`, 600/min for `/shots`, keyed by
   `rateKey()` (the client IP, also for API-key traffic). M4: `API_KEY_RATE_PER_MIN` per API key on top (sliding
   window `rl:key:<id>`); key/webhook management per IP per minute: list 60, create 10, revoke/delete 30, enable 30,
-  test 10, deliveries 60, plus per user (`USER_RATE`): keys 30, webhooks 30, test pings 10.
+  test 10, deliveries 60, plus per user (`USER_RATE`): keys 30, webhooks 30, test pings 10, delivery reads 60 (a
+  bucket of its own, so the /api page waiting on a test ping can't lock the webhook writes). Checks started with a key
+  (`POST /v1/checks` with a key and MCP `run_check`) share one per-account bucket of 10 a minute (`USER_RATE.apiChecks`
+  = the per-IP limit of `POST /v1/checks`), whatever the key or IP. `/mcp` takes one JSON-RPC message per request (a
+  batch is refused), so both limits count every tool call; at most 5 `run_check` calls of an account wait at once.
 - API keys: only `sha256(key)` and its first 12 characters are stored; keys are never logged and never accepted by key
   or webhook management. Webhook URLs must be public (SSRF guard when added, and again by the worker on every delivery).
 - M3 routes have their own per-IP limits per minute: nonce 30, verify 20, logout 20,
@@ -373,10 +377,13 @@ also get `coin.clusters` (WhaleFlow wallet clusters: `{ label, wallets, pct, fun
   site, API or MCP; private ones included, they are yours) and `watch.changed` (the change detector saw a project on
   your watchlist change). The signing secret `whsec_…` (32 random base62 characters) is shown once. Up to
   `WEBHOOKS_PER_USER`.
-- `check.completed` follows the check you started: a `POST /v1/checks` answered with a recent verdict
-  (`cached: true`), or one that joins a check of the same project someone else already started, sends none (poll or
-  stream that id instead). A check that couldn't finish is sent too, with `narrative`, `coin`, `total` and `verdict`
-  `null` and the reason in `summary`.
+- `check.completed` follows the check you started. A `POST /v1/checks` (or MCP `run_check`) that joins a check of the
+  same project someone else already started (200, `cached: false`) counts as yours too: for a Max user, `createCheck`
+  records the join in Redis (`checkJoinersKey(checkId)` and `CHECK_JOINED_INDEX` from `@apecheck/core`, kept 2 days)
+  and the worker sends that check's `check.completed` to their webhooks as well. One answered with a recent verdict
+  (`cached: true`) sends none: the verdict is already in the answer. An automatic re-check of a watched project sends
+  it to every Max watcher it ran for. A check that couldn't finish is sent too, with `narrative`, `coin`, `total` and
+  `verdict` `null` and the reason in `summary`.
 - URL rules (400 `bad_url`): an absolute `http(s)` URL of at most 2048 characters, **https only in production**, no
   username or password, and the SSRF guard (`checkUrl` from `@apecheck/sources`, with the options of the worker's
   client): private, loopback, link-local, CGNAT, documentation and metadata addresses (also when any of the name's
@@ -388,8 +395,9 @@ also get `coin.clusters` (WhaleFlow wallet clusters: `{ label, wallets, pct, fun
   `ApeCheck-Signature`, through the SSRF-guarded client (no redirects, 10 s timeout, 64 KB response cap). Any 2xx is
   delivered; otherwise it retries with exponential backoff (6 attempts over about 6 hours). After 20 failed deliveries
   in a row the webhook is turned off (`disabled: true`) until `POST /v1/webhooks/:id/enable`.
-- `POST /v1/webhooks/:id/test` queues a `ping` (one attempt, no retries, never counted against the webhook) so the
-  deliveries list shows the result within seconds; a turned-off webhook answers 409 `webhook_disabled` (enable it
+- `POST /v1/webhooks/:id/test` queues a `ping` (one attempt, no retries, never counted against the webhook, and
+  `priority: WEBHOOK_PING_PRIORITY` so it runs after every waiting event delivery; the worker also sends one ping per
+  user and one request per webhook at a time) so the deliveries list shows the result within seconds; a turned-off webhook answers 409 `webhook_disabled` (enable it
   first). `GET /v1/webhooks/:id/deliveries` lists the last 50 with status, attempts and response code.
 
 ```jsonc
@@ -455,13 +463,15 @@ Answer 2xx quickly (do the work after responding); use `id` to drop a delivery y
 
 `POST /mcp` (MCP Streamable HTTP; `mcp.apecheck.io` and `mcp.apecheck.io/mcp` proxy to it). Stateless: a new server
 and transport per request, no `Mcp-Session-Id`; `GET` and `DELETE` answer 405. Auth is the API key above (no key → 401
-`key_required`; same per-key limit, Max check, `lastUsedAt`). A tool call is answered as an SSE stream with a keep-alive
+`key_required`; same per-key limit, Max check, `lastUsedAt`). One JSON-RPC message per request: a batch (a JSON array,
+dropped from MCP in 2025-06-18; the SDK clients never send one) → 400 with JSON-RPC error `-32600`, so the per-key and
+per-IP limits count every tool call. A tool call is answered as an SSE stream with a keep-alive
 comment every 15 s. Failures are MCP tool errors (`isError: true`, the reason as text and `{ code }` as
 `structuredContent`), never HTTP 500s. At shutdown a waiting `run_check` answers `running` at once.
 
 | Tool | Does | Returns |
 |---|---|---|
-| `run_check(target)` | starts a check like `POST /v1/checks` with the key (via API, one daily check unless a fresh verdict or a running check of the project is reused) and waits up to 150 s; sends `notifications/progress` with the live log when the client passes a `progressToken` | `{ id, status: "done", target, narrative, coin, total, verdict, summary, report_url }` (the webhook `check` shape; `verdict` = the narrative verdict enum), `{ id, status: "running", report_url, message }` after 150 s, a tool error for a failed check |
+| `run_check(target)` | starts a check like `POST /v1/checks` with the key (via API, one daily check unless a fresh verdict or a running check of the project is reused; 10 a minute per account, shared with keyed `POST /v1/checks`, else a `rate_limited` tool error) and waits up to 150 s (at most 5 waiting calls per account: more return `running` at once); sends `notifications/progress` with the live log when the client passes a `progressToken` (the value rises with every notification) | `{ id, status: "done", target, narrative, coin, total, verdict, summary, report_url }` (the webhook `check` shape; `verdict` = the narrative verdict enum), `{ id, status: "running", report_url, message }` after 150 s, a tool error for a failed check |
 | `get_check(id)` | the report as `GET /v1/checks/:id` for the key's owner (an id or an `…/c/<id>` link) | the full `CheckReportDTO` |
 | `ask_followup(id, question)` | a follow-up as `POST /v1/checks/:id/asks` (3–280 characters, finished checks, `ASKS_PER_HOUR`) | `{ check, id, question, answer, by, via, createdAt }` |
 | `deployer_history(wallet)` | the wallet's deployer record (`/deployers` rules: public, or named by your own private checks) and its checked coins (latest visible check per coin, up to 50) | `{ wallet, known, deployers: (DeployerDTO & { recordText })[], coins: [{ id, name, ticker, chain, ca, coinScore, coinVerdict, narrative, verdict, total, checkedAt, report_url }] }` |
