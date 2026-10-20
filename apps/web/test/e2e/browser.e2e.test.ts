@@ -5,7 +5,7 @@
  * - a dark-theme visitor stays dark on an unknown /c/<id> (Next's client-rendered 404 shell) and after it;
  * - a check that stopped before a verdict opens on the Agent run, and its tabs don't claim conclusions;
  * - /bot shows a site check only as a captioned illustration, and a real thread only for a posted bot reply;
- * - the header fits from 1001 to 1240px, and the segmented controls fit a phone;
+ * - the header fits from 1001 to 1240px (its X link shows only where it has room), and the segmented controls fit a phone;
  * - every page gives X a link-preview image: a finished report its verdict card, any other page the site's preview.
  */
 import type { Browser, Page } from 'playwright';
@@ -260,6 +260,21 @@ describe('layout', () => {
       expect(m.input, `search input at ${width}px`).toBeGreaterThan(40);
     }
     await page.close();
+  });
+
+  it('links to ApeCheck on X from the header where it fits and from the footer everywhere', async () => {
+    const shown = async (width: number) => {
+      const page = await open('/', width);
+      const x = page.locator('header .top-x');
+      const r = { header: await x.isVisible(), footer: await page.locator('footer a[href="https://x.com/ApeCheckBot"]').count() };
+      if (r.header) expect(await x.getAttribute('href')).toBe('https://x.com/ApeCheckBot');
+      await page.close();
+      return r;
+    };
+    expect(await shown(1440)).toEqual({ header: true, footer: 1 });
+    expect(await shown(900)).toEqual({ header: true, footer: 1 });
+    expect(await shown(1100)).toEqual({ header: false, footer: 1 });
+    expect(await shown(390)).toEqual({ header: false, footer: 1 });
   });
 
   it('segmented controls scroll inside a phone-width page instead of overflowing it', async () => {

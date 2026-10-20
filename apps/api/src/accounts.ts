@@ -122,6 +122,7 @@ export async function buildMe(deps: AppDeps, request: FastifyRequest, opts: { ti
     resetsAt: c.resetsAt.toISOString(),
     tier,
     tokenLive: live,
+    tokenAddress: live ? env.TOKEN_ADDRESS ?? null : null,
     proMinHold: live ? env.PRO_MIN_HOLD : null,
     maxMinHold: live ? env.MAX_MIN_HOLD : null,
     user: user && t ? toUserDTO(deps, user, t) : null,

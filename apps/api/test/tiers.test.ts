@@ -18,7 +18,7 @@ describe('tiers while the token is not live', () => {
 
   it('everyone is Free and nothing is read, holding requirements hidden', async () => {
     const me = await signedIn(new Client(h.app), new SolWallet());
-    expect(me).toMatchObject({ tier: 'free', tokenLive: false, proMinHold: null, maxMinHold: null, max: 5, token: null });
+    expect(me).toMatchObject({ tier: 'free', tokenLive: false, tokenAddress: null, proMinHold: null, maxMinHold: null, max: 5, token: null });
     expect(me.user).toMatchObject({ tier: 'free', holding: null, holder: false });
     expect(h.sources.balanceCalls).toHaveLength(0);
   });
@@ -49,7 +49,7 @@ describe('tiers by holding', () => {
     const w = new SolWallet();
     h.sources.balances.set(w.address, 300_000);
     const me = await signedIn(new Client(h.app), w);
-    expect(me).toMatchObject({ tier: 'pro', tokenLive: true, proMinHold: 250000, maxMinHold: 2500000, max: 30, credits: 30 });
+    expect(me).toMatchObject({ tier: 'pro', tokenLive: true, tokenAddress: MINT, proMinHold: 250000, maxMinHold: 2500000, max: 30, credits: 30 });
     expect(me.user).toMatchObject({ tier: 'pro', holding: 300000, holder: true });
     expect(h.sources.balanceCalls).toEqual([{ chain: 'sol', token: MINT, owner: w.address }]);
     const row = await h.prisma.user.findUniqueOrThrow({ where: { solAddress: w.address } });

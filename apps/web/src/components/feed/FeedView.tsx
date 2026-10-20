@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { FeedResponse, InsightsDTO, LiveResponse } from '@apecheck/core';
 import { insights as fetchInsights } from '@/lib/api';
 import { useLive } from '../Live';
+import { TokenCA } from '../TokenCA';
 import { CreditLine } from './CreditLine';
 import { HeroStats } from './HeroStats';
 import { Insights } from './Insights';
@@ -39,6 +40,7 @@ export function FeedView({ initialFeed, initialInsights, initialLive, initialQ }
       <section className="hero">
         <div className="wrap">
           <div className="hero-c">
+            <TokenCA className="hero-ca" />
             <h1>
               Know what&apos;s real
               <br />

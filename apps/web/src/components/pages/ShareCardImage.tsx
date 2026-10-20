@@ -6,6 +6,7 @@
  */
 import { CHAINS, KIND_LABEL, coinBand, narBand, type CheckReportDTO } from '@apecheck/core';
 import { APP_HOST } from '@/lib/env';
+import { APE_CHECK, APE_HEAD, APE_PUPILS } from '../icons';
 import { cardSource } from '../VCard';
 
 export const CARD_W = 1200;
@@ -48,11 +49,15 @@ const RIGHT_W = CARD_W - 2 * PAD_X - RING - GAP;
 
 export const CARD_FONT = 'Plus Jakarta Sans';
 
+/** The ape mark (icons.tsx), with attributes satori understands. */
 function Logo({ size }: { size: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 28 28">
-      <rect x="3.5" y="3.5" width="21" height="21" rx="6" transform="rotate(-8 14 14)" fill={T.ink} />
-      <path d="M8.6 13.8l3.9 4.3 7-8.8" fill="none" stroke={T.bg} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width={size} height={size} viewBox="0 0 64 64">
+      <path d={APE_HEAD} fillRule="evenodd" fill={T.ink} />
+      {APE_PUPILS.map(([cx, cy]) => (
+        <circle key={cx} cx={cx} cy={cy} r="3.6" fill={T.ink} />
+      ))}
+      <path d={APE_CHECK} fill="none" stroke={T.ink} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

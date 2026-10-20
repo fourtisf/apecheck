@@ -248,6 +248,18 @@ a.tr.fresh,.gc.fresh{animation:fresh 4s ease-out}
 .rh-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:6px}
 .ca{display:inline-flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line2);border-radius:999px;padding:3px 10px;font-family:var(--mono);font-size:12px;color:var(--mute)}
 .ca:hover{color:var(--ink);border-color:var(--dim)}
+/* $APECHECK contract address pill (TokenCA): hero and footer; "Coming soon" until TOKEN_ADDRESS is set */
+.ca-pill{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;height:34px;padding:0 12px 0 4px;border:1px solid var(--line2);border-radius:999px;background:var(--panel);color:var(--mute);font-size:13px;font-weight:600;cursor:pointer}
+.ca-pill:hover{color:var(--ink);border-color:var(--dim)}
+.ca-pill:focus-visible{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
+.ca-k{flex:none;padding:4px 9px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:11px;font-weight:800;letter-spacing:.08em}
+.ca-v{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12.5px}
+.ca-v.soon{font-family:inherit;font-size:13px}
+.ca-ic{flex:none}
+.hero-ca{margin-bottom:22px}
+.foot-l{display:flex;flex-direction:column;align-items:flex-start;gap:12px;min-width:0}
+/* the header's X link: only where the bar has room for it (the footer always links to X) */
+@media (min-width:1001px) and (max-width:1240px),(max-width:760px){.top-x{display:none}}
 .lnk{font-size:13.5px;color:var(--mute);font-weight:600}
 .lnk:hover{color:var(--acc)}
 .rh-act{display:flex;gap:8px;flex-wrap:wrap}
@@ -484,7 +496,7 @@ a.tr.fresh,.gc.fresh{animation:fresh 4s ease-out}
 .pay-note{margin:14px 0 0;font-size:14px;color:var(--dim)}
 
 footer{border-top:1px solid var(--line);padding:30px 0 48px}
-.foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--dim)}
+.foot{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--dim)}
 .foot nav{display:flex;flex-wrap:wrap;gap:6px 20px}
 .foot nav a:hover{color:var(--ink)}
 

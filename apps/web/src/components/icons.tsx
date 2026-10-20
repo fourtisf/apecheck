@@ -6,22 +6,49 @@ import type { SVGProps } from 'react';
 
 type P = SVGProps<SVGSVGElement>;
 
-/** Header brand mark, 28px. */
-export function BrandLogo(p: P) {
+/**
+ * The ape mark (viewBox 0 0 64 64, design/brand): head and ears with the face cut out as one even-odd path, then the
+ * pupils and the check on top. One colour and no mask, so it needs no ids and shows the surface behind it.
+ */
+export const APE_HEAD =
+  'M10.821 26.545A22 22 0 0 1 53.179 26.545A7.5 7.5 0 1 1 52.174 41.274A22 22 0 0 1 11.826 41.274A7.5 7.5 0 1 1 10.821 26.545Z' +
+  'M32 24.025A9 9 0 1 0 18.961 36.093A15.5 10 0 1 0 45.039 36.093A9 9 0 1 0 32 24.025Z';
+export const APE_PUPILS = [
+  [25.3, 28.2],
+  [40.3, 28.2],
+] as const;
+export const APE_CHECK = 'M25.4 42.4l4.5 4 9-7.8';
+
+function ApeMark({ size, color, ...p }: P & { size: number; color: string }) {
   return (
-    <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" {...p}>
-      <rect x="3.5" y="3.5" width="21" height="21" rx="6" transform="rotate(-8 14 14)" style={{ fill: 'var(--ink)' }} />
-      <path d="M8.6 13.8l3.9 4.3 7-8.8" fill="none" style={{ stroke: 'var(--bg)' }} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true" {...p}>
+      <path d={APE_HEAD} fillRule="evenodd" style={{ fill: color }} />
+      {APE_PUPILS.map(([cx, cy]) => (
+        <circle key={cx} cx={cx} cy={cy} r="3.6" style={{ fill: color }} />
+      ))}
+      <path d={APE_CHECK} fill="none" style={{ stroke: color }} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
+/** Header brand mark, 30px. */
+export function BrandLogo(p: P) {
+  return <ApeMark size={30} color="var(--ink)" {...p} />;
+}
+
 /** Small brand mark (share card, bot answers), 18px. */
 export function Logo(p: P) {
+  return <ApeMark size={18} color="var(--ink)" {...p} />;
+}
+
+/** The X (Twitter) logo. */
+export function XLogoIcon(p: P) {
   return (
-    <svg width="18" height="18" viewBox="0 0 28 28" aria-hidden="true" {...p}>
-      <rect x="3.5" y="3.5" width="21" height="21" rx="6" transform="rotate(-8 14 14)" style={{ fill: 'var(--ink)' }} />
-      <path d="M8.6 13.8l3.9 4.3 7-8.8" fill="none" style={{ stroke: 'var(--bg)' }} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" {...p}>
+      <path
+        fill="currentColor"
+        d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"
+      />
     </svg>
   );
 }

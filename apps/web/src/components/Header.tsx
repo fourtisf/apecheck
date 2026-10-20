@@ -1,13 +1,14 @@
 import Link from 'next/link';
+import { X_URL } from '@/lib/env';
 import { CreditsButton } from './CreditsButton';
 import { HeaderSearch } from './HeaderSearch';
-import { BrandLogo } from './icons';
+import { BrandLogo, XLogoIcon } from './icons';
 import { NavLinks } from './NavLinks';
 import { ThemeToggle } from './ThemeToggle';
 import { TokenPrice } from './TokenPrice';
 import { WalletButton } from './WalletButton';
 
-/** The sticky top bar from the prototype: brand, nav pills, search, token price, theme, credits, wallet. */
+/** The sticky top bar from the prototype: brand, nav pills, search, token price, X, theme, credits, wallet. */
 export function Header() {
   return (
     <header className="top">
@@ -20,6 +21,9 @@ export function Header() {
         <HeaderSearch />
         <div className="top-r">
           <TokenPrice />
+          <a className="icon-btn top-x" href={X_URL} target="_blank" rel="noopener noreferrer" aria-label="ApeCheck on X">
+            <XLogoIcon />
+          </a>
           <ThemeToggle />
           <CreditsButton />
           <WalletButton />

@@ -341,6 +341,8 @@ export interface MeDTO {
   tier: TierS;
   /** false while TOKEN_ADDRESS is empty: hide holding requirements */
   tokenLive: boolean;
+  /** $APECHECK's contract address (TOKEN_ADDRESS) for the site's "CA" pill; null until launch ("Coming soon") */
+  tokenAddress?: string | null;
   proMinHold: number | null;
   maxMinHold: number | null;
   user: UserDTO | null;
