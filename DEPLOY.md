@@ -71,21 +71,15 @@ sudo chmod 0750 /srv/apecheck /var/apecheck /var/log/apecheck /var/backups/apech
 
 ## 3. Code and `.env`
 
-The repository is private, so the server reads it with a read-only deploy key:
-
 ```bash
-sudo -u apecheck mkdir -p -m 700 /srv/apecheck/.ssh
-sudo -u apecheck ssh-keygen -t ed25519 -N "" -C "apecheck-vps" -f /srv/apecheck/.ssh/id_ed25519
-cat /srv/apecheck/.ssh/id_ed25519.pub
-# GitHub → fourtisf/apecheck → Settings → Deploy keys → Add deploy key: paste it, leave "Allow write access" off
-sudo -u apecheck ssh -o StrictHostKeyChecking=accept-new -T git@github.com   # "Hi fourtisf/apecheck! ..."
-
-sudo -u apecheck git clone git@github.com:fourtisf/apecheck.git /srv/apecheck/app   # add -b <branch> to deploy a branch
+sudo -u apecheck git clone https://github.com/fourtisf/apecheck.git /srv/apecheck/app   # add -b <branch> to deploy a branch
 cd /srv/apecheck/app
 sudo -u apecheck cp .env.example .env
 sudo -u apecheck chmod 600 .env
 sudo -u apecheck nano .env        # fill in the values (see step 4 for DATABASE_URL)
 ```
+
+(If the repository is made private later, give the server a read-only GitHub deploy key and clone `git@github.com:fourtisf/apecheck.git`.)
 
 Every process (PM2 apps, the Prisma CLI, the web build) reads this `.env` and it wins over the shell's variables.
 To run a second configuration from the same checkout, point `APECHECK_ENV_FILE` at another file.
