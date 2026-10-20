@@ -272,7 +272,7 @@ describe('EVM probes', () => {
     let t = 0;
     const evm = {
       tokenBasics: async () => {
-        t += 9_000;
+        t += 21_000;
         reportError('evm.tokenBasics owner bnb: HTTP 429 from bsc.example');
         return { ...usdc, symbol: 'USDT', decimals: 18, owner: null };
       },
@@ -281,7 +281,14 @@ describe('EVM probes', () => {
     const r = await probeEvm('bnb', { env, http: fakeHttp(rpcNode({ eth_chainId: '0x38', eth_blockNumber: '0x1' })), evm, now: () => t });
     expect(r.status).toBe('WARN');
     expect(r.detail).toContain('1 read(s) failed: evm.tokenBasics owner bnb: HTTP 429');
-    expect(r.detail).toContain('token read took 9000 ms, over the 8 s a check gives it');
+    expect(r.detail).toContain('token read took 21000 ms, over the 20 s a check gives it');
+  });
+  it('a token read within the rounds a check allows (here 9 s of 20 s) is not flagged as slow', async () => {
+    let t = 0;
+    const evm = { tokenBasics: async () => ((t += 9_000), { ...usdc }) };
+    const r = await probeEvm('eth', { env: prodEnv({ RPC_ETH: 'https://eth.example/KEY' }), http: fakeHttp(rpcNode({ eth_chainId: '0x1', eth_blockNumber: '0x1' })), evm, now: () => t });
+    expect(r.status).toBe('PASS');
+    expect(r.detail).not.toContain('over the');
   });
   it('Robinhood Chain without RPC_ROBINHOOD is SKIP; with it, liveness only', async () => {
     expect((await probeRobinhood({ env: prodEnv(), http: fakeHttp(() => new Error('unused')) })).status).toBe('SKIP');

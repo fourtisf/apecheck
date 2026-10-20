@@ -9,8 +9,8 @@ import { prisma as defaultPrisma, type PrismaClient } from '@apecheck/db';
 import { createSources, type Sources } from '@apecheck/sources';
 import { createAi } from './ai';
 import type { AiAdapter } from './ai/types';
-import { BrowserHost, type BrowserHostOptions } from './browser/browser';
-import { createLogger, type Logger } from './log';
+import { BrowserHost, wsPathRedactor, type BrowserHostOptions } from './browser/browser';
+import { createLogger, errText, type Logger } from './log';
 import { SHOTS_CLEANUP_JOB, SHOTS_CLEANUP_PATTERN, cleanupShots } from './maintenance/shots';
 import { RunSuperseded, endStuckCheck, recoverStaleChecks, runCheck, type JobStateLookup, type PipelineDeps, type RunResult } from './pipeline';
 import type { StageLimits } from './pipeline/context';
@@ -22,6 +22,8 @@ import { enqueueDeliveries } from './webhooks/events';
 /** One Chromium per process, launched on first use and relaunched if it dies. */
 export class BrowserPool {
   private host: Promise<BrowserHost | null> | null = null;
+  /** why the last launch failed (connectRemote has already redacted the endpoint's path) */
+  lastError: string | null = null;
   constructor(
     private readonly opts: BrowserHostOptions,
     private readonly log: Logger,
@@ -43,6 +45,7 @@ export class BrowserPool {
         return BrowserHost.launch(this.opts);
       })().catch(e => {
         this.log.error('Chromium could not start', e);
+        this.lastError = errText(e);
         if (this.host === launching) this.host = null;
         return null;
       });
@@ -89,6 +92,52 @@ export interface RunningWorker {
 export interface CheckWorkerHandle extends RunningWorker {
   worker: Worker<CheckJob, Pick<RunResult, 'status' | 'error'>>;
   deps: PipelineDeps;
+  /** the process's browser (deps.browser launches it on first use) */
+  browsers: BrowserPool;
+}
+
+/** How long the startup browser check waits before it reports the browser as not answering (the launch goes on). */
+export const BROWSER_STARTUP_CHECK_MS = 60_000;
+
+/**
+ * Try the browser once at startup and log whether it works: a browser host that is down otherwise shows only as
+ * website checks failing. It goes through the pool, so the first check reuses this launch (and its guard on
+ * BROWSER_GUARD_PORT) instead of starting another one. Never throws; the worker takes jobs without waiting for it.
+ */
+export async function checkBrowserAtStartup(pool: BrowserPool, env: Env, log: Logger, timeoutMs = BROWSER_STARTUP_CHECK_MS): Promise<boolean> {
+  const remote = env.BROWSER_WS_ENDPOINT;
+  const hint = remote
+    ? 'website checks end without a verdict until it is fixed: see DEPLOY.md §6 (systemctl status apecheck-browser, journalctl -u apecheck-browser -n 20)'
+    : 'website checks end without a verdict until it is fixed: pnpm --filter @apecheck/worker exec playwright install chromium';
+  const report = (h: BrowserHost | null) => {
+    if (h) return log.info(`${remote ? 'browser host connected' : 'browser started in-process'} (Chromium ${h.browser.version()})`);
+    let why = pool.lastError ?? 'unknown error';
+    // connectRemote redacts its own errors; once more here, the line goes to every operator log
+    if (remote) why = wsPathRedactor(remote)(why);
+    log.error(`the browser is unusable: ${why}; ${hint}`);
+  };
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const launch = pool.get();
+    const late = new Promise<'late'>(r => {
+      timer = setTimeout(() => r('late'), timeoutMs);
+      timer.unref();
+    });
+    const host = await Promise.race([launch, late]);
+    if (host === 'late') {
+      log.error(`the browser did not answer within ${Math.round(timeoutMs / 1000)} s (still trying); ${hint}`);
+      // and once it does
+      void launch.then(report).catch(() => undefined);
+      return false;
+    }
+    report(host);
+    return !!host;
+  } catch (e) {
+    log.error(`the startup browser check failed: ${errText(e)}`);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckWorkerHandle> {
@@ -193,7 +242,7 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
       await bull.quit().catch(() => undefined);
     })());
 
-  return { worker, deps, close };
+  return { worker, deps, browsers: pool, close };
 }
 
 export interface PricesWorkerOptions {

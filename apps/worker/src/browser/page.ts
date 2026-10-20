@@ -242,7 +242,14 @@ export interface OpenResult {
   finalUrl: string | null;
   /** the site answered with a bot challenge instead of its page: we couldn't check it, the site isn't dead */
   botWall: string | null;
+  /**
+   * The navigation failed at the proxy (our SSRF guard): ERR_PROXY_CONNECTION_FAILED (the browser could not reach the
+   * guard) or ERR_TUNNEL_CONNECTION_FAILED (the guard refused the tunnel: a site it could not reach, or the guard failing).
+   */
+  proxyError: 'ERR_PROXY_CONNECTION_FAILED' | 'ERR_TUNNEL_CONNECTION_FAILED' | null;
 }
+
+const PROXY_ERROR_RE = /net::(ERR_PROXY_CONNECTION_FAILED|ERR_TUNNEL_CONNECTION_FAILED)\b/;
 
 export const BOT_WALL_ERROR = 'the site blocks automated browsers';
 
@@ -253,11 +260,13 @@ export async function openSite(session: BrowseSession, url: string, timeoutMs: n
   const end = t0 + timeoutMs;
   let status: number | null = null;
   let error: string | null = null;
+  let proxyError: OpenResult['proxyError'] = null;
   try {
     const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     status = resp?.status() ?? null;
   } catch (e) {
     error = netErrorText(e);
+    proxyError = (PROXY_ERROR_RE.exec(e instanceof Error ? e.message : String(e))?.[1] as OpenResult['proxyError']) ?? null;
     // the route guard refuses names it can't resolve; for the log that is a dead domain, not an attack
     const origin = (() => { try { return new URL(url).origin; } catch { return ''; } })();
     const refused = session.blocked.find(b => b.url.startsWith(origin));
@@ -292,7 +301,7 @@ export async function openSite(session: BrowseSession, url: string, timeoutMs: n
   const loaded = !error && status != null && status < 400;
   if (!loaded && !error && botWall) error = BOT_WALL_ERROR;
   if (!loaded && !error && status != null) error = `HTTP ${status}`;
-  return { page, loaded, status, loadMs, error, finalUrl: error ? null : page.url(), botWall: loaded ? null : botWall };
+  return { page, loaded, status, loadMs, error, finalUrl: error ? null : page.url(), botWall: loaded ? null : botWall, proxyError };
 }
 
 async function pageTitle(page: Page): Promise<string> {

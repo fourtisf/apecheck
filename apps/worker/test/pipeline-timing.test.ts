@@ -11,7 +11,7 @@ import { BrowserHost } from '../src/browser/browser';
 import { memoryLogger } from '../src/log';
 import { recoverStaleChecks, runCheck, type PipelineDeps } from '../src/pipeline';
 import { finalJudgement } from '../src/pipeline/judge';
-import { BrowserPool } from '../src/worker';
+import { BrowserPool, checkBrowserAtStartup } from '../src/worker';
 import { serveFixture, testLookup, type FixtureSite } from './fixture-server';
 import { dexInfo, fakeSources, repoFacts, xUser, type FakeData } from './fakes';
 import { createCheck, heuristicAi, prisma, resetDb, standaloneRun, testEnv } from './helpers';
@@ -324,6 +324,67 @@ describe('browser pool', () => {
       expect(first.closed).toBe(1);
       await pool.close();
       expect(launched.map(h => h.closed)).toEqual([1, 1]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('the browser at worker startup', () => {
+  const SECRET = '/0f3c9a7d1e2b4c6a8d0e1f2a3b4c5d6e';
+  const remote = () => testEnv({ BROWSER_WS_ENDPOINT: `ws://127.0.0.1:9223${SECRET}` });
+  const fakeHost = (version: string) => ({ connected: true, browser: { version: () => version }, async close() {} });
+
+  it('connected: one line with the Chromium version, and the first check reuses that launch (one guard, one port)', async () => {
+    const spy = vi.spyOn(BrowserHost, 'launch').mockImplementation(async () => fakeHost('141.0.7390.37') as unknown as BrowserHost);
+    try {
+      const log = memoryLogger();
+      const pool = new BrowserPool({ env: remote() }, log);
+      expect(await checkBrowserAtStartup(pool, remote(), log)).toBe(true);
+      expect(log.lines).toEqual(['info browser host connected (Chromium 141.0.7390.37)']);
+      await pool.get();
+      expect(spy).toHaveBeenCalledTimes(1);
+      await pool.close();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a host that is down: a clear error with the DEPLOY.md §6 hint, never a throw, never the endpoint path', async () => {
+    const spy = vi.spyOn(BrowserHost, 'launch').mockRejectedValue(new Error(`browser host unreachable: connect ECONNREFUSED 127.0.0.1:9223 (ws://127.0.0.1:9223${SECRET})`));
+    try {
+      const log = memoryLogger();
+      const pool = new BrowserPool({ env: remote() }, log);
+      expect(await checkBrowserAtStartup(pool, remote(), log)).toBe(false);
+      const line = log.lines.find(l => l.startsWith('error the browser is unusable'));
+      expect(line).toMatch(/ECONNREFUSED 127\.0\.0\.1:9223/);
+      expect(line).toMatch(/DEPLOY\.md §6/);
+      expect(line).not.toContain(SECRET);
+      expect(line).toContain('/<BROWSER_WS_PATH>');
+      // the next check tries again
+      await pool.get();
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a host that does not answer: reported after the timeout without waiting for it, and again once it is up', async () => {
+    const spy = vi.spyOn(BrowserHost, 'launch').mockImplementation(async () => {
+      await sleep(300);
+      return fakeHost('141.0.7390.37') as unknown as BrowserHost;
+    });
+    try {
+      const log = memoryLogger();
+      const pool = new BrowserPool({ env: remote() }, log);
+      const t0 = Date.now();
+      expect(await checkBrowserAtStartup(pool, remote(), log, 50)).toBe(false);
+      expect(Date.now() - t0).toBeLessThan(250);
+      expect(log.lines).toEqual([expect.stringMatching(/^error the browser did not answer within 0 s \(still trying\); .*DEPLOY\.md §6/)]);
+      await pool.get();
+      expect(log.lines[1]).toBe('info browser host connected (Chromium 141.0.7390.37)');
+      expect(spy).toHaveBeenCalledTimes(1);
+      await pool.close();
     } finally {
       spy.mockRestore();
     }

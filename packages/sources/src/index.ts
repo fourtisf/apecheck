@@ -23,7 +23,10 @@ export {
 export { createHttp, HttpError, USER_AGENT, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_BYTES, MAX_REDIRECTS, type HttpEnv, type HttpOptions } from './http';
 export { captureErrors, reportError, TimeoutError } from './util';
 export { jsonRpc, RpcError } from './rpc';
-export { coinFacts, solanaAuthorityText, contractAuthorityText, contractMintRenounced, SOLANA_AMM_AUTHORITIES, type CoinFactsDeps } from './coin-facts';
+export {
+  coinFacts, solanaAuthorityText, contractAuthorityText, contractMintRenounced, SOLANA_AMM_AUTHORITIES, COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS,
+  type CoinFactsDeps,
+} from './coin-facts';
 export { createDexScreener, DexScreenerAdapter } from './adapters/dexscreener';
 export {
   createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, DETECT_RETRY_DELAY_MS, ERC1271_MAGIC, ERC1271_MAGIC_WORD, ERC1271_TIMEOUT_MS, encodeIsValidSignature,

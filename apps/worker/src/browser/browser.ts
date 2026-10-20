@@ -80,11 +80,15 @@ export function browserIsolationProblem(env: Env): string | null {
 
 const CONNECT_ATTEMPTS = 10;
 
+/** The endpoint's path is the browser host's shared secret: this keeps it out of a message (error, log line). */
+export function wsPathRedactor(endpoint: string): (s: string) => string {
+  const secret = new URL(endpoint).pathname;
+  return s => (secret.length > 1 ? s.split(secret).join('/<BROWSER_WS_PATH>') : s);
+}
+
 /** Connect to the browser host, riding out its restart (systemd brings it back within seconds). */
 async function connectRemote(endpoint: string): Promise<Browser> {
-  // the endpoint's path is the host's shared secret: keep it out of error messages and logs
-  const secret = new URL(endpoint).pathname;
-  const redact = (s: string) => (secret.length > 1 ? s.split(secret).join('/<BROWSER_WS_PATH>') : s);
+  const redact = wsPathRedactor(endpoint);
   let last = '';
   for (let i = 0; i < CONNECT_ATTEMPTS; i++) {
     if (i) await new Promise(r => setTimeout(r, 1000));
@@ -170,6 +174,20 @@ export class BrowserHost {
 
   get connected(): boolean {
     return this.browser.isConnected();
+  }
+
+  /**
+   * Why the browser cannot reach the guard proxy right now (probeGuard), or null when it can or there is no guard (a
+   * test launch without proxy). Tells our outage from a site that refused the connection behind the guard.
+   */
+  async guardProblem(): Promise<string | null> {
+    if (!this.guard) return null;
+    try {
+      await probeGuard(this.browser, this.guard.url);
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
   }
 
   userAgent(): string {

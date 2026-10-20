@@ -8,7 +8,14 @@ import type {
 } from './types';
 import { TimeoutError, captureErrors, errMsg, uniq, withTimeout } from './util';
 
+/** one adapter request (the adapters' own HTTP/RPC timeout is 8 s too) */
 export const COIN_CALL_TIMEOUT_MS = 8_000;
+/**
+ * Most a call that sends its requests in sequential rounds may take: one COIN_CALL_TIMEOUT_MS per round up to this, so a
+ * slow but working public node is not cut off after the first round. Every call runs at once, so this is also about the
+ * longest coinFacts takes: well under the 30 s the worker waits for it (apps/worker/src/pipeline/evidence.ts).
+ */
+export const COIN_SECTION_BUDGET_MS = 20_000;
 
 /**
  * Owners of AMM pool vaults on Solana. Their token accounts hold the pool side of the liquidity,
@@ -31,7 +38,7 @@ export interface CoinFactsDeps {
   tron: TronSource;
   /** Sources.stubbed(); entries relevant to coins are copied into the result */
   stubbed?: () => string[];
-  /** per-call timeout (default 8 s) */
+  /** per-call timeout (default 8 s), per sequential round of requests (at most COIN_SECTION_BUDGET_MS) */
   timeoutMs?: number;
 }
 
@@ -85,12 +92,16 @@ export async function coinFacts(deps: CoinFactsDeps, chain: ChainKey, address: s
   // one slot per call so the error list keeps the call order whatever finishes first
   const slots: string[][] = [];
 
-  /** run one adapter call with a timeout; never throws; adapter-reported errors are collected */
-  async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
+  /**
+   * run one adapter call with a timeout per round of requests it sends one after another; never throws;
+   * adapter-reported errors are collected
+   */
+  async function run<T>(label: string, fn: () => Promise<T>, rounds = 1): Promise<T | null> {
     const slot: string[] = [];
     slots.push(slot);
+    const limit = Math.max(timeoutMs, Math.min(timeoutMs * rounds, COIN_SECTION_BUDGET_MS));
     try {
-      const { value, errors: reported } = await captureErrors(() => withTimeout(Promise.resolve().then(fn), timeoutMs, label));
+      const { value, errors: reported } = await captureErrors(() => withTimeout(Promise.resolve().then(fn), limit, label));
       slot.push(...reported);
       return value ?? null;
     } catch (e) {
@@ -111,10 +122,13 @@ export async function coinFacts(deps: CoinFactsDeps, chain: ChainKey, address: s
       fourtisOn ? run('fourtis.whaleFlow', () => deps.fourtis.whaleFlow(chain, address)) : skip,
       run('dexscreener.token', () => deps.dex.token(chain, address)),
       family === 'sol' ? run<SolMintInfo | null>('solana.mintInfo', () => deps.sol.mintInfo(address)) : skip,
-      family === 'sol' ? run('solana.largestHolders', () => deps.sol.largestHolders(address)) : skip,
-      family === 'evm' ? run<EvmTokenBasics | null>('evm.tokenBasics', () => deps.evm.tokenBasics(chain, address)) : skip,
+      // rounds: largest accounts + supply, then their owners
+      family === 'sol' ? run('solana.largestHolders', () => deps.sol.largestHolders(address), 2) : skip,
+      // rounds: code + calls, proxy slots, the beacon's implementation(), the implementation's code
+      family === 'evm' ? run<EvmTokenBasics | null>('evm.tokenBasics', () => deps.evm.tokenBasics(chain, address), 4) : skip,
       family === 'evm' ? run('evm.creator', () => deps.evm.creator(chain, address)) : skip,
-      family === 'trx' ? run('tron.tokenInfo', () => deps.tron.tokenInfo(address)) : skip,
+      // rounds: the contract, then its calls
+      family === 'trx' ? run('tron.tokenInfo', () => deps.tron.tokenInfo(address), 2) : skip,
     ]);
 
     const facts = emptyFacts(chain, address);

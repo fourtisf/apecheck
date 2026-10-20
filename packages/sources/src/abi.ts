@@ -12,8 +12,11 @@ export const SELECTORS = {
   implementation: '0x5c60da1b',
 } as const;
 
-/** mint(address,uint256), mint(uint256), _mint(address,uint256) exposed publicly */
-export const MINT_SELECTORS = ['40c10f19', 'a0712d68', '4e6ec247'];
+/**
+ * mint(address,uint256), mint(uint256), _mint(address,uint256) exposed publicly, mintTo(address,uint256) (thirdweb and
+ * other templates), issue(uint256) (Tether's USDT on Ethereum and Tron)
+ */
+export const MINT_SELECTORS = ['40c10f19', 'a0712d68', '4e6ec247', '449a52f8', 'cc872b66'];
 export const OWNER_SELECTORS = ['8da5cb5b', '893d20e8'];
 /**
  * Role-based control without an owner(): OpenZeppelin AccessControl (hasRole, grantRole, getRoleAdmin,
@@ -130,6 +133,25 @@ export function hasAnySelector(code: string | null | undefined, selectors: strin
   return selectors.some(s => found.has(strip0x(s).toLowerCase()));
 }
 
+/** totalSupply(), balanceOf(address), transfer(address,uint256): every ERC-20 dispatcher has them */
+const ERC20_CORE_SELECTORS = ['18160ddd', '70a08231', 'a9059cbb'];
+
+/**
+ * A proxy: the code DELEGATECALLs (0xf4, walked as opcodes) and has none of the ERC-20 functions itself, so the token's
+ * logic lives in other code. A full token that only delegates to itself (Multicall) or to a library still has them.
+ */
+export function looksLikeProxy(code: string | null | undefined): boolean {
+  const bytes = toBytes(code);
+  if (!bytes) return false;
+  let delegates = false;
+  for (let i = 0; i < bytes.length && !delegates; i++) {
+    const op = bytes[i];
+    if (op === 0xf4) delegates = true;
+    if (op >= 0x60 && op <= 0x7f) i += op - 0x5f;
+  }
+  return delegates && !hasAnySelector(code, ERC20_CORE_SELECTORS);
+}
+
 /** EIP-1167 minimal proxy → implementation address */
 export function minimalProxyTarget(code: string | null | undefined): string | null {
   const m = /^(?:0x)?363d3d373d3d3d363d73([0-9a-f]{40})5af43d82803e903d91602b57fd5bf3$/i.exec(code ?? '');
@@ -140,6 +162,10 @@ export function minimalProxyTarget(code: string | null | undefined): string | nu
 export const EIP1967_IMPL_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
 /** EIP-1967 beacon slot (bytes32(uint256(keccak256('eip1967.proxy.beacon')) - 1)): the beacon's implementation() is the logic */
 export const EIP1967_BEACON_SLOT = '0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50';
+/** keccak256('org.zeppelinos.proxy.implementation'): the pre-EIP-1967 OpenZeppelin/ZeppelinOS slot (Circle's FiatTokenProxy, USDC) */
+export const ZEPPELINOS_IMPL_SLOT = '0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3';
+/** keccak256('PROXIABLE'): the EIP-1822 (UUPS) implementation slot */
+export const EIP1822_PROXIABLE_SLOT = '0xc5f16f0fcc639fa48a6947836d9850f504798523bf8c9a3a87d5876cf622bcf7';
 
 /** hex quantity for JSON-RPC from "0x…" or a decimal string; undefined when empty/invalid */
 export function toQuantity(v: string | null | undefined): string | undefined {

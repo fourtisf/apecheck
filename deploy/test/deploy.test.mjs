@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,6 +32,17 @@ const INSTALL = read('deploy/browser/install.sh');
 const ENV_EXAMPLE = read('.env.example');
 
 const envExample = key => new RegExp(`^${key}=([^\\s#]*)`, 'm').exec(ENV_EXAMPLE)?.[1];
+/** browser-firewall.nft with other users: both only exist on the server, where install.sh writes the app user's uid. */
+const nftFor = (browserUser, appUid) => NFT.replaceAll('"apecheck-browser"', browserUser).replace(/^define app_uid = .*$/m, `define app_uid = ${appUid}`);
+
+/** playwright-core as install.sh installs it next to the host (the version apps/worker pins), or null before pnpm install. */
+const pwRequire = (() => {
+  try {
+    return createRequire(createRequire(path.join(root, 'apps/worker/package.json')).resolve('playwright'));
+  } catch {
+    return null;
+  }
+})();
 
 test('ports, paths and the user agree across host, unit, firewall, installer, .env.example and the core env', () => {
   const nftGuardPort = /ip daddr 127\.0\.0\.1 tcp dport (\d+) accept/.exec(NFT)?.[1];
@@ -53,6 +65,12 @@ test('ports, paths and the user agree across host, unit, firewall, installer, .e
   assert.match(UNIT, /^User=apecheck-browser$/m);
   assert.match(NFT, /meta skuid "apecheck-browser" jump browser/);
   assert.match(INSTALL, /^BROWSER_USER=apecheck-browser$/m);
+
+  // the browser host's port is for the app user (its uid, written by install.sh) and root only
+  const nftHostPort = /^\s*ip daddr 127\.0\.0\.1 tcp dport (\d+) meta skuid != \{ 0, \$app_uid \} reject with tcp reset$/m.exec(NFT)?.[1];
+  assert.equal(Number(nftHostPort), host.DEFAULTS.port, 'browser-firewall.nft must guard the port the host listens on');
+  assert.match(NFT, /^define app_uid = "apecheck"$/m);
+  assert.match(INSTALL, /^APP_USER="\$\{APP_USER:-apecheck\}"$/m);
 
   // the app's data is hidden from the unit, and the host refuses to start if it could read it anyway
   assert.match(UNIT, /^InaccessiblePaths=.*-\/srv\/apecheck\b/m);
@@ -89,12 +107,125 @@ test('the firewall ruleset is valid nftables (nft -c)', { skip: !(isRoot && has(
   try {
     // the browser user only exists on the server; check the same rules for an existing one
     const file = path.join(dir, 'fw.nft');
-    fs.writeFileSync(file, NFT.replaceAll('"apecheck-browser"', '"nobody"'));
+    fs.writeFileSync(file, nftFor('"nobody"', 65534));
     const r = spawnSync('nft', ['-c', '-f', file], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/**
+ * Runs as root in a fresh network namespace (node -e, argv: ruleset file, spec): loads the ruleset, starts each
+ * listener as its uid (it greets whoever connects with its name), then connects as each client uid and prints what
+ * each got: the greeting, or the error code.
+ */
+function netnsProbe() {
+  const { execFileSync, spawn } = require('node:child_process');
+  const [file, spec] = [process.argv[1], JSON.parse(process.argv[2])];
+  const as = (uid, code, ...args) => spawn(process.execPath, ['-e', code, ...args], { uid, gid: uid, cwd: '/', stdio: ['ignore', 'pipe', 'inherit'] });
+  const output = p => new Promise(resolve => {
+    let s = '';
+    p.stdout.on('data', d => (s += d));
+    p.on('close', () => resolve(s.trim()));
+  });
+  execFileSync('ip', ['link', 'set', 'lo', 'up']);
+  execFileSync('nft', ['-f', file]);
+  const listeners = spec.listeners.map(([uid, port, name]) =>
+    as(uid, `require('net').createServer(s => s.end('${name}')).listen(${port}, '127.0.0.1', () => console.log('up'))`),
+  );
+  const client = `const s = require('net').connect(+process.argv[2], process.argv[1]); let got = '';
+    s.setTimeout(5000, () => { console.log('timeout'); process.exit(); });
+    s.on('data', d => (got += d)); s.on('end', () => console.log(got)); s.on('error', e => console.log(e.code));`;
+  return Promise.all(listeners.map(p => new Promise(resolve => p.stdout.once('data', resolve))))
+    .then(() => Promise.all(spec.clients.map(([uid, host, port]) => output(as(uid, client, host, String(port))))))
+    .then(got => {
+      for (const p of listeners) p.kill();
+      console.log(JSON.stringify(got));
+    });
+}
+
+test('the firewall: only the app user and root reach the browser host, the browser user only the guard', { skip: !(isRoot && has('nft') && has('unshare') && has('ip')) && 'needs root, nft, unshare and ip' }, () => {
+  const [BROWSER, APP, OTHER] = [61001, 61002, 61003];
+  const dir = tmp('apecheck-nft-');
+  try {
+    const file = path.join(dir, 'fw.nft');
+    fs.writeFileSync(file, nftFor(String(BROWSER), APP));
+    const spec = {
+      // the browser host (as the browser user) and worker-checks' guard (as the app user)
+      listeners: [[BROWSER, 9223, 'host'], [APP, 9224, 'guard']],
+      clients: [
+        [0, '127.0.0.1', 9223],
+        [APP, '127.0.0.1', 9223],
+        [OTHER, '127.0.0.1', 9223],
+        [BROWSER, '127.0.0.1', 9223],
+        [BROWSER, '127.0.0.1', 9224],
+        [OTHER, '127.0.0.1', 9224],
+      ],
+    };
+    const r = spawnSync('unshare', ['--net', process.execPath, '-e', `(${netnsProbe})()`, file, JSON.stringify(spec)], { encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), [
+      'host', // root
+      'host', // worker-checks, and the browser user's replies to it get through
+      'ECONNREFUSED', // any other local user or service: a reset
+      'ECONNREFUSED', // the browser user itself: the guard and nothing else
+      'guard',
+      'guard', // other users' other traffic is not the table's business
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the host's Playwright server does not tell BROWSER_WS_PATH to anyone who asks (GET /json)", { skip: !pwRequire && 'playwright not installed (pnpm install)' }, async () => {
+  const { PlaywrightServer } = pwRequire('playwright-core/lib/remote/playwrightServer');
+  const wsPath = `/${'k'.repeat(40)}`;
+  const createServer = http.createServer;
+  const get = async (port, p) => {
+    const res = await fetch(`http://127.0.0.1:${port}${p}`);
+    return [res.status, await res.text()];
+  };
+  /** the status a WebSocket upgrade request to `p` gets (101: Playwright accepted it) */
+  const upgrade = (port, p) =>
+    new Promise((resolve, reject) => {
+      const headers = { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==' };
+      const req = http.request({ host: '127.0.0.1', port, path: p, headers });
+      req.on('upgrade', (res, socket) => {
+        socket.destroy();
+        resolve(res.statusCode);
+      });
+      req.on('response', res => {
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+
+  // as the pinned Playwright ships it: GET /json names the path (chromium.connect('http://127.0.0.1:9223') uses it)
+  const plain = new PlaywrightServer({ mode: 'launchServer', path: wsPath, maxConnections: Infinity });
+  try {
+    const port = new URL(await plain.listen(0, '127.0.0.1')).port;
+    assert.deepEqual(await get(port, '/json'), [200, JSON.stringify({ wsEndpointPath: wsPath })], 'Playwright no longer answers GET /json: is hidingWsPath still needed?');
+  } finally {
+    await plain.close();
+  }
+
+  // as the host serves it
+  const hidden = new PlaywrightServer({ mode: 'launchServer', path: wsPath, maxConnections: Infinity });
+  try {
+    const { result, servers } = await host.hidingWsPath(() => hidden.listen(0, '127.0.0.1'));
+    assert.equal(servers, 1);
+    const port = new URL(result).port;
+    for (const p of ['/json', '/json?x=1', '/json/', wsPath]) assert.deepEqual(await get(port, p), [404, ''], p);
+    assert.deepEqual(await get(port, '/'), [200, 'Running'], "the doctor's probe");
+    assert.equal(await upgrade(port, wsPath), 101, 'worker-checks connects to the ws:// endpoint as before');
+    assert.equal(await upgrade(port, '/json'), 400);
+  } finally {
+    await hidden.close();
+  }
+  assert.equal(http.createServer, createServer, 'hidingWsPath restores http.createServer');
 });
 
 test('the AppArmor profile parses', { skip: !has('apparmor_parser') && 'apparmor_parser not installed' }, () => {
@@ -122,8 +253,9 @@ function appCopy(envBody) {
   return { dir, app, env, out: path.join(dir, 'out') };
 }
 
-function installSandboxed(c, runs = 1) {
-  return spawnSync(path.join(root, 'deploy/test/install-sandboxed.sh'), [c.app, c.out, String(runs)], { encoding: 'utf8' });
+/** install.sh in the sandbox; the app user only exists on the server, so an existing one stands in for it. */
+function installSandboxed(c, runs = 1, env = {}) {
+  return spawnSync(path.join(root, 'deploy/test/install-sandboxed.sh'), [c.app, c.out, String(runs)], { encoding: 'utf8', env: { ...process.env, APP_USER: 'nobody', ...env } });
 }
 
 const canSandbox = isRoot && has('unshare');
@@ -152,6 +284,9 @@ test('install.sh installs the host, its config, the unit and the .env endpoint, 
     assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
     assert.equal(fs.statSync(fsOut('etc-apecheck')).mode & 0o777, 0o700);
     assert.equal(fs.statSync(fsOut('etc-apecheck/browser-firewall.nft')).mode & 0o777, 0o600);
+    // the firewall as in the checkout, with the app user's uid in the browser host's port rule
+    const appUid = Number(execFileSync('id', ['-u', 'nobody'], { encoding: 'utf8' }));
+    assert.equal(fs.readFileSync(fsOut('etc-apecheck/browser-firewall.nft'), 'utf8'), NFT.replace(/^define app_uid = .*$/m, `define app_uid = ${appUid}`));
     const browserEnv = fs.readFileSync(envFile, 'utf8');
     const wsPath = /^BROWSER_WS_PATH=([0-9a-f]{64})$/m.exec(browserEnv)?.[1];
     assert.ok(wsPath, browserEnv);
@@ -181,6 +316,32 @@ test('install.sh refuses a BROWSER_GUARD_PORT the firewall does not allow, befor
     assert.match(fs.readFileSync(path.join(c.out, 'stdout.log'), 'utf8'), /BROWSER_GUARD_PORT=9999 in \.env but browser-firewall\.nft allows 9224/);
     assert.equal(fs.readFileSync(path.join(c.out, 'calls.log'), 'utf8'), '');
     assert.equal(fs.existsSync(path.join(c.out, 'fs/etc-apecheck')), false);
+  } finally {
+    fs.rmSync(c.dir, { recursive: true, force: true });
+  }
+});
+
+test('install.sh refuses an app user that does not exist, before changing anything', { skip: !canSandbox && 'needs root and unshare' }, () => {
+  const c = appCopy('NODE_ENV=production\n');
+  try {
+    const r = installSandboxed(c, 1, { APP_USER: 'apecheck-no-such-user' });
+    assert.notEqual(r.status, 0);
+    assert.match(fs.readFileSync(path.join(c.out, 'stdout.log'), 'utf8'), /app user apecheck-no-such-user does not exist/);
+    assert.equal(fs.readFileSync(path.join(c.out, 'calls.log'), 'utf8'), '');
+    assert.equal(fs.existsSync(path.join(c.out, 'fs/etc-apecheck')), false);
+  } finally {
+    fs.rmSync(c.dir, { recursive: true, force: true });
+  }
+});
+
+test('install.sh refuses a BROWSER_PORT the firewall does not guard, before changing anything', { skip: !canSandbox && 'needs root and unshare' }, () => {
+  const c = appCopy('NODE_ENV=production\n');
+  try {
+    const r = installSandboxed(c, 1, { SEED_BROWSER_ENV: `BROWSER_WS_PATH=${'a'.repeat(64)}\nBROWSER_PORT=9333\n` });
+    assert.notEqual(r.status, 0);
+    assert.match(fs.readFileSync(path.join(c.out, 'stdout.log'), 'utf8'), /BROWSER_PORT=9333 in \/etc\/apecheck\/browser\.env but browser-firewall\.nft guards 9223/);
+    assert.equal(fs.readFileSync(path.join(c.out, 'calls.log'), 'utf8'), '');
+    assert.equal(fs.existsSync(path.join(c.out, 'fs/etc-apecheck/browser-firewall.nft')), false);
   } finally {
     fs.rmSync(c.dir, { recursive: true, force: true });
   }

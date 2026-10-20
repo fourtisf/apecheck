@@ -15,7 +15,8 @@
  * every part was read definitively: a throttled owner() call, an unread proxy slot or implementation is a failed read
  * reported by the adapter (captureErrors), never "no owner" / "no proxy". Values are versioned ("site:v2:<hex>"): a
  * stored value from another method or version is replaced silently, never an alert (v2: proxy implementation,
- * Token-2022 extensions, more volatile page values normalised).
+ * Token-2022 extensions, more volatile page values normalised; v3: the ZeppelinOS and PROXIABLE implementation slots,
+ * the issue / mintTo mint selectors and "unknown" mint for an unresolved proxy, which move USDC- and USDT-style values).
  */
 import { createHash } from 'node:crypto';
 import { chainFromDb, detect, type ChainKey } from '@apecheck/core';
@@ -26,7 +27,7 @@ import { errText } from '../log';
 import { siteFingerprintText } from './normalise';
 
 export type FingerprintKind = 'site' | 'contract' | 'mint' | 'profile';
-export const FINGERPRINT_VERSION = 'v2';
+export const FINGERPRINT_VERSION = 'v3';
 
 export type Fingerprint =
   | { ok: true; kind: FingerprintKind; value: string }
@@ -149,7 +150,9 @@ export async function solFingerprint(sources: Pick<Sources, 'sol'>, mint: string
 
 /** Tron (TRC-20): owner and the mint selector scan (TronGrid has no plain code read here). */
 export async function tronFingerprint(sources: Pick<Sources, 'tron'>, ca: string): Promise<Fingerprint> {
-  const { value: info, errors } = await captureErrors(() => sources.tron.tokenInfo(ca));
+  const { value: info, errors: all } = await captureErrors(() => sources.tron.tokenInfo(ca));
+  // a failed name/symbol/decimals/totalSupply read is reported too, but none of them is hashed here
+  const errors = all.filter(e => !/^tron\.tokenInfo (name|symbol|decimals|totalSupply):/.test(e));
   if (errors.length) return failed('contract', errors[0]);
   if (!info) return failed('contract', 'token could not be read');
   const parts = [`owner:${info.owner ?? 'none'}`, `mint:${String(info.hasMintFunction ?? null)}`];

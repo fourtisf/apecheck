@@ -10,8 +10,10 @@ import type { CoinRawFacts, HolderCluster } from '@apecheck/sources';
 import { loadAnswerData } from '../src/ai';
 import { publicEvidence } from '../src/ai/answer-data';
 import { answerUserText } from '../src/ai/prompts';
+import { BrowserHost } from '../src/browser/browser';
 import { memoryLogger } from '../src/log';
 import { runCheck, type PipelineDeps } from '../src/pipeline';
+import { testLookup } from './fixture-server';
 import { fakeSources } from './fakes';
 import { createCheck, heuristicAi, prisma, resetDb, testEnv } from './helpers';
 
@@ -116,11 +118,17 @@ describe('holder clusters (M4)', () => {
 
   it('a site check has no clusters key at all', async () => {
     const check = await createCheck('nothing-here.test');
-    const deps: PipelineDeps = {
-      env, prisma, redis, sources: fakeSources(env), ai: heuristicAi(), browser: async () => null, log: memoryLogger(), fetchCard: async () => null,
-    };
-    expect((await runCheck(check.id, deps)).status).toBe('done');
-    const c = await prisma.check.findUniqueOrThrow({ where: { id: check.id } });
-    expect('clusters' in (c.evidence as object)).toBe(false);
+    // a site check needs our browser (without one it ends FAILED, no verdict); this site doesn't load (not allow-listed)
+    const host = await BrowserHost.launch({ env, lookup: testLookup });
+    try {
+      const deps: PipelineDeps = {
+        env, prisma, redis, sources: fakeSources(env), ai: heuristicAi(), browser: async () => host, log: memoryLogger(), fetchCard: async () => null,
+      };
+      expect((await runCheck(check.id, deps)).status).toBe('done');
+      const c = await prisma.check.findUniqueOrThrow({ where: { id: check.id } });
+      expect('clusters' in (c.evidence as object)).toBe(false);
+    } finally {
+      await host.close();
+    }
   });
 });

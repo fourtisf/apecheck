@@ -2,7 +2,7 @@
 import { browserIsolationProblem } from './browser/browser';
 import { loadWorkerEnv } from './env';
 import { createLogger } from './log';
-import { onShutdown, startCheckWorker } from './worker';
+import { checkBrowserAtStartup, onShutdown, startCheckWorker } from './worker';
 
 const env = loadWorkerEnv();
 const log = createLogger('checks');
@@ -14,3 +14,5 @@ if (isolation) {
 }
 const handle = await startCheckWorker({ env, log });
 onShutdown(() => handle.close(), log);
+// say at startup whether the browser (host) works; in the background, jobs are already taken
+void checkBrowserAtStartup(handle.browsers, env, log);

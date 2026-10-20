@@ -1,7 +1,7 @@
 #!/usr/sbin/nft -f
-# Egress firewall for the apecheck-browser user (DEPLOY.md §6). Installed by deploy/browser/install.sh as
-# /etc/apecheck/browser-firewall.nft and loaded by apecheck-browser.service before the host starts (it replaces
-# itself on every load and leaves every other table, ufw's included, alone).
+# Egress firewall for the apecheck-browser user, and who may connect to the browser host (DEPLOY.md §6). Installed
+# by deploy/browser/install.sh as /etc/apecheck/browser-firewall.nft and loaded by apecheck-browser.service before
+# the host starts (it replaces itself on every load and leaves every other table, ufw's included, alone).
 #
 # Chromium, and anything that escapes its sandbox, may only:
 #   - talk to worker-checks' SSRF guard proxy on 127.0.0.1:9224 (BROWSER_GUARD_PORT in the app's .env must match),
@@ -9,6 +9,14 @@
 #   - answer worker-checks' own connection to the browser host (established traffic).
 # Everything else (Redis, Postgres, the API, DNS, the internet directly) is refused for this user only.
 # browser-host.cjs checks at startup that 127.0.0.1:5432 and :6379 are unreachable (BROWSER_FORBIDDEN_PORTS).
+#
+# The browser host on 127.0.0.1:9223 (BROWSER_PORT in /etc/apecheck/browser.env must match) drives Chromium for
+# whoever connects with its secret path, which Playwright tells anyone who asks (GET /json; browser-host.cjs hides
+# that route too). So only worker-checks (the app user) and root may connect to it; every other local user and
+# service on the VPS (databases, Docker, ...) gets a reset.
+
+# the app user (worker-checks, the doctor): install.sh writes APP_USER's uid here
+define app_uid = "apecheck"
 
 table inet apecheck_browser
 delete table inet apecheck_browser
@@ -16,8 +24,10 @@ delete table inet apecheck_browser
 table inet apecheck_browser {
 	chain output {
 		type filter hook output priority filter; policy accept;
-		# packets of any other user (and those without a socket) are not this table's business
+		# the browser user's packets: only what the browser chain allows
 		meta skuid "apecheck-browser" jump browser
+		# everyone else's (packets without a socket pass): the browser host is for the app user and root only
+		ip daddr 127.0.0.1 tcp dport 9223 meta skuid != { 0, $app_uid } reject with tcp reset
 	}
 
 	chain browser {

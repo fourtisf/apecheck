@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
-import { coinFacts, contractAuthorityText, contractMintRenounced, solanaAuthorityText, type CoinFactsDeps } from '../src/coin-facts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, coinFacts, contractAuthorityText, contractMintRenounced, solanaAuthorityText, type CoinFactsDeps,
+} from '../src/coin-facts';
+import { ZEPPELINOS_IMPL_SLOT } from '../src/abi';
 import { createFourtis } from '../src/adapters/fourtis';
 import { createSources } from '../src/index';
 import type {
@@ -20,6 +23,7 @@ const market: DexTokenInfo = {
 };
 
 const never = <T>() => new Promise<T>(() => {});
+const after = <T>(ms: number, value: T) => new Promise<T>(res => setTimeout(() => res(value), ms));
 
 function fakes(over: {
   fourtis?: Partial<FourtisSource>;
@@ -248,6 +252,57 @@ describe('coinFacts: failures never throw', () => {
     expect(f.market).toEqual(market);
   });
 
+  it('a call that makes several requests in a row gets one timeout per round, not one for all of them', async () => {
+    // each answer is slower than one per-call timeout (50 ms) but within its rounds
+    const basics = { name: 'Thing', symbol: 'THING', decimals: 18, totalSupply: '1', owner: null, ownerRenounced: null, hasMintFunction: null };
+    const evm = await coinFacts(fakes({ timeoutMs: 50, evm: { tokenBasics: () => after(120, basics) } }), 'base', EVM_TOKEN);
+    expect(evm.errors).toEqual([]);
+    expect(evm.token).toMatchObject({ name: 'Thing' });
+
+    const holders = [{ owner: 'whale', account: 'a', amount: '1', pct: 60 }];
+    const sol = await coinFacts(fakes({ timeoutMs: 50, sol: { largestHolders: () => after(80, holders) } }), 'sol', MINT);
+    expect(sol.errors).toEqual([]);
+    expect(sol.holders).toMatchObject({ top10Pct: 60, source: 'On-chain' });
+
+    const info = { name: 'T', symbol: 'TT', decimals: 6, totalSupply: '9', owner: null, creator: 'TCreator', hasMintFunction: null, ownerRenounced: null };
+    const trx = await coinFacts(fakes({ timeoutMs: 50, tron: { tokenInfo: () => after(80, info) } }), 'trx', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t');
+    expect(trx.errors).toEqual([]);
+    expect(trx.deployer).toMatchObject({ address: 'TCreator' });
+
+    // a single request still has one timeout
+    const dex = await coinFacts(fakes({ timeoutMs: 50, dex: { token: () => after(80, market) } }), 'sol', MINT);
+    expect(dex.errors).toEqual(['dexscreener.token: timeout']);
+  });
+
+  describe('default budgets', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('slow public RPCs: tokenBasics answering after two 8 s rounds is kept; nothing waits past the section budget', async () => {
+      vi.useFakeTimers();
+      const basics = { name: 'Thing', symbol: 'THING', decimals: 18, totalSupply: '1', owner: null, ownerRenounced: null, hasMintFunction: null };
+      const slow = coinFacts(fakes({ evm: { tokenBasics: () => after(2 * COIN_CALL_TIMEOUT_MS - 1_000, basics) } }), 'base', EVM_TOKEN);
+      await vi.advanceTimersByTimeAsync(2 * COIN_CALL_TIMEOUT_MS);
+      const f = await slow;
+      expect(f.errors).toEqual([]);
+      expect(f.token).toMatchObject({ name: 'Thing' });
+
+      let done = false;
+      const hung = coinFacts(fakes({ evm: { tokenBasics: never } }), 'base', EVM_TOKEN).then(r => ((done = true), r));
+      await vi.advanceTimersByTimeAsync(COIN_SECTION_BUDGET_MS - 1);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await hung).errors).toEqual(['evm.tokenBasics: timeout']);
+    });
+
+    it('the section budget stays well under the 30 s the worker waits for coinFacts', () => {
+      // apps/worker/src/pipeline/evidence.ts coinFactsFor: within(sources.coinFacts(...), 30_000)
+      expect(COIN_SECTION_BUDGET_MS).toBeGreaterThanOrEqual(2 * COIN_CALL_TIMEOUT_MS);
+      expect(COIN_SECTION_BUDGET_MS).toBeLessThanOrEqual(30_000 - 8_000);
+    });
+  });
+
   it('throwing adapters are recorded, not propagated', async () => {
     const f = await coinFacts(
       fakes({
@@ -338,6 +393,39 @@ describe('createSources', () => {
     expect(f.deployer).toBeNull();
     expect(f.stubbed).toEqual(['fourtis', 'etherscan']);
     expect(f.errors).toEqual([]);
+  });
+
+  describe('EVM coin behind a proxy', () => {
+    const IMPL = '0x1111111111111111111111111111111111111111';
+    const OWNER = '0x9999999999999999999999999999999999999999';
+    // a transparent proxy (Circle's FiatTokenProxy): admin(), implementation(), upgradeTo() and a DELEGATECALL fallback
+    const proxyCode = '0x6080604052' + '63f851a440' + '635c60da1b' + '633659cfe6' + '00' + '5af43d6000803e3d6000f3';
+    const node = (slots: Record<string, string>) =>
+      fakeHttp(
+        url => (url.host === 'api.dexscreener.com' ? { json: [] } : undefined),
+        rpcHandler('mainnet.base.org', {
+          eth_getCode: p => ((p[0] as string).toLowerCase() === IMPL ? '0x6080604052' + '6318160ddd' + '63a9059cbb' + '6340c10f19' + '638da5cb5b' + '00' : proxyCode),
+          eth_getStorageAt: p => slots[p[1] as string] ?? '0x' + '0'.repeat(64),
+          eth_call: p => {
+            const data = (p[0] as { data: string }).data;
+            if (data === '0x313ce567') return encUint(6);
+            if (data === '0x8da5cb5b') return encAddress(OWNER);
+            return { error: { code: 3, message: 'execution reverted' } };
+          },
+        }),
+      );
+
+    it('USDC (implementation in the ZeppelinOS slot): "Mint still active", not "No mint function, owner active"', async () => {
+      const f = await createSources(testEnv(), { http: node({ [ZEPPELINOS_IMPL_SLOT]: encAddress(IMPL) }) }).coinFacts('base', EVM_TOKEN);
+      expect(f.errors).toEqual([]);
+      expect(f.authorities).toEqual({ mintRenounced: false, freezeActive: null, owner: OWNER, text: 'Mint still active', source: 'On-chain' });
+    });
+
+    it('implementation in no known slot: mint renounced unknown', async () => {
+      const f = await createSources(testEnv(), { http: node({}) }).coinFacts('base', EVM_TOKEN);
+      expect(f.errors).toEqual([]);
+      expect(f.authorities).toEqual({ mintRenounced: null, freezeActive: null, owner: OWNER, text: 'Owner active', source: 'On-chain' });
+    });
   });
 
   it('EVM coin whose mint is gated by AccessControl (no owner()): authorities unknown, not "renounced"', async () => {

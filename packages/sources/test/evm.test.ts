@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createEvm, EVM_READ_METHODS, PUBLIC_EVM_RPC } from '../src/adapters/evm';
-import { bytecodeSelectors, decodeAbiString, decodeRevert, EIP1967_BEACON_SLOT, EIP1967_IMPL_SLOT, ownerlessRenounced } from '../src/abi';
+import {
+  bytecodeSelectors, decodeAbiString, decodeRevert, EIP1822_PROXIABLE_SLOT, EIP1967_BEACON_SLOT, EIP1967_IMPL_SLOT, MINT_SELECTORS,
+  ownerlessRenounced, looksLikeProxy, ZEPPELINOS_IMPL_SLOT,
+} from '../src/abi';
 import { jsonRpc } from '../src/rpc';
 import { captureErrors } from '../src/util';
 import { encAddress, encBytes32, encString, encUint, fakeHttp, rpcHandler, testEnv, word, type Handler } from './helpers';
+import { keccak256, selector } from './keccak';
 
 const TOKEN = '0x4200000000000000000000000000000000000abc';
 const IMPL = '0x1111111111111111111111111111111111111111';
@@ -17,12 +21,20 @@ function bytecode(selectors: string[], { hideMintInPushData = false } = {}): str
   return '0x' + code + '00';
 }
 const ERC20 = ['06fdde03', '95d89b41', '313ce567', '18160ddd', '70a08231', 'a9059cbb'];
+/**
+ * A transparent proxy's own code, like Circle's FiatTokenProxy (USDC): admin(), implementation(), upgradeTo(),
+ * changeAdmin(), upgradeToAndCall() and a fallback that DELEGATECALLs (GAS DELEGATECALL …); no ERC-20 selector.
+ */
+const PROXY_CODE = bytecode(['f851a440', '5c60da1b', '3659cfe6', '8f283970', '4f1ef286']) + '5af43d6000803e3d6000f3';
 
 type Calls = Record<string, (params: unknown[]) => unknown>;
-function evmNode(host: string, opts: { code?: string; calls?: Record<string, unknown>; storage?: string; implCode?: string; extra?: Calls }) {
+function evmNode(
+  host: string,
+  opts: { code?: string; calls?: Record<string, unknown>; storage?: string; slots?: Record<string, string>; implCode?: string; extra?: Calls },
+) {
   return rpcHandler(host, {
     eth_getCode: p => ((p[0] as string).toLowerCase() === IMPL ? opts.implCode ?? '0x' : opts.code ?? '0x'),
-    eth_getStorageAt: () => opts.storage ?? '0x' + '0'.repeat(64),
+    eth_getStorageAt: p => opts.slots?.[p[1] as string] ?? opts.storage ?? '0x' + '0'.repeat(64),
     eth_call: p => {
       const { data } = p[0] as { data: string };
       const v = opts.calls?.[data];
@@ -349,7 +361,50 @@ describe('EVM adapter: tokenBasics', () => {
     expect(errors).toEqual([]);
     expect(value).toMatchObject({ implementation: IMPL, hasMintFunction: true });
     const slots = http.calls.filter(c => (c.body as { method: string }).method === 'eth_getStorageAt').map(c => (c.body as { params: unknown[] }).params[1]);
-    expect(slots.sort()).toEqual([EIP1967_IMPL_SLOT, EIP1967_BEACON_SLOT].sort());
+    expect(slots.sort()).toEqual([EIP1967_IMPL_SLOT, EIP1967_BEACON_SLOT, ZEPPELINOS_IMPL_SLOT, EIP1822_PROXIABLE_SLOT].sort());
+  });
+
+  it("USDC (Circle's FiatTokenProxy): the implementation in the ZeppelinOS slot is read, so its mint() is seen", async () => {
+    // only the legacy slot is set; owner() and decimals() answer through the proxy
+    const http = fakeHttp(
+      evmNode('mainnet.base.org', {
+        code: PROXY_CODE,
+        slots: { [ZEPPELINOS_IMPL_SLOT]: encAddress(IMPL) },
+        implCode: bytecode([...ERC20, '40c10f19', '8da5cb5b', '4e44d956']),
+        calls: { '0x95d89b41': encString('USDC'), '0x313ce567': encUint(6), '0x8da5cb5b': encAddress(OWNER) },
+      }),
+    );
+    const { value, errors } = await captureErrors(() => createEvm(testEnv(), http).tokenBasics('base', TOKEN));
+    expect(errors).toEqual([]);
+    expect(value).toMatchObject({ symbol: 'USDC', decimals: 6, implementation: IMPL, hasMintFunction: true, owner: OWNER, ownerRenounced: false });
+  });
+
+  it('EIP-1822 (UUPS, PROXIABLE slot): the implementation is read', async () => {
+    const http = fakeHttp(
+      evmNode('mainnet.base.org', { code: PROXY_CODE, slots: { [EIP1822_PROXIABLE_SLOT]: encAddress(IMPL) }, implCode: bytecode([...ERC20, 'a0712d68']) }),
+    );
+    expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ implementation: IMPL, hasMintFunction: true });
+  });
+
+  it('a proxy whose implementation is in no slot we know: mint unknown, never "no mint function"', async () => {
+    const http = fakeHttp(evmNode('mainnet.base.org', { code: PROXY_CODE, calls: { '0x313ce567': encUint(6), '0x8da5cb5b': encAddress(OWNER) } }));
+    const { value, errors } = await captureErrors(() => createEvm(testEnv(), http).tokenBasics('base', TOKEN));
+    expect(errors).toEqual([]);
+    expect(value).toMatchObject({ implementation: null, hasMintFunction: null, owner: OWNER, ownerRenounced: false });
+    // and without owner(): who controls it is unknown too, not "renounced"
+    const ownerless = fakeHttp(evmNode('mainnet.base.org', { code: PROXY_CODE }));
+    expect(await createEvm(testEnv(), ownerless).tokenBasics('base', TOKEN)).toMatchObject({ hasMintFunction: null, ownerRenounced: null });
+  });
+
+  it('a full token that DELEGATECALLs itself (Multicall) is not a proxy: no mint selector still reads "no mint function"', async () => {
+    const code = bytecode([...ERC20, 'ac9650d8']) + '5af4';
+    const http = fakeHttp(evmNode('mainnet.base.org', { code }));
+    expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ implementation: null, hasMintFunction: false, ownerRenounced: true });
+  });
+
+  it("USDT's issue(uint256) counts as a mint function", async () => {
+    const http = fakeHttp(evmNode('mainnet.base.org', { code: bytecode([...ERC20, 'cc872b66', '8da5cb5b']), calls: { '0x8da5cb5b': encAddress(OWNER) } }));
+    expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ hasMintFunction: true, ownerRenounced: false });
   });
 
   it('chain without an RPC → null, no request', async () => {
@@ -457,6 +512,25 @@ describe('ABI helpers', () => {
     const s = bytecodeSelectors(bytecode(['40c10f19'], { hideMintInPushData: false }));
     expect(s.has('40c10f19')).toBe(true);
     expect(bytecodeSelectors(bytecode([], { hideMintInPushData: true })).has('40c10f19')).toBe(false);
+  });
+  it('proxy slots and mint selectors are the keccak256 of what they name', () => {
+    const minus1 = (h: string) => '0x' + (BigInt('0x' + h) - 1n).toString(16).padStart(64, '0');
+    expect(EIP1967_IMPL_SLOT).toBe(minus1(keccak256('eip1967.proxy.implementation')));
+    expect(EIP1967_BEACON_SLOT).toBe(minus1(keccak256('eip1967.proxy.beacon')));
+    expect(ZEPPELINOS_IMPL_SLOT).toBe('0x' + keccak256('org.zeppelinos.proxy.implementation'));
+    expect(EIP1822_PROXIABLE_SLOT).toBe('0x' + keccak256('PROXIABLE'));
+    expect(MINT_SELECTORS).toEqual(
+      ['mint(address,uint256)', 'mint(uint256)', '_mint(address,uint256)', 'mintTo(address,uint256)', 'issue(uint256)'].map(selector),
+    );
+  });
+  it('looksLikeProxy: DELEGATECALL in code without the ERC-20 dispatcher', () => {
+    expect(looksLikeProxy(PROXY_CODE)).toBe(true);
+    expect(looksLikeProxy('0x363d3d373d3d3d363d73' + IMPL.slice(2) + '5af43d82803e903d91602b57fd5bf3')).toBe(true);
+    expect(looksLikeProxy(bytecode(ERC20) + '5af4')).toBe(false);
+    expect(looksLikeProxy(bytecode(['f851a440']))).toBe(false);
+    // 0xf4 inside PUSH data is not an opcode
+    expect(looksLikeProxy('0x6080604052' + '63f4f4f4f4' + '00')).toBe(false);
+    expect(looksLikeProxy(null)).toBe(false);
   });
   it('ownerlessRenounced: true only for known bytecode with no owner, role or mint selector', () => {
     expect(ownerlessRenounced(bytecode(ERC20), false)).toBe(true);

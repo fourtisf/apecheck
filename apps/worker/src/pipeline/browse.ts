@@ -1,14 +1,18 @@
 /**
  * Stage B — browse. Open the site in a fresh guarded context, read it, let the agent try the main flow
  * (bounded: CHECK_MAX_AGENT_ACTIONS actions, 60 s), then measure the docs. Product signals are computed
- * from whatever was observed, even when part of the stage timed out.
+ * from whatever was observed, even when part of the stage timed out. Our own browser or guard failing before the site
+ * answered throws BrowserUnavailable: the check ends FAILED, without a verdict.
  */
 import { CHAINS, normalizeDomain, type ChainKey } from '@apecheck/core';
+import { PUBLIC_EVM_RPC } from '@apecheck/sources';
 import { Explorer, type ExploreResult, type SimOutcome } from '../browser/agent';
 import { COMING_SOON_RE, CONNECT_RE, NEEDS_FUNDS_RE, SIM_INFRA_RE, WAITLIST_RE, isAppUrl, launchRank, AUDIT_RE } from '../browser/keywords';
 import { chainFromHex, evmChainIdHex, type CapturedTx } from '../browser/mock-wallet';
 import { crawlDocs, findDocsLink } from '../browser/docs';
+import type { BrowserHost } from '../browser/browser';
 import { domSummary, openSite, pageText, probe, screenshot } from '../browser/page';
+import { errText } from '../log';
 import type { CheckRun } from './context';
 import { runStage, within, type StageCtx } from './stage';
 import { docsSignal, productSignals } from './signals';
@@ -16,11 +20,27 @@ import { secs } from './text';
 
 const LIVE_RE = /\b(live (now|on)|now live|is live|launch app|open app|use the app|try it|available now|mainnet|trade now|start trading)\b/i;
 
-function readRpcFor(run: CheckRun) {
+/** The public sentence (Check.error, the last step) of a check our own browser could not run. */
+export const BROWSER_UNAVAILABLE = 'Our test browser was unavailable, so the site could not be checked';
+
+/**
+ * Our browser, or the SSRF guard proxy it goes through, failed before the site answered. That says nothing about the
+ * project, so the check ends FAILED (no verdict is published or cached; the bot and the report say to try again)
+ * instead of scoring the site as unknown or as not loading. `why` is for the log only.
+ */
+export class BrowserUnavailable extends Error {
+  constructor(readonly why: string) {
+    super(BROWSER_UNAVAILABLE);
+    this.name = 'BrowserUnavailable';
+  }
+}
+
+/** The mock wallet's reads (a dApp's eth_call / eth_getCode / eth_blockNumber): RPC_* or the chain's public RPC, as the EVM adapter. */
+export function readRpcFor(run: CheckRun) {
   const env = run.env as unknown as Record<string, string | undefined>;
   return async (chainIdHex: string, method: string, params: unknown[]) => {
     const chain = chainFromHex(chainIdHex);
-    const url = chain ? env[CHAINS[chain].rpcEnv] : undefined;
+    const url = chain ? env[CHAINS[chain].rpcEnv] || PUBLIC_EVM_RPC[chain] : undefined;
     if (!url) throw new Error('no RPC for this chain');
     const res = await run.sources.http.json<{ result?: unknown; error?: { message?: string } }>(url, {
       method: 'POST',
@@ -108,21 +128,20 @@ export async function browseStage(run: CheckRun): Promise<void> {
   }
   run.site.hasSite = true;
   const host = await run.deps.browser();
-  if (!host) {
-    run.site.infraError = 'the browser could not start';
-    run.degraded.push('browse:unavailable');
-    await run.steps.step({ status: 'warn', text: 'The browser could not start, the site was not opened' });
-    finishProduct(run);
-    return;
-  }
+  if (!host) throw ours(run, 'the browser could not start');
   const domain = run.domain ?? normalizeDomain(new URL(run.siteUrl).hostname);
   const evmChain = run.chain && CHAINS[run.chain].family === 'evm' ? run.chain : null;
   const walletChainId = evmChainIdHex(evmChain);
+  // set when our browser or guard failed before the site answered (run.siteInfo is set once it did)
+  let failure: string | null = null;
   try {
     run.session = await host.newSession({ evmChainId: walletChainId, wallet: { readRpc: readRpcFor(run) } });
 
-    const opened = await runStage(run, 'open', run.limits.open, ctx => openStage(run, domain, ctx));
-    if (!opened.ok && !run.siteInfo) {
+    const opened = await runStage(run, 'open', run.limits.open, ctx => openStage(run, host, domain, ctx));
+    // openStage only throws on the browser's side (opening a tab); a page that fails to load is a result
+    if (opened.ok) failure = opened.value;
+    else if (opened.reason === 'error' && !run.siteInfo) failure = `the browser failed opening a page: ${errText(opened.error)}`;
+    else if (!run.siteInfo) {
       run.site.loaded = false;
       run.site.error = opened.reason === 'timeout' ? 'timed out' : 'could not be opened';
       await run.steps.step({ status: 'fail', text: `${domain} didn't load (${run.site.error})` });
@@ -155,11 +174,14 @@ export async function browseStage(run: CheckRun): Promise<void> {
       }
     }
   } catch (e) {
-    // a browser failure is ours, not the project's: keep what was seen and move on
+    // a browser failure is ours, not the project's: keep what was seen and move on (nothing seen yet: no verdict)
     run.log.error('browse stage failed', e);
     run.degraded.push('browse:error');
-    if (!run.site.loaded) run.site.infraError = 'browser error';
-    await run.steps.step({ status: 'warn', text: 'The browser hit an error; the site was only partly checked' });
+    if (!run.siteInfo) failure = `browser error: ${errText(e)}`;
+    else {
+      if (!run.site.loaded) run.site.infraError = 'browser error';
+      await run.steps.step({ status: 'warn', text: 'The browser hit an error; the site was only partly checked' });
+    }
   } finally {
     const session = run.session;
     if (session) {
@@ -170,7 +192,13 @@ export async function browseStage(run: CheckRun): Promise<void> {
     await run.session?.close();
     run.steps.setProgress(0.55);
   }
+  if (failure) throw ours(run, failure);
   finishProduct(run);
+}
+
+function ours(run: CheckRun, why: string): BrowserUnavailable {
+  run.log.error(`our browser failed before the site answered, no verdict: ${why}`);
+  return new BrowserUnavailable(why);
 }
 
 function finishProduct(run: CheckRun) {
@@ -196,11 +224,19 @@ export async function recoverLateTx(run: CheckRun, walletChainId: string) {
   x.appVia = 'page';
 }
 
-async function openStage(run: CheckRun, domain: string, ctx: StageCtx): Promise<void> {
+/** Load and read the landing page. Resolves to why our own guard failed it (nothing is logged then), else null. */
+async function openStage(run: CheckRun, host: BrowserHost, domain: string, ctx: StageCtx): Promise<string | null> {
   const session = run.session!;
   const steps = run.steps.scoped(ctx.signal);
   await steps.step({ status: 'info', text: `Opening ${domain} in a clean browser`, url: run.siteUrl, caption: 'Loading page' });
   const o = await openSite(session, run.siteUrl!, Math.min(20_000, ctx.deadline - Date.now() - 2000));
+  if (o.proxyError) {
+    // Chromium never got past the proxy. Not reaching it at all is ours; a refused tunnel is the guard answering 502
+    // for a site it could not reach (the site's failure), unless the guard itself is what fails: ask it
+    const problem = await host.guardProblem();
+    if (problem) return problem;
+    if (o.proxyError === 'ERR_PROXY_CONNECTION_FAILED') return `the browser could not connect to the guard proxy (net::${o.proxyError})`;
+  }
   const shot = await screenshot(o.page);
   run.landingShot = shot;
   run.siteInfo = { url: run.siteUrl!, finalUrl: o.finalUrl, title: null, loadMs: o.loadMs, httpStatus: o.status };
@@ -211,11 +247,11 @@ async function openStage(run: CheckRun, domain: string, ctx: StageCtx): Promise<
     run.site.infraError = o.error;
     run.degraded.push('browse:blocked');
     run.site.loadStepIdx = await steps.step({ status: 'warn', text: `${domain} blocks automated browsers (${o.botWall}); the site could not be checked`, url: run.siteUrl, caption: 'Loading page', shot });
-    return;
+    return null;
   }
   if (!o.loaded) {
     run.site.loadStepIdx = await steps.step({ status: 'fail', text: `${domain} didn't load (${o.error ?? 'no response'})`, url: run.siteUrl, caption: 'Loading page', shot });
-    return;
+    return null;
   }
   const text = await pageText(o.page);
   run.landing = text;
@@ -251,6 +287,7 @@ async function openStage(run: CheckRun, domain: string, ctx: StageCtx): Promise<
       });
     }
   }
+  return null;
 }
 
 async function exploreStage(run: CheckRun, ctx: StageCtx, walletChainId: string): Promise<void> {

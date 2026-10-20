@@ -5,14 +5,23 @@
  */
 import { CHAINS, type ChainKey, type Env } from '@apecheck/core';
 import {
-  EVM_READ_METHODS, PUBLIC_EVM_RPC, TRONGRID_BASE, captureErrors, jsonRpc, solanaRpcUrl,
+  COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, EVM_READ_METHODS, PUBLIC_EVM_RPC, TRONGRID_BASE, captureErrors, jsonRpc, solanaRpcUrl,
   type EvmSource, type Http, type SolanaSource, type TronSource,
 } from '@apecheck/sources';
 import { hostOf } from './redact';
 import { errorText, fail, networkRemedy, outcome, type ProbeOutcome } from './result';
 
-/** coinFacts gives each on-chain read 8 s (packages/sources/src/coin-facts.ts): slower reads show as "RPC unavailable" in a check */
-export const COIN_FACTS_BUDGET_MS = 8_000;
+/**
+ * What a check gives a coinFacts call that sends `rounds` requests one after another (packages/sources/src/coin-facts.ts):
+ * a slower read shows as "RPC unavailable" in a check.
+ */
+export const coinCallBudgetMs = (rounds: number) => Math.max(COIN_CALL_TIMEOUT_MS, Math.min(COIN_CALL_TIMEOUT_MS * rounds, COIN_SECTION_BUDGET_MS));
+/** evm.tokenBasics: code + calls, proxy slots, a beacon's implementation(), the implementation's code */
+const TOKEN_BASICS_BUDGET_MS = coinCallBudgetMs(4);
+/** solana.largestHolders: largest accounts + supply, then their owners */
+const HOLDERS_BUDGET_MS = coinCallBudgetMs(2);
+/** tron.tokenInfo: the contract, then its calls */
+const TRON_INFO_BUDGET_MS = coinCallBudgetMs(2);
 const RPC_TIMEOUT_MS = 8_000;
 
 export type EvmProbeChain = 'base' | 'eth' | 'bnb' | 'arb';
@@ -20,8 +29,8 @@ export type EvmProbeChain = 'base' | 'eth' | 'bnb' | 'arb';
 export const EVM_PROBE_CHAINS: EvmProbeChain[] = ['base', 'eth', 'bnb', 'arb'];
 
 /**
- * One well-known token per chain. Only liveness and decoding are asserted (symbol, decimals): USDC sits behind
- * Circle's proxy, whose implementation slot tokenBasics does not read, so its mint result proves nothing here.
+ * One well-known token per chain. Only liveness and decoding are asserted (symbol, decimals): owner and mint follow
+ * the token's own upgrades, so they prove nothing about the endpoint.
  */
 export const EVM_PROBE_TOKENS: Record<EvmProbeChain, { address: string; symbol: string; decimals: number }> = {
   base: { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', symbol: 'USDC', decimals: 6 },
@@ -123,7 +132,7 @@ export async function probeEvm(chain: EvmProbeChain, deps: EvmProbeDeps): Promis
   }
   const notes: string[] = [];
   if (errors.length) notes.push(`${errors.length} read(s) failed: ${errors[0]}`);
-  if (ms > COIN_FACTS_BUDGET_MS) notes.push(`token read took ${ms} ms, over the ${COIN_FACTS_BUDGET_MS / 1000} s a check gives it`);
+  if (ms > TOKEN_BASICS_BUDGET_MS) notes.push(`token read took ${ms} ms, over the ${TOKEN_BASICS_BUDGET_MS / 1000} s a check gives it`);
   const detail = `${headText}, ${t.symbol} symbol=${value.symbol} decimals=${value.decimals} in ${ms} ms${notes.length ? `; ${notes.join('; ')}` : ''}`;
   return outcome({ ...f, ok: true, degraded: notes.length > 0 }, detail, fromEnv ? `${envVar} is slow or rate limited: use a faster plan or provider` : remedy);
 }
@@ -228,7 +237,7 @@ export async function probeSolana(deps: { env: Env; sol: Pick<SolanaSource, 'min
   if (!h.rows.length) notes.push(`largest holders failed: ${holders.errors[0] ?? 'empty answer'}`);
   else {
     if (h.rows.every(r => !r.owner)) notes.push(`holder owners unread: ${holders.errors[0] ?? 'getMultipleAccounts failed'}`);
-    if (h.ms > COIN_FACTS_BUDGET_MS) notes.push(`holders took ${h.ms} ms, over the ${COIN_FACTS_BUDGET_MS / 1000} s a check gives them`);
+    if (h.ms > HOLDERS_BUDGET_MS) notes.push(`holders took ${h.ms} ms, over the ${HOLDERS_BUDGET_MS / 1000} s a check gives them`);
   }
   const detail = `${where}, USDC decimals=6 mint authority set${h.rows.length ? `, JUP top ${h.rows.length} holders in ${h.ms} ms` : ''}${notes.length ? `; ${notes.join('; ')}` : ''}`;
   return outcome(
@@ -287,7 +296,7 @@ export async function probeTron(deps: { env: Env; http: Http; tron: Pick<TronSou
     return fail(`${where}: USDT decoded as symbol=${value.symbol} decimals=${value.decimals}`, 'TronGrid answered unexpectedly: run the doctor again later');
   }
   if (errors.length) notes.push(errors[0]);
-  if (ms > COIN_FACTS_BUDGET_MS) notes.push(`took ${ms} ms, over the ${COIN_FACTS_BUDGET_MS / 1000} s a check gives it`);
+  if (ms > TRON_INFO_BUDGET_MS) notes.push(`took ${ms} ms, over the ${TRON_INFO_BUDGET_MS / 1000} s a check gives it`);
   const owner = value.owner ? 'owner set' : 'owner unread';
   const detail = `${where}, USDT symbol=${value.symbol} decimals=${value.decimals} ${owner} in ${ms} ms${notes.length ? `; ${notes.join('; ')}` : ''}`;
   return outcome({ ...f, ok: true, degraded: notes.length > 0 }, detail, keyed ? 'TronGrid is throttling this key: check its quota in the dashboard' : TRON_REMEDY);

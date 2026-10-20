@@ -9,7 +9,8 @@
 #   2. installs the exact playwright-core version apps/worker pins, its headless Chromium (+ system libraries) and
 #      browser-host.cjs into /opt/apecheck-browser, all root-owned and read-only for that user;
 #   3. installs the AppArmor profile that lets those Chromium binaries create their sandbox's user namespace;
-#   4. writes /etc/apecheck/browser.env (root-only; a random BROWSER_WS_PATH on first run) and the egress firewall;
+#   4. writes /etc/apecheck/browser.env (root-only; a random BROWSER_WS_PATH on first run) and the firewall (egress
+#      for that user; the browser host's port for the app user and root only);
 #   5. installs, enables and (re)starts apecheck-browser.service and waits until it reports the sandbox verified;
 #   6. sets BROWSER_WS_ENDPOINT in the app's .env (owner and mode kept), so worker-checks connects to it.
 # Afterwards: pm2 reload worker-checks (as apecheck).
@@ -40,6 +41,12 @@ FW_GUARD_PORT="$(grep -oE 'tcp dport [0-9]+ accept' "$SRC/browser-firewall.nft" 
 ENV_GUARD_PORT="$(grep -E '^BROWSER_GUARD_PORT=' "$APP_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//' | tr -d '[:space:]' || true)"
 [[ -z "$ENV_GUARD_PORT" || "$ENV_GUARD_PORT" == "$FW_GUARD_PORT" ]] ||
   die "BROWSER_GUARD_PORT=$ENV_GUARD_PORT in .env but browser-firewall.nft allows $FW_GUARD_PORT; make them match"
+# the firewall lets only the app user (by uid) and root connect to the browser host, on the port it listens on
+APP_UID="$(id -u "$APP_USER" 2>/dev/null)" || die "app user $APP_USER does not exist: create it first (DEPLOY.md §2) or set APP_USER"
+FW_HOST_PORT="$(grep -oE 'tcp dport [0-9]+ meta skuid' "$SRC/browser-firewall.nft" | grep -oE '[0-9]+')"
+ENV_HOST_PORT="$(grep -E '^BROWSER_PORT=' "$ETC/browser.env" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+[[ "${ENV_HOST_PORT:-9223}" == "$FW_HOST_PORT" ]] ||
+  die "BROWSER_PORT=${ENV_HOST_PORT:-9223} in $ETC/browser.env but browser-firewall.nft guards $FW_HOST_PORT; make them match"
 
 # Playwright's --with-deps (step 2) runs apt-get; a broken third-party repository fails it with only "exit code 100"
 apt_log="$(mktemp)"
@@ -79,6 +86,8 @@ fi
 echo "== 4. $ETC: browser.env, browser-firewall.nft"
 install -d -o root -g root -m 0700 "$ETC"
 install -o root -g root -m 0600 "$SRC/browser-firewall.nft" "$ETC/browser-firewall.nft"
+sed -i -E "s/^define app_uid = .*/define app_uid = $APP_UID/" "$ETC/browser-firewall.nft"
+grep -qx "define app_uid = $APP_UID" "$ETC/browser-firewall.nft" || die "could not write $APP_USER's uid into $ETC/browser-firewall.nft"
 if [[ ! -f "$ETC/browser.env" ]]; then
   (
     umask 077

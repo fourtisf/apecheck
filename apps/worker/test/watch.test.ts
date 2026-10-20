@@ -186,7 +186,7 @@ describe('site change detection', () => {
     await watchers(target.id);
     expect(await processRecheck(h.deps, target.id)).toEqual({ status: 'first' });
     const first = (await prisma.target.findUniqueOrThrow({ where: { id: target.id } })).fingerprint;
-    expect(fingerprintScheme(first)).toBe('site:v2');
+    expect(fingerprintScheme(first)).toBe('site:v3');
     // not due again until WATCH_RECHECK_HOURS have passed
     expect(await processRecheck(h.deps, target.id)).toEqual({ status: 'skipped', reason: 'fingerprinted recently' });
 
@@ -298,7 +298,7 @@ describe('site change detection', () => {
     const h = harness({ allowHosts: [down.host] });
     const { target } = await siteTarget(down);
     await watchers(target.id);
-    await prisma.target.update({ where: { id: target.id }, data: { fingerprint: `site:v2:${'a'.repeat(64)}`, fingerprintAt: new Date(Date.now() - 7 * HOUR) } });
+    await prisma.target.update({ where: { id: target.id }, data: { fingerprint: `site:v3:${'a'.repeat(64)}`, fingerprintAt: new Date(Date.now() - 7 * HOUR) } });
     expect((await processRecheck(h.deps, target.id)).status).toBe('error');
     expect(await notes()).toEqual([]);
   });
@@ -430,12 +430,21 @@ describe('contract and mint fingerprints', () => {
     return target;
   }
 
+  it('a fingerprint from an older version (v2: before the ZeppelinOS slot and issue()) is re-baselined, never an alert', async () => {
+    const h = harness({ data: { evmCode: { [CA]: '0x6080aa' }, evmBasics: { [CA]: basics('0x' + '11'.repeat(20), true) } } });
+    const t = await coin('BASE', CA);
+    await prisma.target.update({ where: { id: t.id }, data: { fingerprint: `contract:v2:${'b'.repeat(64)}`, fingerprintAt: new Date(Date.now() - 7 * HOUR) } });
+    expect(await processRecheck(h.deps, t.id)).toEqual({ status: 'first' });
+    expect(fingerprintScheme((await prisma.target.findUniqueOrThrow({ where: { id: t.id } })).fingerprint)).toBe('contract:v3');
+    expect(await notes()).toEqual([]);
+  });
+
   it('EVM: a new owner or a mint function is a change; a failed RPC read is not', async () => {
     const data: FakeData = { evmCode: { [CA]: '0x6080aa' }, evmBasics: { [CA]: basics('0x' + '11'.repeat(20), false) } };
     const h = harness({ data });
     const t = await coin('BASE', CA);
     expect(await processRecheck(h.deps, t.id)).toEqual({ status: 'first' });
-    expect(fingerprintScheme((await prisma.target.findUniqueOrThrow({ where: { id: t.id } })).fingerprint)).toBe('contract:v2');
+    expect(fingerprintScheme((await prisma.target.findUniqueOrThrow({ where: { id: t.id } })).fingerprint)).toBe('contract:v3');
 
     // the RPC fails: not compared
     data.evmCode![CA] = null;
@@ -576,9 +585,10 @@ describe('contract and mint fingerprints', () => {
     });
   });
 
-  it('Tron: an owner() TronGrid did not run (rate limit) is a failed read; a revert is a steady "no owner"', async () => {
+  it('Tron: an owner() TronGrid did not run (rate limit) is a failed read; a revert is a steady "no owner"; a failed name() is not', async () => {
     const TRC = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
     let owner: 'limited' | 'revert' | 'value' = 'value';
+    let nameLimited = false;
     const http: Http = {
       async request() {
         throw new Error('not used');
@@ -591,6 +601,7 @@ describe('contract and mint fingerprints', () => {
           if (owner === 'revert') return { result: { code: 'CONTRACT_EXE_ERROR', message: '' } } as T;
           return { result: { result: true }, constant_result: ['ab'.repeat(32)] } as T;
         }
+        if (body.function_selector === 'name()' && nameLimited) throw new HttpError(429, url, '{"Error":"request rate exceeded the allowed_rps(15)"}');
         return { result: { code: 'CONTRACT_EXE_ERROR', message: '' } } as T;
       },
     };
@@ -604,6 +615,9 @@ describe('contract and mint fingerprints', () => {
     expect(reverted.ok).toBe(true);
     expect(await tronFingerprint({ tron }, TRC)).toEqual(reverted);
     owner = 'value';
+    expect(await tronFingerprint({ tron }, TRC)).toEqual(healthy);
+    // a rate-limited name() is reported, but the name is not part of the fingerprint: still a good read
+    nameLimited = true;
     expect(await tronFingerprint({ tron }, TRC)).toEqual(healthy);
   });
 });

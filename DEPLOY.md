@@ -139,21 +139,26 @@ It runs in its own systemd unit, `apecheck-browser.service`:
 - with an explicit minimal environment (no secrets) and systemd hardening (no capabilities, `NoNewPrivileges`, only the
   user/pid/net namespaces the sandbox needs, `MemoryMax=4G`);
 - behind an egress firewall (`deploy/browser/browser-firewall.nft`, nftables, for this user only): it can reach
-  worker-checks' SSRF guard proxy on `127.0.0.1:9224` and nothing else (not Redis, Postgres, the API, DNS or the internet directly).
+  worker-checks' SSRF guard proxy on `127.0.0.1:9224` and nothing else (not Redis, Postgres, the API, DNS or the internet directly);
+- reachable only by `apecheck` (worker-checks, the doctor) and root: the same ruleset resets every other local user's
+  or service's connection to `127.0.0.1:9223` (MongoDB, ClickHouse, Docker, ...), and the host does not answer
+  Playwright's `GET /json`, which would tell anyone who asks the endpoint's secret path.
 
 On startup the host refuses to run as root, if it can read `.env` or the app tree, if it can connect to
-`127.0.0.1:5432` or `:6379` (firewall missing), or if Chromium comes up with `--no-sandbox` or a renderer outside
-seccomp-bpf; it rechecks the running process tree every 30 s. worker-checks connects at `BROWSER_WS_ENDPOINT` (its path
-is a random secret), checks that the browser can reach the guard, gives every check's context the guard as its proxy
-(a context without one fails closed), and refuses to start in production without the endpoint.
+`127.0.0.1:5432` or `:6379` (firewall missing), if Chromium comes up with `--no-sandbox` or a renderer outside
+seccomp-bpf, or if it cannot hide `GET /json` (a Playwright bump changed its server); it rechecks the running process
+tree every 30 s. worker-checks connects at `BROWSER_WS_ENDPOINT` (its path is a random secret), checks that the
+browser can reach the guard, gives every check's context the guard as its proxy (a context without one fails closed),
+and refuses to start in production without the endpoint.
 
 ```bash
 sudo /srv/apecheck/app/deploy/browser/install.sh
 ```
 
-It installs all of the above, writes `/etc/apecheck/browser.env` (root-only; the endpoint secret), starts the unit,
-waits until it listens (only after its checks passed) and sets `BROWSER_WS_ENDPOINT` in `.env`. It needs the same
-`playwright` version as `apps/worker/package.json`, so re-run it after every bump (§11, §13). Check:
+It installs all of the above (the firewall with `apecheck`'s uid; set `APP_USER` if the app runs as another user),
+writes `/etc/apecheck/browser.env` (root-only; the endpoint secret; its `BROWSER_PORT` must stay the firewall's 9223),
+starts the unit, waits until it listens (only after its checks passed) and sets `BROWSER_WS_ENDPOINT` in `.env`. It
+needs the same `playwright` version as `apps/worker/package.json`, so re-run it after every bump (§11, §13). Check:
 
 ```bash
 systemctl status apecheck-browser
@@ -176,7 +181,8 @@ If the unit keeps restarting, the journal names the failed check: `Chromium sand
 loaded: `sudo aa-status | grep apecheck`), `this user can read ...` (`/srv/apecheck` is not 0750, §2) or
 `can connect to 127.0.0.1:6379` (firewall not loaded: `sudo nft list table inet apecheck_browser`). If worker-checks
 logs `cannot reach the guard proxy`, `BROWSER_GUARD_PORT` and the port in `browser-firewall.nft` differ (install.sh
-refuses that; change both together).
+refuses that; change both together). If it cannot connect to the browser host (`ECONNREFUSED` on `127.0.0.1:9223`
+while the unit runs), it runs as another user than the one install.sh allowed: re-run it with `APP_USER=<that user>`.
 
 Then start the apps (as `apecheck`):
 
@@ -223,9 +229,10 @@ Every row that is not `PASS` has a `fix:` line that names the variable to set an
 exits 1 when any row is `FAIL`.
 
 The doctor writes nothing: no database rows, no queue jobs and no posts. Its output shows hosts only, with keys,
-passwords and the browser endpoint's path redacted. It never listens on `BROWSER_GUARD_PORT`. worker-checks starts
-its guard there when it opens its first website, so until then "Browser via guard" is `WARN`. In that case run one
-website check, then run the doctor again.
+passwords and the browser endpoint's path redacted. It never listens on `BROWSER_GUARD_PORT`: worker-checks starts
+its guard there when it starts (and again on the next check after a failed browser launch). If nothing listens there,
+"Browser via guard" is `WARN`: worker-checks is down or its browser launch failed. Look for `browser is unusable` in
+`pm2 logs worker-checks` and at the "Browser host" row.
 
 A check that ends `partly` within a second or two usually matches a non-PASS row here. Common causes are an X post or
 profile checked without `X_BEARER_TOKEN`, a site the browser could not open, or chain RPCs the VPS cannot reach.

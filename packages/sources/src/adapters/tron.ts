@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import type { Env } from '@apecheck/core';
 import type { Http, TronSource } from '../types';
-import { MINT_SELECTORS, decodeAbiString, decodeAddress, decodeUint, hasAnySelector, ownerlessRenounced } from '../abi';
+import { MINT_SELECTORS, decodeAbiString, decodeAddress, decodeUint, hasAnySelector, looksLikeProxy, ownerlessRenounced } from '../abi';
 import { tronFromHex } from '../base58';
 import { ErrorState, RE_TRON_ADDRESS } from '../util';
 
@@ -87,7 +87,12 @@ export class TronAdapter implements TronSource {
     try {
       const contract = ContractZ.parse(await this.post('/wallet/getcontract', { value: address, visible: true }));
       if (!contract.contract_address) return null;
-      const safe = (sig: string) => this.constant(address, sig).catch(() => null);
+      // a call TronGrid didn't run (a 429, a busy node) leaves that value unknown and is reported, like owner()
+      const safe = (sig: string) =>
+        this.constant(address, sig).catch((e: unknown) => {
+          this.errors.fail(`tokenInfo ${sig.replace(/\(\)$/, '')}`, e);
+          return null;
+        });
       // owner() decides "renounced" (and the re-check alerts' contract fingerprint): a call TronGrid didn't run is
       // reported and leaves who controls the token unknown, never "no owner function"
       const ownerRead = this.constant(address, 'owner()').then(
@@ -100,7 +105,8 @@ export class TronAdapter implements TronSource {
       if (!ownerRes.ok) this.errors.fail('tokenInfo owner', ownerRes.error);
       const owner = ownerRes.ok ? ownerRes.value : null;
       const code = contract.bytecode ? '0x' + contract.bytecode : null;
-      const hasMintFunction = code ? hasAnySelector(code, MINT_SELECTORS) : null;
+      // a proxy's own code has no mint selector to find (its logic is elsewhere, unread here): unknown, not "none"
+      const hasMintFunction = !code ? null : hasAnySelector(code, MINT_SELECTORS) ? true : looksLikeProxy(code) ? null : false;
       const ownerHex = decodeAddress(owner);
       const ownerAddr = ownerHex ? tronFromHex(ownerHex) : null;
       let ownerRenounced: boolean | null = null;

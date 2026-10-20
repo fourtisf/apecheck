@@ -7,8 +7,9 @@ import { CHAINS, EVM_DETECT_ORDER, type ChainKey, type Env } from '@apecheck/cor
 import { warnOnce } from '@apecheck/core/node';
 import type { EvmTokenBasics, EvmTxRequest, EvmWalletSource, Http, SimResult } from '../types';
 import {
-  BURN_ADDRESSES, EIP1967_BEACON_SLOT, EIP1967_IMPL_SLOT, MINT_SELECTORS, SELECTORS,
-  decodeAbiString, decodeAddress, decodeRevert, decodeUint, encodeAddressArg, hasAnySelector, minimalProxyTarget, ownerlessRenounced, toQuantity,
+  BURN_ADDRESSES, EIP1822_PROXIABLE_SLOT, EIP1967_BEACON_SLOT, EIP1967_IMPL_SLOT, MINT_SELECTORS, SELECTORS, ZEPPELINOS_IMPL_SLOT,
+  decodeAbiString, decodeAddress, decodeRevert, decodeUint, encodeAddressArg, hasAnySelector, looksLikeProxy, minimalProxyTarget, ownerlessRenounced,
+  toQuantity,
 } from '../abi';
 import { RpcError, jsonRpc } from '../rpc';
 import { ErrorState, RE_EVM_ADDRESS, errMsg, isoFromSeconds, toUnits } from '../util';
@@ -233,18 +234,22 @@ export class EvmAdapter implements EvmWalletSource {
 
   /**
    * The logic contract behind a proxy, so selector scans see the real logic and an upgrade is visible: an EIP-1167
-   * minimal proxy's target, the EIP-1967 implementation slot, or the implementation() of the EIP-1967 beacon. null when
-   * the contract is none of those; undefined when it couldn't be read (recorded: an unread slot is never "no proxy").
+   * minimal proxy's target, the EIP-1967 implementation slot, the older ZeppelinOS slot (Circle's FiatTokenProxy: USDC),
+   * the EIP-1822 PROXIABLE slot, or the implementation() of the EIP-1967 beacon. null when the contract is none of those;
+   * undefined when it couldn't be read (recorded: an unread slot is never "no proxy").
    */
   private async implementationOf(chain: ChainKey, address: string, code: string): Promise<string | null | undefined> {
     const minimal = minimalProxyTarget(code);
     if (minimal) return minimal;
     try {
-      const [impl, beacon] = await Promise.all([
+      const [impl, zos, proxiable, beacon] = await Promise.all([
         this.slotAddress(chain, address, EIP1967_IMPL_SLOT),
+        this.slotAddress(chain, address, ZEPPELINOS_IMPL_SLOT),
+        this.slotAddress(chain, address, EIP1822_PROXIABLE_SLOT),
         this.slotAddress(chain, address, EIP1967_BEACON_SLOT),
       ]);
-      if (impl) return impl;
+      const direct = impl ?? zos ?? proxiable;
+      if (direct) return direct;
       if (!beacon) return null;
       const r = await this.call(chain, beacon, SELECTORS.implementation);
       if (r.kind === 'error') throw r.error;
@@ -287,8 +292,10 @@ export class EvmAdapter implements EvmWalletSource {
         else if (implCode !== '0x') scanCode = code + implCode.replace(/^0x/, '');
       }
     }
-    // without the logic behind the proxy, "no mint selector" is unknown, not false
-    const hasMintFunction = !scanCode ? null : hasAnySelector(scanCode, MINT_SELECTORS) ? true : implUnread ? null : false;
+    // without the logic behind the proxy, "no mint selector" is unknown, not false: its implementation unread, or a
+    // proxy whose implementation is in no slot we know
+    const logicUnseen = implUnread || (!implementation && looksLikeProxy(code));
+    const hasMintFunction = !scanCode ? null : hasAnySelector(scanCode, MINT_SELECTORS) ? true : logicUnseen ? null : false;
 
     const val = (o: CallOutcome) => (o.kind === 'value' ? o.data : null);
     const dec = decodeUint(val(decimals));

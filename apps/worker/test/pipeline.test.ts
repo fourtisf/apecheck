@@ -550,6 +550,75 @@ describe('pipeline run(checkId)', () => {
   });
 });
 
+describe('our own browser failing is not a verdict', () => {
+  const NO_BROWSER = /^Our test browser was unavailable/;
+
+  /** FAILED with the retry sentence (Check.error and the last step), no score, nothing published as the project's */
+  async function expectNoVerdict(checkId: string) {
+    const c = await stored(checkId);
+    expect(c.status).toBe('FAILED');
+    expect(c.error).toMatch(NO_BROWSER);
+    expect(c.steps[c.steps.length - 1]).toMatchObject({ status: 'FAIL' });
+    expect(c.steps[c.steps.length - 1].text).toMatch(NO_BROWSER);
+    expect([c.narScore, c.narBand, c.sigLaunch]).toEqual([null, null, null]);
+    expect(c.isLatest).toBe(false);
+    expect(c.steps.some(s => /didn't load/.test(s.text))).toBe(false);
+    await waitFor(() => messages.some(m => m.channel === `check:${checkId}` && (m.msg as CheckChannelMsg).type === 'done'));
+    expect(messages.find(m => m.channel === `check:${checkId}` && (m.msg as CheckChannelMsg).type === 'done')?.msg).toEqual({ type: 'done', status: 'failed' });
+  }
+
+  it('the browser could not start (browse:unavailable): FAILED, never an all-unknown "partly"', async () => {
+    const check = await createCheck(sites.get('working-app')!.url);
+    const d = deps(workingData());
+    d.browser = async () => null;
+    expect((await runCheck(check.id, d)).status).toBe('failed');
+    await expectNoVerdict(check.id);
+  });
+
+  it('the browser failing before the site loaded (browse:error): FAILED', async () => {
+    const check = await createCheck(sites.get('working-app')!.url);
+    const d = deps(workingData());
+    const dead = { newSession: async () => { throw new Error('browser.newContext: Target page, context or browser has been closed'); } };
+    d.browser = async () => dead as unknown as BrowserHost;
+    expect((await runCheck(check.id, d)).status).toBe('failed');
+    await expectNoVerdict(check.id);
+  });
+
+  it('the browser cannot reach our SSRF guard (ERR_PROXY_CONNECTION_FAILED): FAILED, the project is not "Likely LARP"', async () => {
+    const broken = await BrowserHost.launch({ env, lookup: testLookup });
+    try {
+      // the guard is gone: Chromium's every request now fails at the proxy, before any site is asked
+      await broken.guard!.close();
+      const check = await createCheck(sites.get('working-app')!.url);
+      const d = deps(workingData());
+      d.browser = async () => broken;
+      const log = d.log as ReturnType<typeof memoryLogger>;
+      expect((await runCheck(check.id, d)).status).toBe('failed');
+      await expectNoVerdict(check.id);
+      expect(log.lines.some(l => /cannot reach the guard proxy/.test(l))).toBe(true);
+    } finally {
+      await broken.close();
+    }
+  });
+
+  it('an https site whose server refuses the connection (the guard answers 502: ERR_TUNNEL_CONNECTION_FAILED) is still scored as not loading', async () => {
+    const check = await createCheck(`https://${neverHost}/`);
+    const asked = vi.spyOn(host, 'guardProblem');
+    try {
+      expect((await runCheck(check.id, deps())).status).toBe('done');
+      // the failure was at the proxy, so the guard was asked, and it answered: the site's failure, not ours
+      expect(asked).toHaveBeenCalledTimes(1);
+      await expect(asked.mock.results[0].value).resolves.toBeNull();
+    } finally {
+      asked.mockRestore();
+    }
+    const c = await stored(check.id);
+    expect(c.status).toBe('DONE');
+    expect(c.sigLaunch).toBe('FAIL');
+    expect(c.steps.some(s => s.status === 'FAIL' && /didn't load \(could not connect\)/.test(s.text))).toBe(true);
+  });
+});
+
 describe('stage budget', () => {
   it('a stage that times out is logged and the check still finishes', async () => {
     const check = await createCheck(sites.get('working-app')!.url);

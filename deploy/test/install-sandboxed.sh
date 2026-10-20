@@ -5,6 +5,7 @@
 #
 #   install-sandboxed.sh <app dir copy> <out dir> [runs]
 #
+# SEED_BROWSER_ENV, if set, is written to /etc/apecheck/browser.env first (as an earlier install would have left it).
 # Copies what install.sh wrote (/opt/apecheck-browser, /etc/apecheck, the unit, the AppArmor profile), its output
 # and the stub call log to <out dir>; exits with install.sh's status.
 set -euo pipefail
@@ -53,6 +54,10 @@ unshare --mount --propagation private bash -euo pipefail -c '
     mount -t overlay overlay -o "lowerdir=/$d,upperdir=$W/$d-up,workdir=$W/$d-work" "/$d"
   done
   mkdir -p /etc/apparmor.d
+  if [[ -n "${SEED_BROWSER_ENV:-}" ]]; then
+    mkdir -p /etc/apecheck
+    printf "%s" "$SEED_BROWSER_ENV" >/etc/apecheck/browser.env
+  fi
   code=0
   for _ in $(seq 1 "$RUNS"); do
     PATH="$W/stubs:$PATH" "$APP/deploy/browser/install.sh" >>"$OUT/stdout.log" 2>&1 || { code=$?; break; }

@@ -59,7 +59,9 @@ Product (Stage B):
   on a page that shows no app does **not** outweigh an app entry that leads to a waitlist, "Coming soon", a 404, an
   error or nothing ("'Launch app' shows 'Coming soon' (only the wallet connect works)"), and a connect that itself lands
   on a waitlist is no app at all. `warn`: waitlist / "Coming soon" (modal or splash page), no app entry on the site, the
-  entry led nowhere useful, or the site couldn't be checked (our browser failed, or a bot challenge blocked it).
+  entry led nowhere useful, or the site couldn't be checked (our browser failed after the site answered, or a bot challenge
+  blocked it). Our browser failing before the site answered (no browser host, or our SSRF guard unreachable) ends the check
+  `FAILED`: no verdict, nothing cached, Re-check to try again.
   `fail`: the site never loaded, the launch button is dead (no navigation, no popup, no meaningful DOM change, measured
   against the page's own background churn), or it leads to a 404 / error screen.
 - **flow** (only tried when launch is ok; otherwise it takes launch's value, like `scoreNarrative`) — `ok`: a captured
@@ -245,8 +247,10 @@ worker-prices on queue `rechecks` (`startWatchWorker`).
   first, at most 500 per scan, minus those backing off after a failed read (`watch:retry:<targetId>`). Each gets a
   `RecheckJob { targetId }` (job name `target`, jobId `fp-<targetId>`, so it is never queued twice). Any job on the
   queue that isn't `scan` is a `RecheckJob`; the API queues one when a Pro/Max user starts watching a target that was never fingerprinted.
-- **Fingerprints** (`watch/fingerprint.ts`, stored versioned as `<kind>:v2:<sha256>`; v2 added the proxy
-  implementation, Token-2022 extensions and more volatile page values, so v1 values were replaced silently):
+- **Fingerprints** (`watch/fingerprint.ts`, stored versioned as `<kind>:v3:<sha256>`; v2 added the proxy
+  implementation, Token-2022 extensions and more volatile page values; v3 the ZeppelinOS and PROXIABLE implementation
+  slots, the issue / mintTo mint selectors and an unknown mint for an unresolved proxy. Older values are replaced
+  silently, never an alert):
   - site → the root page of the address people checked (the latest check's input gives scheme and port; else
     `https://<domain>/`), fetched with `sources.http` and `guard: true` (SSRF guard, 15 s, 1.5 MB). Hashed is the page's
     title, meta / Open Graph description and visible text after `watch/normalise.ts`: scripts, styles, templates, SVG,

@@ -15,7 +15,9 @@
  *  - Chromium runs with its own sandbox (chromiumSandbox: true): no --no-sandbox anywhere in the process tree and
  *    every renderer under seccomp-bpf (Seccomp: 2 in /proc/<pid>/status);
  *  - Chromium gets an explicit minimal environment, never this process's variables;
- *  - a context created without a proxy fails closed (the launch-level proxy is a dead port).
+ *  - a context created without a proxy fails closed (the launch-level proxy is a dead port);
+ *  - Playwright's HTTP side answers only GET / (never GET /json, which tells anyone BROWSER_WS_PATH; hidingWsPath).
+ * Who may connect to the port at all (the app user and root) is browser-firewall.nft's job.
  *
  * It depends only on playwright-core (installed next to it in /opt/apecheck-browser by deploy/browser/install.sh,
  * the exact version apps/worker pins) and reads only its own environment (/etc/apecheck/browser.env):
@@ -219,6 +221,38 @@ function sandboxProblems(tree, { requireRenderer = true } = {}) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+/**
+ * Run `launch` (chromium.launchServer) with every HTTP server it creates answering plain requests for `/` only, and
+ * resolve to { result, servers }: its result and how many servers got that filter (Playwright creates exactly one).
+ * Playwright answers GET /json with { wsEndpointPath }, i.e. BROWSER_WS_PATH, to anything that connects
+ * (playwright-core lib/remote/playwrightServer.js), and chromium.connect('http://127.0.0.1:9223') uses just that to
+ * find the endpoint. Nothing of ours needs it: worker-checks connects to the full ws:// endpoint (a WebSocket upgrade,
+ * which Playwright matches against the path and which this leaves alone) and the doctor only fetches GET /.
+ */
+async function hidingWsPath(launch) {
+  const http = require('node:http');
+  const createServer = http.createServer;
+  let servers = 0;
+  http.createServer = (...args) => {
+    const i = args.findIndex(a => typeof a === 'function');
+    if (i >= 0) {
+      const onRequest = args[i];
+      args[i] = function (req, res) {
+        if (req.url === '/') return onRequest.call(this, req, res);
+        res.statusCode = 404;
+        res.end();
+      };
+      servers++;
+    }
+    return createServer(...args);
+  };
+  try {
+    return { result: await launch(), servers };
+  } finally {
+    http.createServer = createServer;
+  }
+}
+
 function launchOptions(home) {
   return {
     headless: true,
@@ -271,7 +305,13 @@ async function main() {
   const probe = await probeSandbox(chromium, home);
   if (probe.problems.length) throw new Error(`Chromium sandbox self-check failed: ${probe.problems.join('; ')}`);
 
-  const server = await chromium.launchServer({ ...launchOptions(home), host: '127.0.0.1', port: cfg.port, wsPath: `/${cfg.wsPath}` });
+  const { result: server, servers } = await hidingWsPath(() =>
+    chromium.launchServer({ ...launchOptions(home), host: '127.0.0.1', port: cfg.port, wsPath: `/${cfg.wsPath}` }),
+  );
+  if (servers !== 1) {
+    await server.close().catch(() => undefined);
+    throw new Error(`Playwright created ${servers} HTTP servers for launchServer, not the 1 whose GET /json browser-host.cjs hides (it tells anyone who connects BROWSER_WS_PATH): update hidingWsPath for this Playwright version`);
+  }
   const browserPid = server.process().pid;
   const check = () => sandboxProblems(processTree(browserPid), { requireRenderer: false });
   const first = check();
@@ -319,6 +359,7 @@ module.exports = {
   reachablePorts,
   processTree,
   sandboxProblems,
+  hidingWsPath,
   main,
 };
 

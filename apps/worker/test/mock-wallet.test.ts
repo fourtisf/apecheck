@@ -4,10 +4,13 @@
  * context.route guard refusing private / non-http targets.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { PUBLIC_EVM_RPC, type HttpRequest } from '@apecheck/sources';
 import { BrowserHost, type BrowseSession } from '../src/browser/browser';
-import { BURNER_EVM, BURNER_SOL, base58, chainFromHex, evmChainIdHex } from '../src/browser/mock-wallet';
+import { BURNER_EVM, BURNER_SOL, WalletRecorder, base58, chainFromHex, evmChainIdHex } from '../src/browser/mock-wallet';
+import { readRpcFor } from '../src/pipeline/browse';
 import { serveFixture, testLookup, type FixtureSite } from './fixture-server';
-import { testEnv } from './helpers';
+import { fakeSources } from './fakes';
+import { standaloneRun, testEnv } from './helpers';
 
 let host: BrowserHost;
 let site: FixtureSite;
@@ -111,6 +114,43 @@ describe('mock wallet', () => {
     const tx = session.wallet.txs.at(-1)!;
     expect(session.wallet.txs.length).toBe(before + 1);
     expect(tx.evm).toMatchObject({ to: null, data: null });
+  });
+});
+
+describe("the wallet's read RPC", () => {
+  /** a check run whose http records every JSON-RPC call and answers it with `0x10` */
+  function readsVia(over: Record<string, string> = {}) {
+    const env = testEnv(over);
+    const calls: { url: string; method: string }[] = [];
+    const sources = fakeSources(env);
+    sources.http = {
+      ...sources.http,
+      json: async <T>(url: string, req: HttpRequest = {}) => {
+        calls.push({ url, method: (JSON.parse(String(req.body)) as { method: string }).method });
+        return { jsonrpc: '2.0', id: 1, result: '0x10' } as T;
+      },
+    };
+    return { run: standaloneRun({ env, sources, browser: null }).run, calls };
+  }
+
+  it('falls back to the public RPC of the chain when RPC_* is empty, like the EVM adapter', async () => {
+    const { run, calls } = readsVia();
+    // what a dApp's own eth_blockNumber / eth_getCode through the test wallet goes through
+    const wallet = new WalletRecorder({ readRpc: readRpcFor(run) });
+    expect(await wallet.handle({ kind: 'evm', read: true, method: 'eth_blockNumber', chainId: '0x2105', params: [] })).toEqual({ result: '0x10' });
+    expect(await wallet.handle({ kind: 'evm', read: true, method: 'eth_getCode', chainId: '0xa4b1', params: [BURNER_EVM, 'latest'] })).toEqual({ result: '0x10' });
+    expect(calls).toEqual([
+      { url: PUBLIC_EVM_RPC.base, method: 'eth_blockNumber' },
+      { url: PUBLIC_EVM_RPC.arb, method: 'eth_getCode' },
+    ]);
+    // a chain with neither a configured nor a public RPC is still refused
+    expect(await wallet.handle({ kind: 'evm', read: true, method: 'eth_call', chainId: '0x7a69', params: [] })).toEqual({ error: 'no RPC for this chain' });
+  });
+
+  it('a configured RPC_* wins over the public one', async () => {
+    const { run, calls } = readsVia({ RPC_BASE: 'https://base.example/KEY' });
+    await readRpcFor(run)('0x2105', 'eth_blockNumber', []);
+    expect(calls.map(c => c.url)).toEqual(['https://base.example/KEY']);
   });
 });
 

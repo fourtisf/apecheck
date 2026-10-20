@@ -1,7 +1,7 @@
 /**
  * run(checkId): the whole check (HANDOFF §4). Stage A..E run under the CHECK_BUDGET_SECONDS budget,
  * each with its own timeout; Stage F always runs so every check ends DONE (or FAILED on an
- * unrecoverable error) with a final step and a `done` message.
+ * unrecoverable error, or when our own browser failed before the site answered) with a final step and a `done` message.
  */
 import {
   LIVE_CHANNEL,
@@ -15,7 +15,7 @@ import {
 } from '@apecheck/core';
 import type { Prisma } from '@apecheck/db';
 import { heuristicClaims } from '../ai/heuristic';
-import { browseStage } from './browse';
+import { BrowserUnavailable, browseStage } from './browse';
 import { claimsInput, claimsStage } from './claims';
 import { CheckRun, type PipelineDeps } from './context';
 import { coinAfterStage, coinFactsFor, evidenceStage } from './evidence';
@@ -163,8 +163,11 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
     steps.setProgress(0.05);
     interrupted();
 
-    // B — browse
-    await browseStage(run);
+    // B — browse (our browser failing before the site answered ends the check FAILED; an interruption still wins)
+    await browseStage(run).catch(e => {
+      interrupted();
+      throw e;
+    });
     interrupted();
 
     // C — claims
@@ -214,7 +217,7 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
       log.warn('run stopped: another run of this check took over');
       return { status: 'skipped', checkId };
     }
-    const message = e instanceof CheckInterrupted || e instanceof UnrecoverableError ? e.message : 'The check hit an error and could not finish';
+    const message = e instanceof CheckInterrupted || e instanceof UnrecoverableError || e instanceof BrowserUnavailable ? e.message : 'The check hit an error and could not finish';
     // the raw error (paths, code frames, database messages) goes to the log only, never into the public Check.error
     log.error('check failed', e);
     const marked = await failCheck(deps, row, steps, startedAt, message, owner);

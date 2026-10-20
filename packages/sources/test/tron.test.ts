@@ -80,6 +80,43 @@ describe('Tron adapter', () => {
     expect(await createTron(testEnv(), fakeHttp(trongrid({}, roles))).tokenInfo(USDT)).toMatchObject({ owner: null, ownerRenounced: null, hasMintFunction: false });
   });
 
+  it("USDT's issue(uint256) is a mint function: an active owner can still mint", async () => {
+    const contract = { ...fixture<Record<string, unknown>>('tron-getcontract.json'), bytecode: '6080604052' + '6318160ddd' + '63a9059cbb' + '63cc872b66' + '638da5cb5b' + '00' };
+    const info = await createTron(testEnv(), fakeHttp(trongrid({ 'owner()': '0x' + word(OWNER_HEX) }, contract))).tokenInfo(USDT);
+    expect(info).toMatchObject({ hasMintFunction: true, ownerRenounced: false });
+  });
+
+  it('name/symbol/decimals/totalSupply TronGrid did not run are reported (same shape, values unknown)', async () => {
+    const rest = trongrid({ 'owner()': '0x' + word(OWNER_HEX), 'decimals()': encUint(6) });
+    const http = fakeHttp((url, req, body) => {
+      const sel = (body as { function_selector?: string })?.function_selector;
+      if (sel === 'name()' || sel === 'totalSupply()') return { status: 429, json: { Error: 'request rate exceeded the allowed_rps' } };
+      if (sel === 'symbol()') return { json: { result: { code: 'SERVER_BUSY', message: '' } } };
+      return rest(url, req, body);
+    });
+    const tron = createTron(testEnv(), http);
+    const { value, errors } = await captureErrors(() => tron.tokenInfo(USDT));
+    expect(value).toMatchObject({ name: 'KairoTRC20', symbol: null, decimals: 6, totalSupply: null, owner: tronFromHex(OWNER_HEX) });
+    expect(errors.sort()).toEqual([
+      'tron.tokenInfo name: HTTP 429 from api.trongrid.io',
+      'tron.tokenInfo symbol: TronGrid did not run symbol() (SERVER_BUSY)',
+      'tron.tokenInfo totalSupply: HTTP 429 from api.trongrid.io',
+    ]);
+    expect(tron.lastError).toMatch(/^tron\.tokenInfo /);
+  });
+
+  it('a proxy (DELEGATECALL, no ERC-20 functions of its own): mint function unknown, not "none"', async () => {
+    const contract = { ...fixture<Record<string, unknown>>('tron-getcontract.json'), bytecode: '6080604052' + '635c60da1b' + '633659cfe6' + '00' + '5af43d6000803e3d6000f3' };
+    const info = await createTron(testEnv(), fakeHttp(trongrid({ 'owner()': '0x' + word(OWNER_HEX) }, contract))).tokenInfo(USDT);
+    expect(info).toMatchObject({ hasMintFunction: null, ownerRenounced: false });
+  });
+
+  it('a reverted name()/symbol() is an answer, not a failure: nothing reported', async () => {
+    const { value, errors } = await captureErrors(() => createTron(testEnv(), fakeHttp(trongrid({ 'owner()': '0x' + word(OWNER_HEX) }))).tokenInfo(USDT));
+    expect(errors).toEqual([]);
+    expect(value).toMatchObject({ name: 'KairoTRC20', symbol: null, decimals: null, totalSupply: null });
+  });
+
   describe('owner() TronGrid did not run is a failed read, never "no owner()"', () => {
     const noOwnerCode = { ...fixture<Record<string, unknown>>('tron-getcontract.json'), bytecode: '6080604052636fdde0314' };
     /** owner() answered by `reply`, the rest as a plain TRC-20 */

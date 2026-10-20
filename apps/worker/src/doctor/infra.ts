@@ -3,8 +3,8 @@
  * fetch, the guard proxy's egress, the isolated browser host, and a page load from that browser through worker-checks'
  * guard.
  *
- * The browser probes never listen on BROWSER_GUARD_PORT: worker-checks owns that port and starts its guard there on
- * its first website check, so a doctor holding it would make worker-checks' next browser launch fail with EADDRINUSE
+ * The browser probes never listen on BROWSER_GUARD_PORT: worker-checks owns that port and starts its guard there when
+ * it starts (again on the next check after a failed browser launch), so a doctor holding it would make worker-checks' next browser launch fail with EADDRINUSE
  * (every check: "browse:unavailable"). They connect to the browser host as one more client instead: Playwright keeps
  * each connection's contexts apart, and close() from a client only ends that client's connection.
  */
@@ -317,8 +317,8 @@ export async function probeBrowserGuard(
   const guardUrl = `http://127.0.0.1:${port}`;
   if (!(await (deps.portOpen ?? portOpen)(port))) {
     return warn(
-      `nothing listens on 127.0.0.1:${port} yet: worker-checks starts its guard there on its first website check (or its last browser launch failed); the doctor never starts one there`,
-      `run one website check, then pnpm diagnose again; if it stays closed: ${BROWSER_GUARD_REMEDY}`,
+      `nothing listens on 127.0.0.1:${port}: worker-checks starts its guard there when it starts, so it is down or its browser launch failed; the doctor never starts one there`,
+      `look for "browser is unusable" in pm2 logs worker-checks and at the Browser host row; then: ${BROWSER_GUARD_REMEDY}`,
     );
   }
   let browser: Browser;
