@@ -6,6 +6,7 @@ import { narBand, type CheckReportDTO } from '@apecheck/core';
 import { ReportView } from '@/components/report/ReportView';
 import { isApiError, report } from '@/lib/api';
 import { reportPath } from '@/lib/env';
+import { DEFAULT_OG_IMAGE } from '@/lib/og';
 import { serverCall } from '@/lib/server-api';
 
 // a running check changes every second, a finished one when notes, asks or prices change
@@ -53,14 +54,15 @@ export async function generateMetadata({ params }: { params: { id: string } }): 
       url: path,
       title: `${title} · ApeCheck`,
       description,
-      images: done ? [{ url: image, width: 1200, height: 675, alt: `${r.name}: ${title.split(' — ')[1]}` }] : undefined,
+      // no verdict card yet: the site's preview, not an empty image box
+      images: done ? [{ url: image, width: 1200, height: 675, alt: `${r.name}: ${title.split(' — ')[1]}` }] : [DEFAULT_OG_IMAGE],
     },
     twitter: {
       card: 'summary_large_image',
       site: '@ApeCheckBot',
       title: `${title} · ApeCheck`,
       description,
-      images: done ? [image] : undefined,
+      images: done ? [image] : [DEFAULT_OG_IMAGE.url],
     },
   };
 }

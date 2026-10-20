@@ -5,11 +5,12 @@
  * - a dark-theme visitor stays dark on an unknown /c/<id> (Next's client-rendered 404 shell) and after it;
  * - a check that stopped before a verdict opens on the Agent run, and its tabs don't claim conclusions;
  * - /bot shows a site check only as a captioned illustration, and a real thread only for a posted bot reply;
- * - the header fits from 1001 to 1240px, and the segmented controls fit a phone.
+ * - the header fits from 1001 to 1240px, and the segmented controls fit a phone;
+ * - every page gives X a link-preview image: a finished report its verdict card, any other page the site's preview.
  */
 import type { Browser, Page } from 'playwright';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
-import { COINS, DEPLOYERS, POST_CHECK, BOT_CHECK, FAILED_CHECK, clearBotReply, seedBotReply } from './seed';
+import { COINS, DEPLOYERS, POST_CHECK, BOT_CHECK, FAILED_CHECK, SITES, clearBotReply, seedBotReply } from './seed';
 import { WEB_URL, flushRedis, openDb, playwright } from './env';
 
 let browser: Browser;
@@ -278,5 +279,27 @@ describe('layout', () => {
         await page.close();
       }
     }
+  });
+});
+
+describe('link previews', () => {
+  /** The og:image and twitter:image of a page, as paths (metadataBase names the public host). */
+  async function previewImages(path: string) {
+    const html = await (await fetch(WEB_URL + path)).text();
+    const meta = (attr: string, key: string) => html.match(new RegExp(`<meta ${attr}="${key}" content="([^"]+)"`))?.[1];
+    const pathOf = (url?: string) => (url ? new URL(url).pathname : null);
+    return { og: pathOf(meta('property', 'og:image')), twitter: pathOf(meta('name', 'twitter:image')) };
+  }
+
+  it("a finished report shows its verdict card; every other page, a report without a verdict included, the site's preview", async () => {
+    for (const path of ['/', '/coins', '/bot', `/c/${FAILED_CHECK.id}`]) {
+      expect(await previewImages(path), path).toEqual({ og: '/og.png', twitter: '/og.png' });
+    }
+    const card = `/card/${SITES[0].id}.png`;
+    expect(await previewImages(`/c/${SITES[0].id}`)).toEqual({ og: card, twitter: card });
+
+    const img = await fetch(WEB_URL + '/og.png');
+    expect(img.status).toBe(200);
+    expect(img.headers.get('content-type')).toBe('image/png');
   });
 });

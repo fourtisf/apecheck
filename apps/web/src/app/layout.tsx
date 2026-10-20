@@ -5,6 +5,7 @@ import { Footer } from '@/components/Footer';
 import { Header } from '@/components/Header';
 import { me } from '@/lib/api';
 import { APP_URL } from '@/lib/env';
+import { DEFAULT_OG_IMAGE } from '@/lib/og';
 import { orNull, serverCall } from '@/lib/server-api';
 import { THEME_COLOR, THEME_SCRIPT } from '@/lib/theme';
 import './globals.css';
@@ -17,8 +18,14 @@ export const metadata: Metadata = {
   // pages set `title: 'Coins'` and get "Coins · ApeCheck"
   title: { default: 'ApeCheck — real build or LARP?', template: '%s · ApeCheck' },
   description: DESCRIPTION,
-  openGraph: { siteName: 'ApeCheck', title: 'ApeCheck — real build or LARP?', description: DESCRIPTION, type: 'website' },
-  twitter: { card: 'summary_large_image', site: '@ApeCheckBot' },
+  openGraph: {
+    siteName: 'ApeCheck',
+    title: 'ApeCheck — real build or LARP?',
+    description: DESCRIPTION,
+    type: 'website',
+    images: [DEFAULT_OG_IMAGE],
+  },
+  twitter: { card: 'summary_large_image', site: '@ApeCheckBot', images: [DEFAULT_OG_IMAGE.url] },
 };
 
 export const viewport: Viewport = {

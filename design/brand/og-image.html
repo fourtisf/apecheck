@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+  Source of apps/web/public/og.png, the site's default link preview (1200×630). X lays the page title over the
+  bottom-left corner of the image, so nothing sits there. Render: open in Chromium at 1200×630 and screenshot .card.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ApeCheck link preview</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;800&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;background:#000}
+.card{position:relative;width:1200px;height:630px;overflow:hidden;color:#F4F4F5;font-family:'Plus Jakarta Sans',sans-serif;
+  background:radial-gradient(760px 600px at 960px 300px,#1B1D22 0%,#101115 45%,#0B0C0F 78%)}
+.mono{font-family:'Geist Mono',monospace;text-transform:uppercase}
+.ghost{position:absolute;left:720px;top:-30px;width:690px;height:690px;opacity:.05}
+.lock{position:absolute;left:72px;top:62px;display:flex;align-items:center;gap:16px}
+.lock svg{width:58px;height:58px}
+.lock span{font-weight:800;font-size:40px;letter-spacing:-.04em;line-height:1}
+.url{position:absolute;right:72px;top:84px;font-size:16px;letter-spacing:.2em;color:#8A8F98}
+h1{position:absolute;left:68px;top:178px;margin:0;font-weight:800;font-size:94px;line-height:1.02;letter-spacing:-.04em}
+h1 span{color:#6E737C}
+h1 em{font-style:normal;margin-left:-.07em}
+p{position:absolute;left:72px;top:408px;margin:0;width:640px;font-weight:500;font-size:26px;line-height:1.42;letter-spacing:-.005em;color:#9A9FA8}
+.scale{position:absolute;right:72px;bottom:62px;display:flex;align-items:center;gap:18px;font-size:14px;letter-spacing:.18em;color:#5C6169}
+.scale b{font-weight:500;color:#F4F4F5}
+.scale i{display:block;width:4px;height:4px;border-radius:50%;background:#3A3D44}
+</style>
+</head>
+<body>
+<div class="card">
+  <svg class="ghost" viewBox="0 0 64 64" aria-hidden="true"><defs><mask id="g"><rect width="64" height="64" fill="black"/><g fill="white"><circle cx="10" cy="34" r="7.5"/><circle cx="54" cy="34" r="7.5"/><circle cx="32" cy="32.5" r="22"/></g><g fill="black"><circle cx="24.5" cy="29" r="9"/><circle cx="39.5" cy="29" r="9"/><ellipse cx="32" cy="41.5" rx="15.5" ry="10"/></g><g fill="white"><circle cx="25.3" cy="28.2" r="3.6"/><circle cx="40.3" cy="28.2" r="3.6"/></g><path d="M25.4 42.4l4.5 4 9-7.8" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></mask></defs><rect width="64" height="64" fill="#FFFFFF" mask="url(#g)"/></svg>
+  <div class="lock">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><defs><mask id="m"><rect width="64" height="64" fill="black"/><g fill="white"><circle cx="10" cy="34" r="7.5"/><circle cx="54" cy="34" r="7.5"/><circle cx="32" cy="32.5" r="22"/></g><g fill="black"><circle cx="24.5" cy="29" r="9"/><circle cx="39.5" cy="29" r="9"/><ellipse cx="32" cy="41.5" rx="15.5" ry="10"/></g><g fill="white"><circle cx="25.3" cy="28.2" r="3.6"/><circle cx="40.3" cy="28.2" r="3.6"/></g><path d="M25.4 42.4l4.5 4 9-7.8" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></mask></defs><rect width="64" height="64" fill="#F4F4F5" mask="url(#m)"/></svg>
+    <span>apecheck</span>
+  </div>
+  <div class="url mono">apecheck.io</div>
+  <h1>Know what's real<br><span>before you ape<em>.</em></span></h1>
+  <p>An agent tests every claim against the code, the chain and X, and stamps a verdict with the evidence.</p>
+  <div class="scale mono"><b>Real</b><i></i>Likely real<i></i>Partly real<i></i>Likely LARP<i></i>LARP</div>
+</div>
+</body>
+</html>
