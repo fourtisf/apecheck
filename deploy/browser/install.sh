@@ -36,7 +36,8 @@ PW_VERSION="$(node -p 'require(require("node:path").resolve(process.argv[1])).de
 
 # the guard port the firewall allows must be the one worker-checks listens on
 FW_GUARD_PORT="$(grep -oE 'tcp dport [0-9]+ accept' "$SRC/browser-firewall.nft" | grep -oE '[0-9]+')"
-ENV_GUARD_PORT="$(grep -E '^BROWSER_GUARD_PORT=' "$APP_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+# (strip an inline "  # comment" the way dotenv does: .env.example has one on this line)
+ENV_GUARD_PORT="$(grep -E '^BROWSER_GUARD_PORT=' "$APP_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//' | tr -d '[:space:]' || true)"
 [[ -z "$ENV_GUARD_PORT" || "$ENV_GUARD_PORT" == "$FW_GUARD_PORT" ]] ||
   die "BROWSER_GUARD_PORT=$ENV_GUARD_PORT in .env but browser-firewall.nft allows $FW_GUARD_PORT; make them match"
 

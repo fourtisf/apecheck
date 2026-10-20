@@ -33,11 +33,10 @@ Nginx terminates TLS: `apecheck.io` → `:3000`, `api.apecheck.io` → `:4000` (
 sudo apt-get update && sudo apt-get -y upgrade
 sudo apt-get install -y curl git build-essential ca-certificates gnupg ufw
 
-# Node 20 LTS
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# Node 22 LTS (HANDOFF §12 says Node 20, which reached end-of-life in April 2026; everything is tested on 22)
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo corepack enable
-sudo corepack prepare pnpm@10.28.0 --activate
+sudo npm install -g pnpm@10.28.0
 
 # PostgreSQL 16, Redis 7, Nginx, certbot, rclone (backups), nftables + AppArmor (browser isolation, §6)
 sudo apt-get install -y postgresql-16 redis-server nginx certbot python3-certbot-nginx rclone nftables apparmor
@@ -72,13 +71,20 @@ sudo chmod 0750 /srv/apecheck /var/apecheck /var/log/apecheck /var/backups/apech
 
 ## 3. Code and `.env`
 
+The repository is private, so the server reads it with a read-only deploy key:
+
 ```bash
-sudo -u apecheck -i
-git clone https://github.com/fourtisf/apecheck.git /srv/apecheck/app
+sudo -u apecheck mkdir -p -m 700 /srv/apecheck/.ssh
+sudo -u apecheck ssh-keygen -t ed25519 -N "" -C "apecheck-vps" -f /srv/apecheck/.ssh/id_ed25519
+cat /srv/apecheck/.ssh/id_ed25519.pub
+# GitHub → fourtisf/apecheck → Settings → Deploy keys → Add deploy key: paste it, leave "Allow write access" off
+sudo -u apecheck ssh -o StrictHostKeyChecking=accept-new -T git@github.com   # "Hi fourtisf/apecheck! ..."
+
+sudo -u apecheck git clone git@github.com:fourtisf/apecheck.git /srv/apecheck/app   # add -b <branch> to deploy a branch
 cd /srv/apecheck/app
-cp .env.example .env
-nano .env        # fill in the values (see step 4 for DATABASE_URL)
-chmod 600 .env
+sudo -u apecheck cp .env.example .env
+sudo -u apecheck chmod 600 .env
+sudo -u apecheck nano .env        # fill in the values (see step 4 for DATABASE_URL)
 ```
 
 Every process (PM2 apps, the Prisma CLI, the web build) reads this `.env` and it wins over the shell's variables.

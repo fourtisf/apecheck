@@ -8,8 +8,8 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "dev": "pnpm -r --parallel --filter ./apps/** dev",
-    "build": "pnpm -r --filter ./packages/** --filter ./apps/** build",
+    "dev": "pnpm -r --parallel --filter \"./apps/*\" dev",
+    "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r --if-present test",
     "lint": "pnpm -r --if-present lint",

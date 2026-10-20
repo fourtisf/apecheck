@@ -12,8 +12,10 @@ BACKUP_DIR="${BACKUP_DIR:-/var/backups/apecheck}"
 KEEP_LOCAL_DAYS="${KEEP_LOCAL_DAYS:-7}"
 
 # DATABASE_URL from the app's .env
-DATABASE_URL="$(grep -E '^DATABASE_URL=' "$APP_DIR/.env" | head -1 | cut -d= -f2-)"
-BACKUP_REMOTE="${BACKUP_REMOTE:-$(grep -E '^BACKUP_REMOTE=' "$APP_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)}"
+# value after the first "=", without an inline "  # comment" (dotenv's rule)
+envval() { grep -E "^$1=" "$APP_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//'; }
+DATABASE_URL="$(envval DATABASE_URL)"
+BACKUP_REMOTE="${BACKUP_REMOTE:-$(envval BACKUP_REMOTE || true)}"
 
 mkdir -p "$BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
