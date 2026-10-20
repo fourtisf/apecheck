@@ -160,6 +160,18 @@ systemctl status apecheck-browser
 journalctl -u apecheck-browser -n 5    # ... ready on ws://127.0.0.1:9223/<BROWSER_WS_PATH> as uid ...; Chromium 141..., sandbox verified
 ```
 
+If `install.sh` stops at `apt-get update failed`, a repository on the server (not ApeCheck's) is broken, e.g.
+`NO_PUBKEY` or `is not signed` for a third-party repository whose signing key changed. Fix its key, or switch it off
+for the install and back on afterwards:
+
+```bash
+for f in $(grep -lE 'packages\.clickhouse\.com|cli\.github\.com' /etc/apt/sources.list.d/* 2>/dev/null); do mv "$f" "$f.apecheck-off"; done
+sudo /srv/apecheck/app/deploy/browser/install.sh
+for f in /etc/apt/sources.list.d/*.apecheck-off; do [ -e "$f" ] && mv "$f" "${f%.apecheck-off}"; done
+```
+
+(Put the hosts `apt-get update` named in the `grep` pattern.)
+
 If the unit keeps restarting, the journal names the failed check: `Chromium sandboxing failed` (AppArmor profile not
 loaded: `sudo aa-status | grep apecheck`), `this user can read ...` (`/srv/apecheck` is not 0750, §2) or
 `can connect to 127.0.0.1:6379` (firewall not loaded: `sudo nft list table inet apecheck_browser`). If worker-checks

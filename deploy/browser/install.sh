@@ -41,6 +41,15 @@ ENV_GUARD_PORT="$(grep -E '^BROWSER_GUARD_PORT=' "$APP_DIR/.env" 2>/dev/null | t
 [[ -z "$ENV_GUARD_PORT" || "$ENV_GUARD_PORT" == "$FW_GUARD_PORT" ]] ||
   die "BROWSER_GUARD_PORT=$ENV_GUARD_PORT in .env but browser-firewall.nft allows $FW_GUARD_PORT; make them match"
 
+# Playwright's --with-deps (step 2) runs apt-get; a broken third-party repository fails it with only "exit code 100"
+apt_log="$(mktemp)"
+if ! apt-get update >"$apt_log" 2>&1; then
+  grep -E '^(E|W):' "$apt_log" >&2 || cat "$apt_log" >&2
+  rm -f "$apt_log"
+  die "apt-get update failed (above), and Chromium's system libraries come from apt. Fix or switch off the repositories it names (DEPLOY.md §6), then re-run"
+fi
+rm -f "$apt_log"
+
 echo "== 1. user $BROWSER_USER"
 id -u "$BROWSER_USER" >/dev/null 2>&1 ||
   adduser --system --group --no-create-home --home /nonexistent --shell /usr/sbin/nologin "$BROWSER_USER"
