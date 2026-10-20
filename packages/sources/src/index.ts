@@ -22,6 +22,7 @@ export {
 } from './ssrf';
 export { createHttp, HttpError, USER_AGENT, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_BYTES, MAX_REDIRECTS, type HttpEnv, type HttpOptions } from './http';
 export { captureErrors, reportError, TimeoutError } from './util';
+export { jsonRpc, RpcError } from './rpc';
 export { coinFacts, solanaAuthorityText, contractAuthorityText, contractMintRenounced, SOLANA_AMM_AUTHORITIES, type CoinFactsDeps } from './coin-facts';
 export { createDexScreener, DexScreenerAdapter } from './adapters/dexscreener';
 export {
@@ -31,7 +32,7 @@ export {
 export { createSolana, SolanaAdapter, SOL_READ_METHODS, SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM, solanaRpcUrl } from './adapters/solana';
 export { toUnits } from './util';
 export { base58Decode, base58Encode } from './base58';
-export { createTron, TronAdapter } from './adapters/tron';
+export { createTron, TronAdapter, TRONGRID_BASE } from './adapters/tron';
 export { createGitHub, GitHubAdapter, parseGitHubRef } from './adapters/github';
 export { createX, XAdapter, X_REPLY_EXCLUDE_MAX, type XOptions } from './adapters/x';
 export { signRequest, oauth1Header, percentEncode, type OAuth1Credentials, type OAuth1Request } from './oauth1';

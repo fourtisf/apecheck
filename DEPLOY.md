@@ -190,6 +190,46 @@ pm2 startup systemd -u apecheck --hp /srv/apecheck
 
 Check: `pm2 ls` (all five `online`), `pm2 logs --lines 50`, `curl -s localhost:4000/health`, `curl -sI localhost:3000`.
 
+### Doctor: check every dependency (read-only)
+
+Once PM2 is up, and again after every change to `.env`, run the doctor (`pnpm diagnose`) as `apecheck`:
+
+```bash
+sudo -iu apecheck
+cd /srv/apecheck/app && pnpm diagnose
+```
+
+The doctor loads the same `.env` as the workers. It prints the AI mode worker-checks will use (`claude` or
+`heuristic`) and the host each chain's RPC points at, then one row per dependency, each probed with the code a check
+runs:
+
+- Postgres (pending migrations) and Redis (which workers listen on each queue);
+- a website fetch through the SSRF guard, the guard's own DNS and egress, the browser host, and a page loaded by the
+  browser through worker-checks' guard;
+- both AI models (`AI_MODEL_JUDGE`, `AI_MODEL_FAST`), each with one small real call; the two calls together cost well
+  under one cent;
+- each EVM RPC (chain id, latest block, and one known token decoded by the same adapter), Robinhood Chain when
+  configured, Etherscan, Solana, TronGrid, DexScreener and GitHub (with its remaining rate limit);
+- X reads (the Bearer token), the X bot's OAuth 1.0a keys (a signed `GET /2/users/me`; it never posts) and Fourtis.
+
+| Status | Meaning |
+|---|---|
+| `PASS` | configured, and it answers as a check needs |
+| `WARN` | it works, but on a keyless or public fallback or only partly; or a recommended key is empty, so that part of every check is skipped |
+| `FAIL` | a request was made and failed, or required infrastructure is missing |
+| `SKIP` | an optional service that is not configured |
+
+Every row that is not `PASS` has a `fix:` line that names the variable to set and where to get the key. The command
+exits 1 when any row is `FAIL`.
+
+The doctor writes nothing: no database rows, no queue jobs and no posts. Its output shows hosts only, with keys,
+passwords and the browser endpoint's path redacted. It never listens on `BROWSER_GUARD_PORT`. worker-checks starts
+its guard there when it opens its first website, so until then "Browser via guard" is `WARN`. In that case run one
+website check, then run the doctor again.
+
+A check that ends `partly` within a second or two usually matches a non-PASS row here. Common causes are an X post or
+profile checked without `X_BEARER_TOKEN`, a site the browser could not open, or chain RPCs the VPS cannot reach.
+
 ## 7. DNS (at the registrar for apecheck.io)
 
 | Type | Name | Value |
@@ -360,3 +400,4 @@ namespace with only the guard port forwarded) instead of the systemd unit; worke
 Every adapter checks its key at startup. Missing ones log one line like
 `[apecheck] WARN X API not configured (X_BEARER_TOKEN empty): ...` and are skipped: the check still finishes, and the affected signal is scored `warn`
 with a log line saying which source was unavailable.
+`pnpm diagnose` (§6) lists every empty key, the fallback used instead, and where to get the key.

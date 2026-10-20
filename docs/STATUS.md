@@ -35,7 +35,9 @@ through the real queue), deploy checks. `pnpm -r typecheck` and `next build` are
 
 - **Not run against live services**: the build sandbox blocked X, DexScreener, every RPC and public websites, and had no
   `ANTHROPIC_API_KEY`. Those adapters are tested against recorded/fake responses; the AI stages ran on the heuristic stand-in.
-  First thing on the VPS: `E2E=1 E2E_TARGET=<a real project site> pnpm e2e`.
+  First thing on the VPS: `pnpm diagnose` (the doctor) as `apecheck` (DEPLOY.md §6 "Doctor"). It writes nothing, probes every
+  dependency with the code a check runs, and prints one row per dependency with what to fix. Then run
+  `E2E=1 E2E_TARGET=<a real project site> pnpm e2e`.
 - **Fourtis (DevRadar, BundleScan, WhaleFlow)**: endpoint paths are placeholders (`packages/sources/src/adapters/fourtis.ts`,
   `FOURTIS_PATHS`) until Michael defines them. Without them, bundle %, LP status, holder split and deployer history are
   "unknown" (scored `warn`, said so in the log). Pro "deep holder clusters" appear only when WhaleFlow returns clusters.

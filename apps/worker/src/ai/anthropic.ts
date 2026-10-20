@@ -53,6 +53,13 @@ export class AiOutputError extends Error {
   }
 }
 
+/**
+ * A key with a line break or another control character (a wrapped paste, a quoted value with \n) cannot go into an
+ * HTTP header: fetch's Headers throws with the whole key in its message, which would end up in logs.
+ */
+export const keyUnusable = (key: string) => /[\x00-\x08\x0a-\x1f\x7f]/.test(key);
+export const KEY_UNUSABLE_TEXT = 'ANTHROPIC_API_KEY contains a line break or another control character: fix its quoting in .env (one line)';
+
 export function describeAiError(e: unknown): string {
   if (e instanceof Anthropic.RateLimitError) return 'rate limited';
   if (e instanceof Anthropic.APIConnectionTimeoutError) return 'request timed out';

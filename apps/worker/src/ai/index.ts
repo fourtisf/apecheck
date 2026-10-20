@@ -5,7 +5,7 @@
  */
 import { warnOnce } from '@apecheck/core/node';
 import type { Env, ExtractedClaim, Judged } from '@apecheck/core';
-import { AnthropicAi, describeAiError, type AnthropicClientLike } from './anthropic';
+import { AnthropicAi, KEY_UNUSABLE_TEXT, describeAiError, keyUnusable, type AnthropicClientLike } from './anthropic';
 import { HeuristicAi } from './heuristic';
 import type { AiAdapter, AiCallCtx, AiStage, AnswerData, BrowserAction, ClaimsInput, ExploreObservation, ExploreState, JudgeInput } from './types';
 
@@ -90,6 +90,10 @@ export class ResilientAi implements AiAdapter {
 export function createAi(env: Env, opts: { client?: AnthropicClientLike } = {}): ResilientAi {
   if (!env.ANTHROPIC_API_KEY && !opts.client) {
     warnOnce('ai-heuristic', 'ANTHROPIC_API_KEY empty: AI stages use the heuristic stand-in');
+    return new ResilientAi(null);
+  }
+  if (env.ANTHROPIC_API_KEY && !opts.client && keyUnusable(env.ANTHROPIC_API_KEY)) {
+    warnOnce('ai-key-unusable', `${KEY_UNUSABLE_TEXT}; AI stages use the heuristic stand-in`);
     return new ResilientAi(null);
   }
   return new ResilientAi(new AnthropicAi(env, { client: opts.client }));
