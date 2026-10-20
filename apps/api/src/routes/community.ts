@@ -50,8 +50,7 @@ export function cleanNoteText(t: string): string {
 const cleanQuestion = (q: string) => q.normalize('NFC').replace(/[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** The check by short id as far as the viewer may see it (404 otherwise). */
-async function viewableCheck(deps: AppDeps, request: FastifyRequest) {
-  const { id } = IdParamsZ.parse(request.params);
+async function viewableCheck(deps: AppDeps, request: FastifyRequest, id: string) {
   if (!SHORT_ID_RE.test(id)) throw new ApiError(404, 'not_found', MSG.notFound);
   const check = await deps.prisma.check.findUnique({
     where: { shortId: id },
@@ -61,29 +60,40 @@ async function viewableCheck(deps: AppDeps, request: FastifyRequest) {
   return check;
 }
 
+/**
+ * A follow-up question about the check `shortId` from the request's viewer (site session, or M4 an API key / the MCP
+ * tool ask_followup). Gates in order: tier (403 pro_required) → question (400) → the check (404, 409 not_ready while it
+ * runs) → limits (429); then the worker answers (asks.ts). `created`: this request asked it (else a repeat within 60 s).
+ */
+export async function askOnCheck(deps: AppDeps, request: FastifyRequest, shortId: string, rawQuestion: unknown): Promise<{ ask: AskDTO; created: boolean }> {
+  const { env, prisma, redis } = deps;
+  const question = typeof rawQuestion === 'string' ? cleanQuestion(rawQuestion) : '';
+  const user = request.viewer.user;
+  const tier = user ? await viewerTier(deps, request) : null;
+  if (!user || !tier || tier.tier === 'free') throw new ApiError(403, 'pro_required', proRequiredMessage(env));
+  if (question.length < QUESTION_MIN || question.length > QUESTION_MAX) throw new ApiError(400, 'bad_request', MSG.askLength);
+  const check = await viewableCheck(deps, request, shortId);
+  if (check.status !== 'DONE') throw new ApiError(409, 'not_ready', MSG.askNotReady);
+  await userBurst(redis, 'asks', user.id);
+
+  const { askId, created } = await askFollowUp(deps, {
+    checkId: check.id,
+    question,
+    userId: user.id,
+    askerHandle: request.viewer.user?.xHandle ?? null,
+  });
+  const ask = await prisma.ask.findUnique({ where: { id: askId }, include: { asker: { select: { evmAddress: true, solAddress: true } } } });
+  if (!ask || ask.checkId !== check.id) throw new ApiError(502, 'ask_failed', MSG.askFailed);
+  return { ask: toAsk(ask), created };
+}
+
 export function registerCommunityRoutes(app: FastifyInstance, deps: AppDeps) {
   const { env, prisma, redis } = deps;
 
   app.post('/v1/checks/:id/asks', rate(COMMUNITY_RATE.asks), async (request, reply): Promise<AskDTO> => {
-    const raw = (request.body as { question?: unknown } | null)?.question;
-    const question = typeof raw === 'string' ? cleanQuestion(raw) : '';
-    const user = request.viewer.user;
-    const tier = user ? await viewerTier(deps, request) : null;
-    if (!user || !tier || tier.tier === 'free') throw new ApiError(403, 'pro_required', proRequiredMessage(env));
-    if (question.length < QUESTION_MIN || question.length > QUESTION_MAX) throw new ApiError(400, 'bad_request', MSG.askLength);
-    const check = await viewableCheck(deps, request);
-    if (check.status !== 'DONE') throw new ApiError(409, 'not_ready', MSG.askNotReady);
-    await userBurst(redis, 'asks', user.id);
-
-    const { askId, created } = await askFollowUp(deps, {
-      checkId: check.id,
-      question,
-      userId: user.id,
-      askerHandle: request.viewer.user?.xHandle ?? null,
-    });
-    const ask = await prisma.ask.findUnique({ where: { id: askId }, include: { asker: { select: { evmAddress: true, solAddress: true } } } });
-    if (!ask || ask.checkId !== check.id) throw new ApiError(502, 'ask_failed', MSG.askFailed);
-    return reply.code(created ? 201 : 200).send(toAsk(ask));
+    const { id } = IdParamsZ.parse(request.params);
+    const { ask, created } = await askOnCheck(deps, request, id, (request.body as { question?: unknown } | null)?.question);
+    return reply.code(created ? 201 : 200).send(ask);
   });
 
   app.post('/v1/checks/:id/notes', rate(COMMUNITY_RATE.notes), async (request, reply): Promise<NoteDTO> => {
@@ -94,7 +104,7 @@ export function registerCommunityRoutes(app: FastifyInstance, deps: AppDeps) {
     const tier = await viewerTier(deps, request);
     if (!tier?.holder) throw new ApiError(403, 'holders_only', holdersOnlySignedIn(env));
     if (text.length < NOTE_MIN || text.length > NOTE_MAX) throw new ApiError(400, 'bad_request', MSG.noteLength);
-    const check = await viewableCheck(deps, request);
+    const check = await viewableCheck(deps, request, IdParamsZ.parse(request.params).id);
     if (check.status !== 'DONE') throw new ApiError(409, 'not_ready', MSG.noteNotReady);
     await userBurst(redis, 'notes', user.id);
 

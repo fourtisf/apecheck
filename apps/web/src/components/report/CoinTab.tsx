@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Fragment } from 'react';
 import { REP, cap, coinBand, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { cssVars } from '../css';
 import { Dot, Facts, Unknown, noVerdict, type FactRow } from './util';
@@ -171,6 +172,56 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
   ];
 }
 
+export type HolderCluster = NonNullable<CoinFactsDTO['clusters']>[number];
+
+/** A cluster's common funder: a wallet address in mono (shortened), a name ("Binance hot wallet") as written. */
+function Funder({ from }: { from: string }) {
+  const address = !/\s/.test(from) && from.length > 20;
+  return address ? (
+    <span className="mono" title={from}>
+      {short(from)}
+    </span>
+  ) : (
+    <>{from}</>
+  );
+}
+
+/**
+ * M4, Pro/Max: "deep holder clusters" from WhaleFlow, in the facts style: the cluster, the share of supply it holds,
+ * how many wallets and where they were funded from. The API sends them to Pro/Max viewers only.
+ */
+export function Clusters({ items }: { items: HolderCluster[] }) {
+  return (
+    <div className="clusters">
+      <h4 className="h4">
+        Wallet clusters <span className="lock">Pro</span>
+      </h4>
+      <p className="muted" style={{ margin: '-6px 0 4px', fontSize: 13.5 }}>
+        Wallets funded from the same source, counted together.
+      </p>
+      <dl className="facts">
+        {items.map((c, i) => (
+          <Fragment key={i}>
+            <dt>{c.label}</dt>
+            <dd>
+              {r1(c.pct)}% of supply
+              <small>
+                {c.wallets} wallet{c.wallets === 1 ? '' : 's'}
+                {c.fundedFrom ? (
+                  <>
+                    , funded from <Funder from={c.fundedFrom} />
+                  </>
+                ) : null}
+              </small>
+            </dd>
+            <dd className="src">WhaleFlow</dd>
+          </Fragment>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 /** tabCoin(): coin score, who holds the supply, and the on-chain facts with their sources. */
 export function CoinTab({ report: r }: { report: CheckReportDTO }) {
   if (!r.hasCoin && noVerdict(r)) {
@@ -213,6 +264,7 @@ export function CoinTab({ report: r }: { report: CheckReportDTO }) {
           The coin facts weren&apos;t available for this check.
         </p>
       )}
+      {f?.clusters?.length ? <Clusters items={f.clusters} /> : null}
     </>
   );
 }

@@ -374,8 +374,14 @@ export interface WhaleFlowFacts {
   holders: number | null;
   lp?: { status: 'burned' | 'locked' | 'unlocked'; lockedDays?: number | null } | null;
   /** M4: wallet clusters (groups funded from one source), when WhaleFlow provides them */
-  clusters?: { label: string; wallets: number; pct: number; fundedFrom: string | null }[] | null;
+  clusters?: HolderCluster[] | null;
 }
+/**
+ * M4 (Pro/Max "deep holder clusters"): one group of holder wallets WhaleFlow ties together (funded from the same
+ * source). `pct` = % of supply the group holds, `wallets` = how many wallets. Placeholder shape until the real
+ * WhaleFlow feed lands (adapters/fourtis.ts WhaleClusterZ).
+ */
+export interface HolderCluster { label: string; wallets: number; pct: number; fundedFrom: string | null }
 export interface FourtisSource {
   configured: boolean;
   /** last non-fatal error (also reported to the current captureErrors() scope) */
@@ -421,6 +427,11 @@ export interface CoinRawFacts {
     source: FactSource;
   } | null;
   market: DexTokenInfo | null;
+  /**
+   * M4: WhaleFlow's holder clusters, largest first. Only present when WhaleFlow answered with at least one valid
+   * cluster: never filled from a fallback, never empty (nothing to store), never invented.
+   */
+  clusters?: HolderCluster[];
   /** adapters that ran as stubs for this coin, e.g. ["fourtis", "helius"] */
   stubbed: string[];
   /** non-fatal errors, e.g. ["bundleScan: timeout"] */

@@ -48,7 +48,33 @@ export const MSG = {
   targetNotFound: "This project hasn't been checked yet.",
   watchlistFull: 'Your watchlist is full. Remove a project to add another.',
   signInForAlerts: 'Sign in with a wallet to see your alerts.',
+  // M4: API keys, webhooks, MCP
+  signInForKeys: 'Sign in with a wallet to manage API keys and webhooks.',
+  keyRequired: 'Add your ApeCheck API key: "Authorization: Bearer ak_live_…". Create one on apecheck.io/api.',
+  invalidKey: "This API key isn't valid or was revoked. Create a new one on apecheck.io/api.",
+  keyNotForManagement: "API keys can't manage keys or webhooks. Sign in on apecheck.io/api to do that.",
+  keyRateLimited: 'Too many requests with this API key. Wait a minute and try again.',
+  keyNotFound: "This API key doesn't exist.",
+  keyName: 'Give the key a name of up to 40 characters.',
+  webhookNotFound: "This webhook doesn't exist.",
+  webhookEvents: 'Pick at least one event: check.completed or watch.changed.',
+  webhookDisabled: 'This webhook is turned off after failed deliveries. Turn it back on first.',
+  webhookUrlBad: 'Enter the full URL of your endpoint, starting with https://.',
+  webhookUrlHttps: 'Webhook URLs must start with https://.',
+  webhookUrlCredentials: "Webhook URLs can't contain a username or password. Check the signature header instead.",
+  webhookUrlPrivate: 'Webhook URLs must point to a public server.',
+  webhookUrlUnresolved: "We couldn't find that host name. Check the URL.",
 } as const;
+
+export const tooManyKeysMessage = (n: number) => `You have ${n} API keys, the most allowed. Revoke one to create another.`;
+export const tooManyWebhooksMessage = (n: number) => `You have ${n} webhooks, the most allowed. Delete one to add another.`;
+
+/** API keys, webhooks and MCP: Max only. While the token isn't live, don't quote a holding. */
+export function maxForDevelopersMessage(env: Env): string {
+  return tokenLive(env)
+    ? `API keys, webhooks and MCP need Max: hold ${amount(env.MAX_MIN_HOLD)} $APECHECK`
+    : 'API keys, webhooks and MCP need Max. Pro and Max open at token launch.';
+}
 
 /** EVM sign-in: not a key signature, and the message names another chain than the one smart wallets are checked on. */
 export const smartWalletChainMessage = (chainName: string) =>

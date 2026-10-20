@@ -7,7 +7,7 @@ import type { openDb } from './env';
 type Db = Awaited<ReturnType<typeof openDb>>;
 
 const TABLES = [
-  'Notification', 'NoteVote', 'Note', 'Ask', 'BotMention', 'Watch', 'ApiKey', 'Webhook', 'PricePoint',
+  'Notification', 'NoteVote', 'Note', 'Ask', 'BotMention', 'Watch', 'ApiKey', 'WebhookDelivery', 'Webhook', 'PricePoint',
   'CoinFacts', 'Claim', 'CheckStep', 'Check', 'Deployer', 'Target', 'User',
 ];
 

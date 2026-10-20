@@ -6,6 +6,8 @@ import type { AppDeps } from '../context';
 import { createCheck, loadReport } from '../checks';
 import { ApiError, MSG } from '../errors';
 import { SHORT_ID_RE } from '../ids';
+import { isProViewer } from '../mappers';
+import { viaKey } from '../plugins/apiKeys';
 import { RATE } from '../plugins/rateLimit';
 import { viewerOf } from './util';
 
@@ -33,18 +35,24 @@ export function registerCheckRoutes(app: FastifyInstance, deps: AppDeps) {
         throw parsed.error;
       }
       const tier = await viewerTier(deps, request);
-      const res = await createCheck(deps, parsed.data, creditSubject(request, tier?.tier ?? 'free'), request.log);
+      const via = viaKey(request) ? 'API' : 'WEB';
+      const res = await createCheck(deps, { ...parsed.data, via }, creditSubject(request, tier?.tier ?? 'free'), request.log);
       return reply.code(res.statusCode).send(res.body);
     },
   );
 
-  /** Private checks only for the user (or browser) that asked for them; everyone else gets the same 404 as a missing id. */
+  /**
+   * Private checks only for the user (or browser) that asked for them; everyone else gets the same 404 as a missing id.
+   * Pro/Max viewers (M4) also get the deep holder clusters, so their copy is never cached either.
+   */
   app.get('/v1/checks/:id', async (request, reply) => {
     const { id } = IdParamsZ.parse(request.params);
     if (!SHORT_ID_RE.test(id)) throw new ApiError(404, 'not_found', MSG.notFound);
-    const report = await loadReport(deps, { shortId: id }, viewerOf(request));
+    if (request.viewer.user && !viaKey(request)) await viewerTier(deps, request);
+    const viewer = viewerOf(request);
+    const report = await loadReport(deps, { shortId: id }, viewer);
     if (!report) throw new ApiError(404, 'not_found', MSG.notFound);
-    if (report.isPrivate) reply.header('Cache-Control', 'private, no-store');
+    if (report.isPrivate || isProViewer(viewer)) reply.header('Cache-Control', 'private, no-store');
     return report;
   });
 }

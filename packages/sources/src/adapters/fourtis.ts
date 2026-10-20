@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { isChainKey, type ChainKey, type Env } from '@apecheck/core';
 import { warnOnce } from '@apecheck/core/node';
-import type { BundleScanFacts, DevRadarFacts, FourtisSource, Http, WhaleFlowFacts } from '../types';
+import type { BundleScanFacts, DevRadarFacts, FourtisSource, HolderCluster, Http, WhaleFlowFacts } from '../types';
 import { HttpError } from '../http';
 import { ErrorState } from '../util';
 
@@ -70,6 +70,48 @@ export const BundleScanZ = z
   })
   .transform((b): BundleScanFacts => ({ bundlePct: b.bundlePct, wallets: b.wallets, launchBlock: b.launchBlock != null ? String(b.launchBlock) : null }));
 
+/**
+ * M4 placeholder: one holder cluster ("deep holder clusters", Pro/Max) = wallets WhaleFlow ties together because
+ * they were funded from the same source. `pct` is the % of supply the cluster holds; `fundedFrom` the common
+ * funder (address or a name like "Binance hot wallet"), null when WhaleFlow doesn't say.
+ */
+/** a number, or a numeric string (never null / "" coerced to 0) */
+const numeric = z.union([z.number(), z.string().trim().min(1)]).transform(Number);
+export const WhaleClusterZ = z.object({
+  label: z
+    .string()
+    .trim()
+    .min(1)
+    .transform(v => v.slice(0, 80)),
+  wallets: numeric.pipe(z.number().int().min(1)),
+  pct: numeric.pipe(z.number().min(0).max(100)),
+  fundedFrom: z
+    .string()
+    .trim()
+    .nullish()
+    .transform(v => (v ? v.slice(0, 120) : null)),
+});
+/** at most this many clusters are kept (the largest by share of supply) */
+export const MAX_HOLDER_CLUSTERS = 20;
+
+/**
+ * The clusters of a WhaleFlow answer, largest first. Items that don't match WhaleClusterZ are left out and counted
+ * (`dropped`), so one odd item never costs the holder numbers or the other clusters. No usable cluster → none.
+ */
+export function parseHolderClusters(raw: unknown): { clusters: HolderCluster[]; dropped: number } {
+  if (raw == null) return { clusters: [], dropped: 0 };
+  if (!Array.isArray(raw)) return { clusters: [], dropped: 1 };
+  const clusters: HolderCluster[] = [];
+  let dropped = 0;
+  for (const item of raw) {
+    const c = WhaleClusterZ.safeParse(item);
+    if (c.success) clusters.push({ label: c.data.label, wallets: c.data.wallets, pct: c.data.pct, fundedFrom: c.data.fundedFrom });
+    else dropped++;
+  }
+  clusters.sort((a, b) => b.pct - a.pct);
+  return { clusters: clusters.slice(0, MAX_HOLDER_CLUSTERS), dropped };
+}
+
 export const WhaleFlowZ = z
   .object({
     top10Pct: pct,
@@ -81,15 +123,21 @@ export const WhaleFlowZ = z
         lockedDays: z.coerce.number().min(0).nullish(),
       })
       .nullish(),
+    /** M4 (optional): [{ label, wallets, pct, fundedFrom }] — validated item by item (parseHolderClusters) */
+    clusters: z.unknown().optional(),
   })
-  .transform(
-    (w): WhaleFlowFacts => ({
+  .transform((w): WhaleFlowFacts & { clustersDropped?: number } => {
+    const { clusters, dropped } = parseHolderClusters(w.clusters);
+    return {
       top10Pct: w.top10Pct,
       devHoldPct: w.devHoldPct,
       holders: w.holders ?? null,
       lp: w.lp ? { status: w.lp.status, lockedDays: w.lp.lockedDays ?? null } : null,
-    }),
-  );
+      // no clusters key at all when WhaleFlow sent none (or none usable): nothing is stored, nothing is invented
+      ...(clusters.length ? { clusters } : {}),
+      ...(dropped ? { clustersDropped: dropped } : {}),
+    };
+  });
 
 /** accept { data: {...} } envelopes as well as bare objects */
 function unwrap(raw: unknown): unknown {
@@ -145,8 +193,13 @@ export class FourtisAdapter implements FourtisSource {
   bundleScan(chain: ChainKey, address: string): Promise<BundleScanFacts | null> {
     return this.fetch('bundleScan', FOURTIS_PATHS.bundleScan(chain, address), BundleScanZ);
   }
-  whaleFlow(chain: ChainKey, address: string): Promise<WhaleFlowFacts | null> {
-    return this.fetch('whaleFlow', FOURTIS_PATHS.whaleFlow(chain, address), WhaleFlowZ);
+  async whaleFlow(chain: ChainKey, address: string): Promise<WhaleFlowFacts | null> {
+    const w = await this.fetch('whaleFlow', FOURTIS_PATHS.whaleFlow(chain, address), WhaleFlowZ);
+    if (!w) return null;
+    const { clustersDropped, ...facts } = w;
+    // the holder numbers stand; the odd clusters are left out and reported
+    if (clustersDropped) this.errors.fail('whaleFlow', new Error(`${clustersDropped} holder cluster(s) with an unexpected shape left out`));
+    return facts;
   }
 }
 

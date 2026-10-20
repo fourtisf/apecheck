@@ -10,6 +10,7 @@
  */
 import type {
   ApiErrorBody,
+  ApiKeyDTO,
   AskDTO,
   AuthNonceResponse,
   AuthVerifyBody,
@@ -18,8 +19,10 @@ import type {
   CheckReportDTO,
   CoinKey,
   CoinsResponse,
+  CreateApiKeyResponse,
   CreateCheckBody,
   CreateCheckResponse,
+  CreateWebhookResponse,
   DeployersResponse,
   FeedResponse,
   HelpfulResponse,
@@ -34,6 +37,9 @@ import type {
   WalletChain,
   WatchResponse,
   WatchlistResponse,
+  WebhookDTO,
+  WebhookDeliveryDTO,
+  WebhookEvent,
 } from '@apecheck/core';
 import { PUBLIC_API_URL } from './env';
 
@@ -277,6 +283,39 @@ export const xLinkUrl = () => `${PUBLIC_API_URL}/v1/auth/x/start`;
 /** POST /v1/auth/x/unlink */
 export const xUnlink = (o?: CallOpts) => request<MeDTO>('POST', '/v1/auth/x/unlink', undefined, {}, o);
 
+/* ---------- M4: API keys and webhooks (Max; the signed-in session only, never an API key) ---------- */
+
+/** GET /v1/keys — the viewer's active keys, newest first (401 sign_in_required, 403 max_required) */
+export const apiKeys = (o?: CallOpts) => request<{ items: ApiKeyDTO[] }>('GET', '/v1/keys', undefined, undefined, o);
+
+/** POST /v1/keys — a new key; `key` is in this response only (409 too_many_keys) */
+export const createApiKey = (name?: string, o?: CallOpts) =>
+  request<CreateApiKeyResponse>('POST', '/v1/keys', undefined, name ? { name } : {}, o);
+
+/** DELETE /v1/keys/:id — revoke (idempotent) */
+export const revokeApiKey = (id: string, o?: CallOpts) => request<{ ok: true }>('DELETE', `/v1/keys/${enc(id)}`, undefined, undefined, o);
+
+/** GET /v1/webhooks — newest first */
+export const webhooks = (o?: CallOpts) => request<{ items: WebhookDTO[] }>('GET', '/v1/webhooks', undefined, undefined, o);
+
+/** POST /v1/webhooks — the signing `secret` is in this response only (400 bad_url, 409 too_many_webhooks) */
+export const createWebhook = (body: { url: string; events: WebhookEvent[] }, o?: CallOpts) =>
+  request<CreateWebhookResponse>('POST', '/v1/webhooks', undefined, body, o);
+
+/** DELETE /v1/webhooks/:id */
+export const deleteWebhook = (id: string, o?: CallOpts) => request<{ ok: true }>('DELETE', `/v1/webhooks/${enc(id)}`, undefined, undefined, o);
+
+/** POST /v1/webhooks/:id/enable — turns a webhook that was switched off after failed deliveries back on */
+export const enableWebhook = (id: string, o?: CallOpts) => request<WebhookDTO>('POST', `/v1/webhooks/${enc(id)}/enable`, undefined, {}, o);
+
+/** POST /v1/webhooks/:id/test — queues a "ping" delivery (409 webhook_disabled) */
+export const testWebhook = (id: string, o?: CallOpts) =>
+  request<WebhookDeliveryDTO>('POST', `/v1/webhooks/${enc(id)}/test`, undefined, {}, o);
+
+/** GET /v1/webhooks/:id/deliveries — the last 50, newest first */
+export const webhookDeliveries = (id: string, o?: CallOpts) =>
+  request<{ items: WebhookDeliveryDTO[] }>('GET', `/v1/webhooks/${enc(id)}/deliveries`, undefined, undefined, o);
+
 /**
  * Screenshot paths come back as "/shots/<checkId>/3.jpg" on the API origin; the browser needs the public URL.
  * Absolute http(s) URLs pass through; anything else is refused (null).
@@ -313,5 +352,14 @@ export const api = {
   logout,
   xLinkUrl,
   xUnlink,
+  apiKeys,
+  createApiKey,
+  revokeApiKey,
+  webhooks,
+  createWebhook,
+  deleteWebhook,
+  enableWebhook,
+  testWebhook,
+  webhookDeliveries,
   shotUrl,
 };

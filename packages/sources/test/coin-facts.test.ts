@@ -98,6 +98,46 @@ describe('coinFacts: precedence', () => {
     });
   });
 
+  it('M4: WhaleFlow holder clusters are carried as they came; none from WhaleFlow (or no Fourtis) → no clusters at all', async () => {
+    const clusters = [
+      { label: 'Cluster A', wallets: 12, pct: 18.2, fundedFrom: 'Binance hot wallet' },
+      { label: 'Cluster B', wallets: 4, pct: 6.5, fundedFrom: null },
+    ];
+    const withClusters = await coinFacts(
+      fakes({ fourtis: { configured: true, whaleFlow: async () => ({ top10Pct: 33, devHoldPct: 2.5, holders: 4100, clusters }) } }),
+      'sol',
+      MINT,
+    );
+    expect(withClusters.clusters).toEqual(clusters);
+    expect(withClusters.holders?.source).toBe('WhaleFlow');
+
+    // WhaleFlow answered without clusters, or with an empty list
+    for (const none of [undefined, null, []]) {
+      const f = await coinFacts(fakes({ fourtis: { configured: true, whaleFlow: async () => ({ top10Pct: 33, devHoldPct: 2.5, holders: 4100, clusters: none }) } }), 'sol', MINT);
+      expect('clusters' in f).toBe(false);
+    }
+    // Fourtis not configured: the public fallbacks never produce clusters
+    const holders = Array.from({ length: 12 }, (_, i) => ({ owner: `holder${i}`, account: `acc${i}`, amount: '0', pct: 5 }));
+    const fallback = await coinFacts(fakes({ sol: { largestHolders: async () => holders } }), 'sol', MINT);
+    expect(fallback.holders?.source).toBe('On-chain');
+    expect('clusters' in fallback).toBe(false);
+    // WhaleFlow down
+    const down = await coinFacts(fakes({ fourtis: { configured: true, whaleFlow: async () => null } }), 'sol', MINT);
+    expect('clusters' in down).toBe(false);
+  });
+
+  it('M4: clusters through the real Fourtis adapter (placeholder /whaleflow shape)', async () => {
+    const http = fakeHttp(url =>
+      url.pathname.startsWith('/whaleflow/')
+        ? { json: { data: { top10Pct: 30, devHoldPct: 1, holders: 800, clusters: [{ label: 'Cluster A', wallets: 5, pct: 12, fundedFrom: 'FunderWallet111' }] } } }
+        : { status: 404, text: 'no data' },
+    );
+    const fourtis = createFourtis(testEnv({ FOURTIS_API_URL: 'https://ft.example', FOURTIS_API_KEY: 'k' }), http);
+    const f = await coinFacts({ ...fakes(), fourtis }, 'sol', MINT);
+    expect(f.clusters).toEqual([{ label: 'Cluster A', wallets: 5, pct: 12, fundedFrom: 'FunderWallet111' }]);
+    expect(f.errors).toEqual([]);
+  });
+
   it('Solana fallback: top-10 from largest accounts, excluding the pair and AMM authorities; dev share when the deployer is known', async () => {
     const holders = [
       { owner: RAYDIUM_V4, account: 'acc0', amount: '0', pct: 40 },

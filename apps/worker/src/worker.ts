@@ -4,7 +4,7 @@
  */
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
-import { BOT_REPLY_JOB_OPTIONS, QUEUES, type BotReplyJob, type CheckJob, type Env } from '@apecheck/core';
+import { BOT_REPLY_JOB_OPTIONS, QUEUES, type BotReplyJob, type CheckJob, type Env, type WebhookJob } from '@apecheck/core';
 import { prisma as defaultPrisma, type PrismaClient } from '@apecheck/db';
 import { createSources, type Sources } from '@apecheck/sources';
 import { createAi } from './ai';
@@ -14,10 +14,10 @@ import { createLogger, type Logger } from './log';
 import { SHOTS_CLEANUP_JOB, SHOTS_CLEANUP_PATTERN, cleanupShots } from './maintenance/shots';
 import { RunSuperseded, endStuckCheck, recoverStaleChecks, runCheck, type JobStateLookup, type PipelineDeps, type RunResult } from './pipeline';
 import type { StageLimits } from './pipeline/context';
-import { fireWebhooksNoop } from './pipeline/save';
 import { PRICE_TICK_MS } from './prices/schedule';
 import { runPriceTick } from './prices/tick';
 import { bullConnection, publisherConnection } from './redis';
+import { enqueueDeliveries } from './webhooks/events';
 
 /** One Chromium per process, launched on first use and relaunched if it dies. */
 export class BrowserPool {
@@ -98,6 +98,7 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
   const bull: Redis = bullConnection(env.REDIS_URL);
   const pub: Redis = publisherConnection(env.REDIS_URL);
   const botQueue = new Queue<BotReplyJob>(QUEUES.botReplies, { connection: bull });
+  const webhooksQueue = new Queue<WebhookJob>(QUEUES.webhooks, { connection: bull });
   const pool = new BrowserPool({ env, ...opts.browser }, log);
   const deps: PipelineDeps = {
     env,
@@ -113,7 +114,8 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
       enqueueBotReply: async mentionId => {
         await botQueue.add('reply', { mentionId }, { jobId: mentionId, ...BOT_REPLY_JOB_OPTIONS });
       },
-      fireWebhooks: fireWebhooksNoop,
+      // M4: check.completed deliveries (worker-prices consumes QUEUES.webhooks)
+      enqueueWebhooks: ids => enqueueDeliveries(webhooksQueue, ids),
     },
   };
 
@@ -184,6 +186,7 @@ export async function startCheckWorker(opts: CheckWorkerOptions): Promise<CheckW
       }
       if (recoverTimer) clearInterval(recoverTimer);
       await botQueue.close().catch(() => undefined);
+      await webhooksQueue.close().catch(() => undefined);
       await checksQueue.close().catch(() => undefined);
       await pool.close();
       await pub.quit().catch(() => undefined);

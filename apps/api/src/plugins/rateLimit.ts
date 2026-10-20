@@ -25,8 +25,8 @@ export function clientIp(req: FastifyRequest): string {
 }
 
 /**
- * Who a request counts against. API keys (M4) will return `key:<apiKeyId>` here so keyed
- * traffic gets per-key limits instead of per-IP ones.
+ * Who a request counts against: the client IP, also for API-key traffic. Keys (M4) get their own
+ * API_KEY_RATE_PER_MIN on top of this, after the key is looked up (plugins/apiKeys.ts).
  */
 export function rateKey(req: FastifyRequest): string {
   return (isShot(req) ? 'shots:' : 'ip:') + clientIp(req);

@@ -16,6 +16,7 @@ import type { Redis } from 'ioredis';
 import { SESSION_COOKIE, SESSION_DAYS, SID_COOKIE, isProd, sessionKey, type Env } from '@apecheck/core';
 import type { PrismaClient } from '@apecheck/db';
 import { ApiError } from '../errors';
+import { hasBearer } from './apiKeys';
 import { originAllowed, allowedOrigins } from './cors';
 
 const SID_RE = /^[A-Za-z0-9_-]{32}$/;
@@ -121,6 +122,9 @@ export async function registerSession(app: FastifyInstance, deps: { env: Env; re
     }
     if (sid) {
       request.sid = sid;
+    } else if (hasBearer(request)) {
+      // M4: an API-key request (a server, not a browser) counts for the key's owner; no cookie for it
+      request.sid = newSid();
     } else {
       request.sid = newSid();
       request.sidIsNew = true;
@@ -136,8 +140,9 @@ export async function registerSession(app: FastifyInstance, deps: { env: Env; re
 
   // after the rate limits (onRequest), so a flood is cut before any lookup
   app.addHook('preHandler', async (request: FastifyRequest) => {
-    request.viewer = { sid: request.sid, sessionId: null, user: null };
-    if (skipSession(request)) return;
+    request.viewer = { sid: request.sid, sessionId: null, user: null, apiKeyId: null };
+    // M4: a request with an API key is that key's (plugins/apiKeys.ts resolves it next), never a cookie session's
+    if (skipSession(request) || hasBearer(request)) return;
     const id = sessionIdOf(request);
     if (!id) return;
     const session = await readSession(redis, id).catch(() => null);

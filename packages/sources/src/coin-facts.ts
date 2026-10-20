@@ -160,6 +160,8 @@ export async function coinFacts(deps: CoinFactsDeps, chain: ChainKey, address: s
     }
 
     if (whale?.lp) facts.lp = { status: whale.lp.status, lockedDays: whale.lp.lockedDays ?? null, source: 'WhaleFlow' };
+    // M4: holder clusters only ever come from WhaleFlow (no public fallback): none → no key, nothing stored
+    if (whale?.clusters?.length) facts.clusters = whale.clusters.map(c => ({ label: c.label, wallets: c.wallets, pct: c.pct, fundedFrom: c.fundedFrom ?? null }));
 
     if (solMint?.exists) {
       const mintRenounced = solMint.mintAuthority == null;

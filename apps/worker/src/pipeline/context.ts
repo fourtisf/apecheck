@@ -42,8 +42,12 @@ export const STAGE_LIMITS: StageLimits = {
 export interface WorkerHooks {
   /** M2 consumes QUEUES.botReplies */
   enqueueBotReply?(mentionId: string): Promise<void>;
-  /** M4: webhooks (check.completed). Deliberately a no-op until M4. */
-  fireWebhooks?(checkId: string): Promise<void>;
+  /**
+   * M4: queue WebhookDelivery rows on QUEUES.webhooks (jobId = delivery id). afterFinish writes the check.completed rows
+   * of every finished check (webhooks/events.ts) and hands their ids here; without the hook the rows wait for the
+   * webhooks worker's sweep.
+   */
+  enqueueWebhooks?(deliveryIds: string[]): Promise<void>;
 }
 
 export interface PipelineDeps {

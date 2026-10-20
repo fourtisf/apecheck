@@ -16,11 +16,13 @@ import {
   type CheckStatusS,
   type StepDTO,
 } from '@apecheck/core';
+import { viewerTier } from '../accounts';
 import type { AppDeps } from '../context';
 import { canView, loadReport, readProgress } from '../checks';
 import { ApiError, MSG } from '../errors';
 import { SHORT_ID_RE } from '../ids';
 import { evidenceOf, shotUrl, toStep, type Viewer } from '../mappers';
+import { viaKey } from '../plugins/apiKeys';
 import { sidSetCookieHeader } from '../plugins/session';
 import { openSse, type SseRegistry, type SseStream } from '../sse';
 import { viewerOf } from './util';
@@ -57,6 +59,8 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps, registr
   app.get('/v1/checks/:id/events', { exposeHeadRoute: false }, async (request, reply) => {
     const { id: shortId } = (request.params ?? {}) as { id?: string };
     if (!shortId || !SHORT_ID_RE.test(shortId)) throw new ApiError(404, 'not_found', MSG.notFound);
+    // M4: Pro/Max viewers get the deep holder clusters in the final report (an API key's tier is already fresh)
+    if (request.viewer.user && !viaKey(request)) await viewerTier(deps, request);
     const viewer = viewerOf(request);
     const head = await deps.prisma.check.findUnique({
       where: { shortId },

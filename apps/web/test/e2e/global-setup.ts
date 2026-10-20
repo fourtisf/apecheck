@@ -5,9 +5,11 @@
  * 3. the web app built with `next build` into .next-e2e and served by `next start` on 127.0.0.1:3611
  *    (production, like the reported bugs: e.g. notFound() under /c/[id] is a client-rendered shell there);
  * 4. worker-bot (apps/worker src/bot.ts) for the follow-up questions on queue "asks" (no X keys: the bot itself idles,
- *    no ANTHROPIC_API_KEY: answers come from the heuristic stand-in).
+ *    no ANTHROPIC_API_KEY: answers come from the heuristic stand-in);
+ * 5. M4: worker-prices (apps/worker src/prices.ts) for webhook deliveries on queue "webhooks". The tests' local
+ *    receiver (127.0.0.1:HOOK_PORT) is let through the SSRF guard with SSRF_ALLOW_HOSTS (development only).
  * The test wallets (wallets.ts) get Pro / Max through TIER_OVERRIDES; X_OAUTH2_CLIENT_ID is a dummy so "Link your X" shows.
- * E2E_SKIP_BUILD=1 reuses an existing .next-e2e build. Logs (api.log, worker.log, web.log, build.log) go to a new apecheck-web-e2e- folder in the OS temp dir.
+ * E2E_SKIP_BUILD=1 reuses an existing .next-e2e build. Logs (api.log, worker.log, prices.log, web.log, build.log) go to a new apecheck-web-e2e- folder in the OS temp dir.
  * Teardown stops the processes it started (by their own process group), nothing else.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
@@ -16,7 +18,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import type { TestProject } from 'vitest/node';
-import { API_PORT, API_URL, DB_URL, DIST_DIR, REDIS_URL, REPO_ROOT, WEB_DIR, WEB_PORT, WEB_URL, flushRedis, openDb } from './env';
+import { API_PORT, API_URL, DB_URL, DIST_DIR, HOOK_PORT, REDIS_URL, REPO_ROOT, WEB_DIR, WEB_PORT, WEB_URL, flushRedis, openDb } from './env';
 import { seed } from './seed';
 import { EVM_MAX_KEY, EVM_PRO_KEY, evmAddressOf } from './wallets';
 
@@ -108,8 +110,8 @@ function build(env: Env, log: string) {
 }
 
 export default async function setup(project: TestProject) {
-  for (const port of [API_PORT, WEB_PORT]) {
-    if (!(await portFree(port))) throw new Error(`port ${port} is in use: set E2E_API_PORT / E2E_WEB_PORT`);
+  for (const port of [API_PORT, WEB_PORT, HOOK_PORT]) {
+    if (!(await portFree(port))) throw new Error(`port ${port} is in use: set E2E_API_PORT / E2E_WEB_PORT / E2E_HOOK_PORT`);
   }
   ensureDatabase();
   const db = await openDb();
@@ -140,6 +142,8 @@ export default async function setup(project: TestProject) {
     LOG_LEVEL: 'warn',
     TIER_OVERRIDES: `${evmAddressOf(EVM_PRO_KEY)}:pro,${evmAddressOf(EVM_MAX_KEY)}:max`,
     X_OAUTH2_CLIENT_ID: 'e2e-dummy-client',
+    // M4: the webhook receiver the tests start on this port (never honoured in production)
+    SSRF_ALLOW_HOSTS: `127.0.0.1:${HOOK_PORT}`,
     // the bot worker must never talk to X from a test
     X_API_KEY: '',
     X_API_SECRET: '',
@@ -162,12 +166,15 @@ export default async function setup(project: TestProject) {
   const api = start(process.execPath, ['--import', 'tsx', 'src/index.ts'], path.join(REPO_ROOT, 'apps/api'), env, apiLog);
   const workerLog = path.join(dir, 'worker.log');
   const worker = start(process.execPath, ['--import', 'tsx', 'src/bot.ts'], path.join(REPO_ROOT, 'apps/worker'), env, workerLog);
+  const pricesLog = path.join(dir, 'prices.log');
+  const prices = start(process.execPath, ['--import', 'tsx', 'src/prices.ts'], path.join(REPO_ROOT, 'apps/worker'), env, pricesLog);
   const webLog = path.join(dir, 'web.log');
   const web = start(path.join(WEB_DIR, 'node_modules/.bin/next'), ['start', '-p', String(WEB_PORT), '-H', '127.0.0.1'], WEB_DIR, { ...env, NODE_ENV: 'production' }, webLog);
   try {
     await waitFor(`${API_URL}/health`, api, apiLog);
     await waitFor(`${WEB_URL}/api`, web, webLog);
     await waitForLog(workerLog, /answering follow-up questions/, worker);
+    await waitForLog(pricesLog, /webhooks: delivering/, prices);
   } catch (e) {
     stopAll();
     throw e;

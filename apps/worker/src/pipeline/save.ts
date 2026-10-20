@@ -1,6 +1,6 @@
 /**
  * Stage F — score (deterministic, @apecheck/core scoreCheck), save everything in one transaction, render
- * the share card, notify (check:{id} done, live end, bot reply job, webhooks hook).
+ * the share card, notify (check:{id} done, live end, bot reply job, check.completed webhooks).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -28,6 +28,7 @@ import { buildEvidence } from './record';
 import { pgSafe } from './pgsafe';
 import { RunSuperseded } from './steps';
 import { completeAutoRechecks } from '../watch/notify';
+import { checkCompletedDeliveries } from '../webhooks/events';
 import type { CheckEvidence } from '@apecheck/core';
 
 export interface SavedCheck {
@@ -301,20 +302,27 @@ export async function enqueueBotReply(deps: Pick<PipelineDeps, 'prisma' | 'log' 
 }
 
 /**
+ * M4: the check.completed webhooks of a finished check (its requester's enabled webhooks, Max only; webhooks/events.ts).
+ * Idempotent: the delivery ids are derived from webhook + check, so a second call makes no second delivery.
+ */
+export async function fireCheckWebhooks(deps: Pick<PipelineDeps, 'prisma' | 'log' | 'hooks'>, checkId: string) {
+  const ids = await checkCompletedDeliveries(deps.prisma, checkId);
+  if (ids.length && deps.hooks?.enqueueWebhooks) await deps.hooks.enqueueWebhooks(ids);
+}
+
+/**
  * Every finished check (done or failed, also one ended by the stuck-check recovery or found finished by a re-run of
- * its job): the bot replies still waiting on it, and the "rechecked" notifications of the watchers whose automatic
- * re-check it is (watch/notify.ts; idempotent, a no-op for checks nobody watches).
+ * its job): the bot replies still waiting on it, the "rechecked" notifications of the watchers whose automatic
+ * re-check it is (watch/notify.ts; idempotent, a no-op for checks nobody watches) and the requester's check.completed
+ * webhooks (M4; idempotent, a no-op for checks without a requester).
  */
 export async function afterFinish(deps: Pick<PipelineDeps, 'prisma' | 'log' | 'hooks'>, checkId: string) {
   await enqueueBotReply(deps, checkId);
   await completeAutoRechecks(deps, checkId).catch(e => deps.log.warn('could not complete the re-check notifications', e));
+  await fireCheckWebhooks(deps, checkId).catch(e => deps.log.warn('could not queue the check.completed webhooks', e));
 }
 
-/** After a finished check: the bot reply job, the re-check notifications and the webhooks hook (M4). */
+/** After a check finished DONE: everything afterFinish does (bot reply, re-check notifications, webhooks). */
 export async function afterDone(deps: PipelineDeps, checkId: string) {
   await afterFinish(deps, checkId);
-  await (deps.hooks?.fireWebhooks ?? fireWebhooksNoop)(checkId).catch(e => deps.log.warn('webhooks failed', e));
 }
-
-/** Webhooks (check.completed) arrive in M4; this hook is where they will be queued. */
-export async function fireWebhooksNoop(_checkId: string): Promise<void> {}

@@ -1,21 +1,35 @@
 'use client';
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
+import { WEBHOOK_SIGNATURE_HEADER } from '@apecheck/core';
 
 /** A highlighted run: [class, text] (k = key, s = string, nn = number, c = comment) or plain text. */
 type Tok = string | ['k' | 's' | 'nn' | 'c', string];
 
+/** Example check id: real ids are 7 characters, [a-z0-9]. */
+const ID = '8f2a91c';
+const SUMMARY = `"The app loads but the main flow stops at 'Coming soon'."`;
+
+/** POST /v1/checks, then GET /v1/checks/:id (the fields apps/api documents for the /api page). */
 const REST: Tok[] = [
   ['c', '# start a check'],
   '\ncurl -X POST https://api.apecheck.io/v1/checks \\\n  -H ',
   ['s', '"Authorization: Bearer $APECHECK_KEY"'],
+  ' \\\n  -H ',
+  ['s', '"Content-Type: application/json"'],
   ' \\\n  -d ',
   ['s', `'{"target":"orbitswap.xyz"}'`],
+  '\n',
+  ['c', `# → { "id": "${ID}", "status": "queued", … }`],
   '\n\n',
-  ['c', '# result'],
+  ['c', `# result: GET /v1/checks/${ID}`],
   '\n{\n  ',
   ['k', '"id"'],
   ': ',
-  ['s', '"chk_8f2a91"'],
+  ['s', `"${ID}"`],
+  ',\n  ',
+  ['k', '"status"'],
+  ': ',
+  ['s', '"done"'],
   ',\n  ',
   ['k', '"narrative"'],
   ': { ',
@@ -43,7 +57,7 @@ const REST: Tok[] = [
   ',\n  ',
   ['k', '"summary"'],
   ': ',
-  ['s', `"The app loads but the main flow stops at 'Coming soon'."`],
+  ['s', SUMMARY],
   ',\n  ',
   ['k', '"claims"'],
   ': [ { ',
@@ -57,12 +71,17 @@ const REST: Tok[] = [
   ' } ],\n  ',
   ['k', '"report_url"'],
   ': ',
-  ['s', '"https://apecheck.io/c/chk_8f2a91"'],
+  ['s', `"https://apecheck.io/c/${ID}"`],
   '\n}',
 ];
 
+/**
+ * The MCP server (apps/api /mcp behind mcp.apecheck.io) and its four tools. The prototype labelled this JSON
+ * claude_desktop_config.json, but Claude Desktop can't send a header to a remote server without the mcp-remote bridge
+ * (apps/api README, MCP server); `url` + `headers` under "mcpServers" is exactly Cursor's mcp.json.
+ */
 const MCP: Tok[] = [
-  ['c', '// claude_desktop_config.json'],
+  ['c', '// ~/.cursor/mcp.json'],
   '\n{\n  ',
   ['k', '"mcpServers"'],
   ': {\n    ',
@@ -80,24 +99,40 @@ const MCP: Tok[] = [
   ' }\n    }\n  }\n}\n\n',
   ['c', '// tools'],
   '\nrun_check(target)           ',
-  ['c', '→ narrative, coin, total, report'],
+  ['c', '→ narrative, coin, total, verdict, report_url'],
   '\nget_check(id)               ',
   ['c', '→ full report with evidence'],
-  '\nask_followup(id, question)\ndeployer_history(wallet)',
+  '\nask_followup(id, question)  ',
+  ['c', "→ an answer from the check's record"],
+  '\ndeployer_history(wallet)    ',
+  ['c', '→ launch record and checked coins'],
 ];
 
+/** A webhook delivery: the WebhookPayload body, signed in the ApeCheck-Signature header (core WEBHOOK_SIGNATURE_HEADER). */
 const HOOK: Tok[] = [
   ['c', 'POST https://your-server.com/apecheck  (signed)'],
-  '\n{\n  ',
+  '\n',
+  ['k', WEBHOOK_SIGNATURE_HEADER],
+  ': ',
+  ['s', 't=1792397580,v1=5c1e…'],
+  '\n\n{\n  ',
+  ['k', '"id"'],
+  ': ',
+  ['s', '"wd_3f9c0a17be52d4e8a61c07f2"'],
+  ',\n  ',
   ['k', '"event"'],
   ': ',
   ['s', '"check.completed"'],
+  ',\n  ',
+  ['k', '"created"'],
+  ': ',
+  ['s', '"2026-10-19T08:13:00.000Z"'],
   ',\n  ',
   ['k', '"check"'],
   ': {\n    ',
   ['k', '"id"'],
   ': ',
-  ['s', '"chk_8f2a91"'],
+  ['s', `"${ID}"`],
   ',\n    ',
   ['k', '"target"'],
   ': ',
@@ -114,11 +149,20 @@ const HOOK: Tok[] = [
   ['k', '"total"'],
   ': ',
   ['nn', '46'],
-  '\n  },\n  ',
-  ['k', '"signature"'],
+  ',\n    ',
+  ['k', '"verdict"'],
   ': ',
-  ['s', '"t=1729325580,v1=5c1e…"'],
-  '\n}',
+  ['s', '"PARTLY_REAL"'],
+  ',\n    ',
+  ['k', '"summary"'],
+  ': ',
+  ['s', SUMMARY],
+  ',\n    ',
+  ['k', '"report_url"'],
+  ': ',
+  ['s', `"https://apecheck.io/c/${ID}"`],
+  '\n  }\n}\n\n',
+  ['c', '// v1 = hex HMAC-SHA256(your secret, t + "." + raw body)'],
 ];
 
 const TABS = [
@@ -130,7 +174,7 @@ type TabKey = (typeof TABS)[number]['k'];
 
 const render = (toks: Tok[]): ReactNode[] => toks.map((t, i) => (typeof t === 'string' ? t : <span key={i} className={t[0]}>{t[1]}</span>));
 
-/** The /api page's code card: REST / MCP / Webhook examples (static docs, same as the prototype). */
+/** The /api page's code card: REST / MCP / Webhook examples (static docs in the prototype's layout, with the real shapes). */
 export function CodeTabs() {
   const [tab, setTab] = useState<TabKey>('rest');
 

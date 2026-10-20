@@ -1,8 +1,9 @@
 # @apecheck/api
 
 Fastify REST API for apecheck.io (`api.apecheck.io`, PM2 app `api`, port 4000): checks, the live SSE log,
-feed/coins/deployers/insights data, credits and rate limits, and (M3) wallet sign-in, tiers by $APECHECK holding,
-the X link, follow-up questions, community notes, the watchlist and re-check alerts, private checks.
+feed/coins/deployers/insights data, credits and rate limits, (M3) wallet sign-in, tiers by $APECHECK holding,
+the X link, follow-up questions, community notes, the watchlist and re-check alerts, private checks, and (M4, Max) API
+keys, webhooks and the MCP server (`mcp.apecheck.io` → `/mcp`). Developer docs: [Developers](#developers-m4-max).
 Spec: `docs/HANDOFF.md` §6, §8, §9, §11.
 Every JSON shape is defined in `packages/core/src/dto.ts`; `src/mappers.ts` is the only place DB rows become DTOs.
 
@@ -66,7 +67,10 @@ selects another file, e.g. a staging config).
 | `API_URL` | the X OAuth `redirect_uri` (`<API_URL>/v1/auth/x/callback`) |
 | `DEXSCREENER_BASE`, `RPC_SOLANA`, `HELIUS_API_KEY`, `RPC_BASE`, `RPC_ETH`, … | M3: the $APECHECK quote, balance reads and EIP-1271 checks (see `packages/sources`) |
 | `OUTBOUND_PROXY` | outbound proxy for those reads and the X OAuth calls |
-| `LOG_LEVEL`, `NODE_ENV` | pino level; `production` makes the cookie `Secure` |
+| `LOG_LEVEL`, `NODE_ENV` | pino level; `production` makes the cookie `Secure` (and M4: webhook URLs https only) |
+| `API_KEYS_PER_USER`, `API_KEY_RATE_PER_MIN`, `WEBHOOKS_PER_USER` | M4: active keys per Max user (5), requests per key per minute (60, on top of the per-IP limits), webhooks per user (5) |
+| `MCP_ENABLED` | M4: serve the MCP server at `POST /mcp` (default true; false = 404) |
+| `SSRF_ALLOW_HOSTS` | M4: dev/test only, `host:port` list a webhook URL may point to although it is local (ignored in production) |
 
 ## Routes
 
@@ -74,7 +78,9 @@ All errors are `{ error, code }` (`ApiErrorBody`). Codes: `bad_target`, `bad_req
 `rate_limited`, `pro_required`, `holders_only`, `sign_in_required`, `max_required`, `payload_too_large`,
 `queue_unavailable`, `forbidden`, `internal`; M3 adds `bad_message`, `nonce_expired`, `bad_signature`, `wallet_taken`,
 `x_link_unavailable`, `not_ready`, `ask_timeout`, `ask_failed`, `own_note`, `watchlist_full`,
-`wallet_check_unavailable` (503: the smart-wallet chain's RPC didn't answer, sign in again).
+`wallet_check_unavailable` (503: the smart-wallet chain's RPC didn't answer, sign in again). M4 adds `key_required`
+and `invalid_key` (401), `too_many_keys`, `too_many_webhooks`, `webhook_disabled` (409), `bad_url` (400); a request that
+brings an API key to key/webhook management or the wallet session routes gets 403 `forbidden`.
 
 | Method | Path | Returns |
 |---|---|---|
@@ -103,6 +109,16 @@ All errors are `{ error, code }` (`ApiErrorBody`). Codes: `bad_target`, `bad_req
 | GET | `/v1/notifications?limit=` | `NotificationsResponse` (newest first, default 30, max 100): `checkId` is the short id of the re-check the alert points to, else the target's latest check |
 | POST | `/v1/notifications/read` | `{ ids?: string[] }` (none = all) → `{ unread }` |
 | GET | `/shots/<path>` | screenshot files (`.jpg/.jpeg/.png/.webp` only), 30-day immutable cache, `nosniff` |
+| GET | `/v1/keys` | M4, Max session: `{ items: ApiKeyDTO[] }` (active keys, newest first; never the key itself) |
+| POST | `/v1/keys` | M4, Max session: `{ name? }` (≤ 40 characters, default "API key") → **201** `CreateApiKeyResponse`: `key` is in this response only. 409 `too_many_keys` |
+| DELETE | `/v1/keys/:id` | M4, signed in: revoke → `{ ok: true }` (idempotent; works after Max lapsed, so a leaked key can always be killed). 404 for anyone else's |
+| GET | `/v1/webhooks` | M4, Max session: `{ items: WebhookDTO[] }` (newest first; never the secret) |
+| POST | `/v1/webhooks` | M4, Max session: `{ url, events? }` (`check.completed` / `watch.changed`, default `["check.completed"]`) → **201** `CreateWebhookResponse`: the signing `secret` (`whsec_…`) is in this response only. 400 `bad_url` (see Webhooks), 409 `too_many_webhooks` |
+| DELETE | `/v1/webhooks/:id` | M4, signed in: `{ ok: true }` (its deliveries go with it). 404 for anyone else's |
+| POST | `/v1/webhooks/:id/enable` | M4, Max session: clears `disabledAt` and `failCount` → `WebhookDTO` |
+| POST | `/v1/webhooks/:id/test` | M4, Max session: queues a `ping` delivery → **201** `WebhookDeliveryDTO`. 409 `webhook_disabled` |
+| GET | `/v1/webhooks/:id/deliveries` | M4, Max session: `{ items: WebhookDeliveryDTO[] }`, the last 50, newest first (`checkId` = the check's short id) |
+| POST | `/mcp` | M4: the MCP server (Streamable HTTP, stateless), API key only; `GET`/`DELETE /mcp` → 405. See MCP |
 
 ### Feed rules
 
@@ -271,8 +287,12 @@ after is caught.
 
 ## Security notes
 
-- Rate limits in Redis: 120 req/min per IP globally, 10/min for `POST /v1/checks`, 600/min for `/shots`.
-  Key generator `rateKey()` is where API keys (M4) plug in.
+- Rate limits in Redis: 120 req/min per IP globally, 10/min for `POST /v1/checks`, 600/min for `/shots`, keyed by
+  `rateKey()` (the client IP, also for API-key traffic). M4: `API_KEY_RATE_PER_MIN` per API key on top (sliding
+  window `rl:key:<id>`); key/webhook management per IP per minute: list 60, create 10, revoke/delete 30, enable 30,
+  test 10, deliveries 60, plus per user (`USER_RATE`): keys 30, webhooks 30, test pings 10.
+- API keys: only `sha256(key)` and its first 12 characters are stored; keys are never logged and never accepted by key
+  or webhook management. Webhook URLs must be public (SSRF guard when added, and again by the worker on every delivery).
 - M3 routes have their own per-IP limits per minute: nonce 30, verify 20, logout 20,
   X start 10, X callback 20, X unlink 10, asks 20, notes 10, helpful 60, watch / unwatch 60, watchlist 60,
   notifications 60, mark read 30. Signed-in routes add a per-user sliding limit per minute (`src/limits.ts`
@@ -282,8 +302,10 @@ after is caught.
   on sign-in and live only in Redis.
 - `trustProxy` trusts loopback only: Nginx on the same host sets `X-Forwarded-For`; a client can't choose its own IP.
 - `/shots` serves images only; traversal, encoded traversal, dotfiles and directory listing are refused.
-- The API never fetches user-supplied URLs (the worker does, behind the SSRF guard).
-- Nginx: `proxy_buffering off` and a long `proxy_read_timeout` on `/v1/checks/*/events`.
+- The API never fetches user-supplied URLs (the worker does, behind the SSRF guard). M4: it only resolves a webhook
+  URL's host name to vet it.
+- Nginx: `proxy_buffering off` and a long `proxy_read_timeout` on `/v1/checks/*/events` and (M4) `/mcp`
+  (`mcp.apecheck.io`).
 
 ## Tests
 
@@ -294,3 +316,193 @@ Override with `TEST_DATABASE_URL` / `TEST_REDIS_URL`. Files run one at a time.
 M3 tests use no network: `FakeSources` (`test/helpers.ts`) stands in for balances, EIP-1271, DexScreener and X
 (OAuth token and users/me); `EvmWallet` / `SolWallet` generate real secp256k1 / ed25519 keys per test and sign the
 messages the API issues; `test/asks.test.ts` runs a small BullMQ worker on queue `asks` that answers.
+
+M4: `test/keys.test.ts` (management, show-once, no plaintext anywhere in Postgres or Redis, key auth on every developer
+route, revoked / invalid / non-Max keys, keys refused by management, per-key limit, credits), `test/webhooks.test.ts`
+(CRUD, URL rules in dev and production, the ping job, deliveries; `FakeSources.dns` is the resolver),
+`test/clusters.test.ts`, and `test/mcp.test.ts`: the SDK's MCP `Client` over `StreamableHTTPClientTransport` against the
+API listening on 127.0.0.1, with in-test workers on `checks` (marks the check DONE / FAILED and publishes `done`) and
+`asks`.
+
+## Developers (M4, Max)
+
+HANDOFF §9 and the /api page: the REST API with an API key, webhooks and the MCP server, for Max holders ("API keys,
+webhooks, MCP"). Shapes are in `packages/core/src/dto.ts` (`ApiKeyDTO`, `WebhookDTO`, `WebhookDeliveryDTO`,
+`WebhookPayload`).
+
+### API keys (`src/plugins/apiKeys.ts`, `src/routes/developer.ts`)
+
+- Created and revoked on apecheck.io/api with a signed-in Max session. A key is `ak_live_` + 32 random base62
+  characters, shown once in the create response (`Cache-Control: no-store`). The database keeps `sha256(key)` (hex,
+  unique) and the first 12 characters (`prefix`, e.g. `ak_live_Ab3x`) for the list. Up to `API_KEYS_PER_USER` active
+  keys (creates run under a per-user advisory lock, so two at once can't pass the limit).
+- Send it as `Authorization: Bearer ak_live_…`. It works on every developer route: `POST /v1/checks`,
+  `GET /v1/checks/:id`, `GET /v1/checks/:id/events`, `/v1/feed`, `/v1/live`, `/v1/coins`, `/v1/deployers`,
+  `/v1/insights`, `/v1/me`, `POST /v1/checks/:id/asks`, `/v1/checks/:id/notes`, `/v1/watch/:targetId`,
+  `/v1/watchlist`, `/v1/notifications`, and `/mcp`. It never works on `/v1/keys*`, `/v1/webhooks*` or `/v1/auth/*`
+  (403 `forbidden`, even next to a session cookie): a leaked key can't mint keys or point webhooks elsewhere.
+- Per request: unknown, malformed or revoked → 401 `invalid_key` (`WWW-Authenticate: Bearer`); over
+  `API_KEY_RATE_PER_MIN` → 429 `rate_limited` with `Retry-After` (every keyed response carries
+  `x-key-ratelimit-limit` / `x-key-ratelimit-remaining`; the `x-ratelimit-*` headers are the per-IP limit's); the owner's tier is re-read per the M3 rules (stored
+  for an hour) and must still be Max → else 403 `max_required`. The request then acts as the owner (a session cookie
+  sent along is ignored): checks are `via: API` (`/v1/feed?via=api`), charged to the owner's `MAX_CHECKS_PER_DAY`
+  (`credits:<day>:user:<id>`, the same balance the site shows), at Max priority; `private: true` works; the owner's
+  private checks are visible. No anonymous cookie is set on keyed responses. `lastUsedAt` is written at most once a
+  minute.
+
+```bash
+# start a check
+curl -X POST https://api.apecheck.io/v1/checks \
+  -H "Authorization: Bearer $APECHECK_KEY" -H 'Content-Type: application/json' \
+  -d '{"target":"orbitswap.xyz"}'
+# → 201 {"id":"8f2a91x","status":"queued","cached":false,"credits":199}
+
+# wait for it: poll the report, or stream the live log (ends with event: done and the report)
+curl https://api.apecheck.io/v1/checks/8f2a91x -H "Authorization: Bearer $APECHECK_KEY"
+curl -N https://api.apecheck.io/v1/checks/8f2a91x/events -H "Authorization: Bearer $APECHECK_KEY"
+```
+
+The report has the /api page fields (`narrative: { verdict, score }`, `coin: { verdict, score, … }`, `total`,
+`summary`, `claims[].result`, `report_url`) next to everything the site shows. Pro/Max viewers (a session or a key)
+also get `coin.clusters` (WhaleFlow wallet clusters: `{ label, wallets, pct, fundedFrom }[]`, from
+`Check.evidence.clusters`; `null` for everyone else or when there are none), and their copy is sent `private, no-store`.
+
+### Webhooks (`src/webhooks.ts`; delivery is the worker's, queue `webhooks`)
+
+- `POST /v1/webhooks { url, events }` with a Max session. Events: `check.completed` (a check you started finished:
+  site, API or MCP; private ones included, they are yours) and `watch.changed` (the change detector saw a project on
+  your watchlist change). The signing secret `whsec_…` (32 random base62 characters) is shown once. Up to
+  `WEBHOOKS_PER_USER`.
+- `check.completed` follows the check you started: a `POST /v1/checks` answered with a recent verdict
+  (`cached: true`), or one that joins a check of the same project someone else already started, sends none (poll or
+  stream that id instead). A check that couldn't finish is sent too, with `narrative`, `coin`, `total` and `verdict`
+  `null` and the reason in `summary`.
+- URL rules (400 `bad_url`): an absolute `http(s)` URL of at most 2048 characters, **https only in production**, no
+  username or password, and the SSRF guard (`checkUrl` from `@apecheck/sources`, with the options of the worker's
+  client): private, loopback, link-local, CGNAT, documentation and metadata addresses (also when any of the name's
+  A/AAAA records is one) and local names are refused; the name must resolve (unless `OUTBOUND_PROXY`, which resolves
+  names itself). `SSRF_ALLOW_HOSTS` lets a local test receiver through outside production only. The fragment is
+  dropped. The worker vets the URL again on every delivery.
+- Each event is a `WebhookDelivery` row and a job (`WebhookJob { deliveryId }`, jobId = deliveryId). The worker POSTs
+  the `WebhookPayload` JSON with `Content-Type: application/json`, `User-Agent: ApeCheck-Webhooks/1.0` and
+  `ApeCheck-Signature`, through the SSRF-guarded client (no redirects, 10 s timeout, 64 KB response cap). Any 2xx is
+  delivered; otherwise it retries with exponential backoff (6 attempts over about 6 hours). After 20 failed deliveries
+  in a row the webhook is turned off (`disabled: true`) until `POST /v1/webhooks/:id/enable`.
+- `POST /v1/webhooks/:id/test` queues a `ping` (one attempt, no retries, never counted against the webhook) so the
+  deliveries list shows the result within seconds; a turned-off webhook answers 409 `webhook_disabled` (enable it
+  first). `GET /v1/webhooks/:id/deliveries` lists the last 50 with status, attempts and response code.
+
+```jsonc
+// POST https://your-server.com/apecheck
+// ApeCheck-Signature: t=1729325580,v1=5c1e…
+{
+  "id": "wd_3f9c0a17be52d4e8a61c07f2",   // the delivery id: the same on every retry of this delivery
+  "event": "check.completed",   // or "watch.changed", "ping"
+  "created": "2026-10-19T08:13:00.000Z",
+  "check": {
+    "id": "8f2a91x", "target": "orbitswap.xyz",
+    "narrative": 48, "coin": 44, "total": 46, "verdict": "PARTLY_REAL",
+    "summary": "The app loads but the main flow stops at 'Coming soon'.",
+    "report_url": "https://apecheck.io/c/8f2a91x"
+  },
+  "target": { "id": "…", "name": "$ORBIT", "change": "site" }   // watch.changed only: "site" | "contract" | "mint" | "profile"
+}
+```
+
+**Verify the signature** on the raw body, before parsing it: `ApeCheck-Signature: t=<unix seconds>,v1=<hex>` where
+`v1 = HMAC-SHA256(secret, "<t>.<raw body>")`. Refuse a `t` more than 5 minutes from your clock (replays) and compare
+in constant time. Inside this repo: `verifyWebhook(secret, rawBody, header)` / `signWebhook(secret, body, t)` from
+`@apecheck/core/node`.
+
+```js
+// Node (e.g. express.raw({ type: 'application/json' }) so req.body is the raw Buffer)
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function verifyApeCheck(secret, rawBody, header, toleranceS = 300) {
+  let t = null;
+  const sigs = [];
+  for (const part of String(header ?? '').split(',')) {
+    const [k, v] = part.trim().split('=');
+    if (k === 't' && /^\d+$/.test(v)) t = Number(v);
+    else if (k === 'v1' && /^[0-9a-f]{64}$/.test(v)) sigs.push(Buffer.from(v, 'hex'));
+  }
+  if (t === null || Math.abs(Date.now() / 1000 - t) > toleranceS) return false;
+  const expected = createHmac('sha256', secret).update(`${t}.`).update(rawBody).digest();
+  return sigs.some(s => timingSafeEqual(s, expected));
+}
+```
+
+```python
+import hashlib, hmac, time
+
+def verify_apecheck(secret: str, raw_body: bytes, header: str, tolerance: int = 300) -> bool:
+    t, sigs = None, []
+    for part in header.split(','):
+        k, _, v = part.strip().partition('=')
+        if k == 't' and v.isdigit():
+            t = int(v)
+        elif k == 'v1':
+            sigs.append(v)
+    if t is None or abs(time.time() - t) > tolerance:
+        return False
+    expected = hmac.new(secret.encode(), f'{t}.'.encode() + raw_body, hashlib.sha256).hexdigest()
+    return any(hmac.compare_digest(expected, s) for s in sigs)
+```
+
+Answer 2xx quickly (do the work after responding); use `id` to drop a delivery you already handled.
+
+### MCP server (`src/mcp.ts`)
+
+`POST /mcp` (MCP Streamable HTTP; `mcp.apecheck.io` and `mcp.apecheck.io/mcp` proxy to it). Stateless: a new server
+and transport per request, no `Mcp-Session-Id`; `GET` and `DELETE` answer 405. Auth is the API key above (no key → 401
+`key_required`; same per-key limit, Max check, `lastUsedAt`). A tool call is answered as an SSE stream with a keep-alive
+comment every 15 s. Failures are MCP tool errors (`isError: true`, the reason as text and `{ code }` as
+`structuredContent`), never HTTP 500s. At shutdown a waiting `run_check` answers `running` at once.
+
+| Tool | Does | Returns |
+|---|---|---|
+| `run_check(target)` | starts a check like `POST /v1/checks` with the key (via API, one daily check unless a fresh verdict or a running check of the project is reused) and waits up to 150 s; sends `notifications/progress` with the live log when the client passes a `progressToken` | `{ id, status: "done", target, narrative, coin, total, verdict, summary, report_url }` (the webhook `check` shape; `verdict` = the narrative verdict enum), `{ id, status: "running", report_url, message }` after 150 s, a tool error for a failed check |
+| `get_check(id)` | the report as `GET /v1/checks/:id` for the key's owner (an id or an `…/c/<id>` link) | the full `CheckReportDTO` |
+| `ask_followup(id, question)` | a follow-up as `POST /v1/checks/:id/asks` (3–280 characters, finished checks, `ASKS_PER_HOUR`) | `{ check, id, question, answer, by, via, createdAt }` |
+| `deployer_history(wallet)` | the wallet's deployer record (`/deployers` rules: public, or named by your own private checks) and its checked coins (latest visible check per coin, up to 50) | `{ wallet, known, deployers: (DeployerDTO & { recordText })[], coins: [{ id, name, ticker, chain, ca, coinScore, coinVerdict, narrative, verdict, total, checkedAt, report_url }] }` |
+
+Client setup (replace `ak_live_…` with your key; a long `run_check` may need a client tool timeout above 150 s):
+
+```bash
+# Claude Code
+claude mcp add --transport http apecheck https://mcp.apecheck.io --header "Authorization: Bearer ak_live_…"
+```
+
+```jsonc
+// Cursor: ~/.cursor/mcp.json (or .cursor/mcp.json in a project)
+{
+  "mcpServers": {
+    "apecheck": { "url": "https://mcp.apecheck.io", "headers": { "Authorization": "Bearer ak_live_…" } }
+  }
+}
+```
+
+```jsonc
+// Claude Desktop: claude_desktop_config.json, through the mcp-remote bridge (sends the header)
+{
+  "mcpServers": {
+    "apecheck": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.apecheck.io", "--header", "Authorization:${APECHECK_AUTH}"],
+      "env": { "APECHECK_AUTH": "Bearer ak_live_…" }
+    }
+  }
+}
+```
+
+```jsonc
+// ChatGPT / OpenAI: if your ChatGPT setup can't send a custom Authorization header, use the Responses API's remote MCP
+// tool, which can
+{
+  "type": "mcp",
+  "server_label": "apecheck",
+  "server_url": "https://mcp.apecheck.io",
+  "headers": { "Authorization": "Bearer ak_live_…" },
+  "require_approval": "never"
+}
+```

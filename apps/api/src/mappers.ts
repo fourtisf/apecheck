@@ -54,8 +54,15 @@ import {
   type Signal,
   type StepDTO,
   type TargetKindS,
+  type ApiKeyDTO,
+  type TierS,
+  type WebhookDTO,
+  type WebhookDeliveryDTO,
+  type WebhookEvent,
+  type CheckResult,
+  checkResultOf,
 } from '@apecheck/core';
-import { num, type Prisma, type PrismaClient } from '@apecheck/db';
+import { num, type ApiKey, type Prisma, type PrismaClient, type Webhook, type WebhookDelivery } from '@apecheck/db';
 
 /* ---------------- include shapes ---------------- */
 
@@ -92,9 +99,14 @@ type DeployerRow = NonNullable<NonNullable<CheckSummaryRow['coinFacts']>['deploy
 
 export interface Viewer {
   sid: string | null;
-  /** M3: the signed-in user */
+  /** M3: the signed-in user (or, M4, the owner of the API key the request used) */
   userId?: string | null;
+  /** M4: that user's tier (Pro/Max viewers get the deep holder clusters) */
+  tier?: TierS | null;
 }
+
+/** M4: the viewer gets Pro/Max extras (CoinFactsDTO.clusters) */
+export const isProViewer = (viewer: Viewer) => viewer.tier === 'pro' || viewer.tier === 'max';
 
 /** the viewer started this check: same signed-in user, or the same browser (anonymous cookie) */
 export const isMine = (c: { requesterSid: string | null; requesterId?: string | null }, viewer: Viewer) =>
@@ -317,6 +329,30 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
   };
 }
 
+type Cluster = NonNullable<CoinFactsDTO['clusters']>[number];
+/** at most this many clusters are served */
+const CLUSTERS_MAX = 20;
+
+/**
+ * M4: CoinFactsDTO.clusters from CheckEvidence.clusters (WhaleFlow) — well-formed entries only, at most
+ * CLUSTERS_MAX; null when there are none.
+ */
+export function clustersOf(ev: CheckEvidence): Cluster[] | null {
+  const raw = ev.clusters;
+  if (!Array.isArray(raw)) return null;
+  const out: Cluster[] = [];
+  for (const c of raw) {
+    if (!c || typeof c !== 'object') continue;
+    const { label, wallets, pct, fundedFrom } = c as Partial<Cluster>;
+    if (typeof label !== 'string' || !label.trim()) continue;
+    if (typeof wallets !== 'number' || !Number.isFinite(wallets) || wallets < 0) continue;
+    if (typeof pct !== 'number' || !Number.isFinite(pct)) continue;
+    out.push({ label: label.trim().slice(0, 80), wallets: Math.round(wallets), pct: round2(pct), fundedFrom: typeof fundedFrom === 'string' && fundedFrom ? fundedFrom.slice(0, 120) : null });
+    if (out.length >= CLUSTERS_MAX) break;
+  }
+  return out.length ? out : null;
+}
+
 function toCoinFacts(f: NonNullable<CheckSummaryRow['coinFacts']>): CoinFactsDTO {
   const dep = f.deployer;
   return {
@@ -487,8 +523,11 @@ export function toReport(c: CheckReportRow, ctx: MapCtx): CheckReportDTO {
     stepsExpected,
     progress: progressOf(c.status, ctx.progress?.get(c.id), c.steps.length, stepsExpected),
     narrative: narrativeOf(c.narScore, c.narBand),
-    // the /api page's `coin: { verdict, score }`; the facts the report's Coin tab reads sit next to them
-    coin: c.coinFacts ? { verdict: coinVerdictOf(c.coinScore, c.coinBand), score: c.coinScore, ...toCoinFacts(c.coinFacts) } : null,
+    // the /api page's `coin: { verdict, score }`; the facts the report's Coin tab reads sit next to them. The deep
+    // holder clusters (M4) only for Pro/Max viewers (signed in, or an API key)
+    coin: c.coinFacts
+      ? { verdict: coinVerdictOf(c.coinScore, c.coinBand), score: c.coinScore, ...toCoinFacts(c.coinFacts), clusters: isProViewer(ctx.viewer) ? clustersOf(ev) : null }
+      : null,
     market: toMarket(c, ev, summary, series),
     people: toPeople(c, ev),
     asksList,
@@ -621,4 +660,57 @@ export function toLive(c: LiveRow, ctx: MapCtx & { now: number }): LiveCheckDTO 
     lastText: c.steps[0]?.text ?? null,
     mine: isMine(c, ctx.viewer),
   };
+}
+
+/* ---------------- M4: developers ---------------- */
+
+export function toApiKeyDTO(k: Pick<ApiKey, 'id' | 'name' | 'prefix' | 'createdAt' | 'lastUsedAt'>): ApiKeyDTO {
+  return { id: k.id, name: k.name, prefix: k.prefix, createdAt: k.createdAt.toISOString(), lastUsedAt: iso(k.lastUsedAt) };
+}
+
+const WEBHOOK_EVENTS = new Set<string>(['check.completed', 'watch.changed']);
+
+export function toWebhookDTO(w: Pick<Webhook, 'id' | 'url' | 'events' | 'createdAt' | 'lastDeliveryAt' | 'lastStatus' | 'failCount' | 'disabledAt'>): WebhookDTO {
+  return {
+    id: w.id,
+    url: w.url,
+    events: w.events.filter((e): e is WebhookEvent => WEBHOOK_EVENTS.has(e)),
+    createdAt: w.createdAt.toISOString(),
+    lastDeliveryAt: iso(w.lastDeliveryAt),
+    lastStatus: w.lastStatus,
+    failCount: w.failCount,
+    disabled: w.disabledAt != null,
+  };
+}
+
+const DELIVERY_STATUSES = new Set<string>(['pending', 'ok', 'failed']);
+
+/** `shortIds`: Check.id (or a shortId stored as is) → the check's shortId */
+export function toWebhookDeliveryDTO(d: WebhookDelivery, shortIds: Map<string, string>): WebhookDeliveryDTO {
+  return {
+    id: d.id,
+    event: d.event,
+    status: (DELIVERY_STATUSES.has(d.status) ? d.status : 'pending') as WebhookDeliveryDTO['status'],
+    attempts: d.attempts,
+    responseCode: d.responseCode,
+    error: d.error,
+    createdAt: d.createdAt.toISOString(),
+    deliveredAt: iso(d.deliveredAt),
+    checkId: d.checkId ? shortIds.get(d.checkId) ?? null : null,
+  };
+}
+
+export type { CheckResult } from '@apecheck/core';
+
+/**
+ * A finished check in the flat shape of the webhook payload's `check` (and the MCP tool run_check): scores as
+ * numbers, `verdict` = the narrative verdict enum ("PARTLY_REAL", as on the /api page; the coin verdict for a check
+ * with only a coin score), `target` = what was pasted (Check.targetRaw). The worker's check.completed payload is built
+ * by the same core function (checkResultOf), so MCP and webhooks always agree.
+ */
+export function toCheckResult(
+  c: Pick<CheckReportRow, 'shortId' | 'targetRaw' | 'narScore' | 'narBand' | 'coinScore' | 'coinBand' | 'totalScore' | 'summary'> & { status?: string; error?: string | null },
+  env: Pick<Env, 'APP_URL'>,
+): CheckResult {
+  return checkResultOf(c, env.APP_URL);
 }

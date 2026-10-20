@@ -5,12 +5,13 @@
  * Any job on this queue that is not "scan" is a RecheckJob (the API may queue one when someone starts watching).
  */
 import { Queue, Worker, type Job } from 'bullmq';
-import { QUEUES, type CheckJob, type Env, type RecheckJob } from '@apecheck/core';
+import { QUEUES, type CheckJob, type Env, type RecheckJob, type WebhookJob } from '@apecheck/core';
 import { prisma as defaultPrisma, type PrismaClient } from '@apecheck/db';
 import { createSources, type Sources } from '@apecheck/sources';
 import { createLogger, errText, type Logger } from '../log';
 import { bullConnection, publisherConnection } from '../redis';
 import type { RunningWorker } from '../worker';
+import { enqueueDeliveries } from '../webhooks/events';
 import { RECHECK_CHECK_JOB, RETRY_AFTER_S, SCAN_EVERY_MS, processRecheck, retryKey, scanWatched, type RecheckDeps, type RecheckOutcome } from './recheck';
 
 export { processRecheck, scanWatched, startAutoRecheck, autoRechecksToday, reserveAutoRecheck, coveredByBaseline, SCAN_EVERY_MS, AUTO_RECHECK_GAP_MS, retryKey, type RecheckDeps, type RecheckOutcome } from './recheck';
@@ -48,6 +49,7 @@ export async function startWatchWorker(opts: WatchWorkerOptions): Promise<WatchW
   const pub = publisherConnection(env.REDIS_URL);
   const queue = new Queue(QUEUES.rechecks, { connection: bull });
   const checks = new Queue<CheckJob>(QUEUES.checks, { connection: bull });
+  const webhooks = new Queue<WebhookJob>(QUEUES.webhooks, { connection: bull });
   const deps: RecheckDeps = {
     env,
     prisma: opts.prisma ?? defaultPrisma,
@@ -59,6 +61,7 @@ export async function startWatchWorker(opts: WatchWorkerOptions): Promise<WatchW
     enqueueCheck: async checkId => {
       await checks.add('check', { checkId }, { jobId: checkId, ...RECHECK_CHECK_JOB });
     },
+    enqueueWebhooks: ids => enqueueDeliveries(webhooks, ids),
   };
   const scan = async (): Promise<string[]> => {
     const ids = await scanWatched(deps);
@@ -106,6 +109,7 @@ export async function startWatchWorker(opts: WatchWorkerOptions): Promise<WatchW
         await worker.close().catch(() => undefined);
         await queue.close().catch(() => undefined);
         await checks.close().catch(() => undefined);
+        await webhooks.close().catch(() => undefined);
         await pub.quit().catch(() => undefined);
         await bull.quit().catch(() => undefined);
       })()),

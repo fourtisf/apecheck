@@ -13,7 +13,8 @@
  *                                (a fingerprint nobody paid kept current — the last Pro/Max watcher left weeks ago —
  *                                is no baseline for someone who just started watching: with nobody covered it is
  *                                only replaced, "rebaselined"). For those watchers:
- *                                  - one "changed" Notification per Pro/Max watcher, Watch.lastAlertAt;
+ *                                  - one "changed" Notification per Pro/Max watcher, Watch.lastAlertAt, and (M4) a
+ *                                    watch.changed delivery for each enabled webhook of a Max watcher subscribed to it;
  *                                  - for Max watchers under MAX_AUTO_RECHECKS_PER_DAY (automatic re-checks they got
  *                                    today, UTC; the slot is reserved atomically per user and day in Redis, so
  *                                    targets changing at once can't overrun it) whose watch wasn't re-checked in the
@@ -33,6 +34,7 @@ import type { Redis } from 'ioredis';
 import { errText, type Logger } from '../log';
 import { fingerprintKind, fingerprintScheme, fingerprintTarget, type FingerprintKind, type WatchedTarget } from './fingerprint';
 import { NOTIFY_CHANGED, changedText, completeAutoRechecks } from './notify';
+import { watchChangedDeliveries } from '../webhooks/events';
 
 export const SCAN_EVERY_MS = 15 * 60_000;
 /** a watch is re-checked automatically at most this often */
@@ -64,6 +66,8 @@ export interface RecheckDeps {
   log: Logger;
   /** queue "checks" with PRIORITY.recheck (jobId = check id) */
   enqueueCheck(checkId: string): Promise<void>;
+  /** M4: queue the watch.changed WebhookDelivery rows written with the alerts (QUEUES.webhooks, jobId = delivery id) */
+  enqueueWebhooks?(deliveryIds: string[]): Promise<void>;
   now?: () => number;
   /** default CONFIRM_DELAY_MS */
   confirmDelayMs?: number;
@@ -262,8 +266,10 @@ async function alertWatchers(
 ): Promise<RecheckOutcome> {
   const { prisma, env, log } = deps;
   const at = new Date(now);
-  // 1. the new fingerprint and the alerts, together (compare-and-set: another run that got here first wins)
-  const created = await prisma.$transaction(async tx => {
+  // 1. the new fingerprint and the alerts, together (compare-and-set: another run that got here first wins); M4: the
+  //    watch.changed webhooks of the notified Max users in the same transaction (an alert and its webhooks exist
+  //    together or not at all)
+  const written = await prisma.$transaction(async tx => {
     const cas = await tx.target.updateMany({ where: { id: t.id, fingerprint: t.fingerprint }, data: { fingerprint: fp.value, fingerprintAt: at } });
     if (!cas.count) return null;
     const rows = await tx.notification.createManyAndReturn({
@@ -271,9 +277,15 @@ async function alertWatchers(
       select: { id: true, userId: true },
     });
     await tx.watch.updateMany({ where: { targetId: t.id, userId: { in: watchers.map(w => w.userId) } }, data: { lastAlertAt: at } });
-    return rows;
+    const deliveries = await watchChangedDeliveries(tx, rows, t.id);
+    return { rows, deliveries };
   });
-  if (!created) return { status: 'skipped', reason: 'handled by another run' };
+  if (!written) return { status: 'skipped', reason: 'handled by another run' };
+  const created = written.rows;
+  // the rows are committed: a failed enqueue only delays them (the webhooks worker's sweep queues lost deliveries)
+  if (written.deliveries.length && deps.enqueueWebhooks) {
+    await deps.enqueueWebhooks(written.deliveries).catch(e => log.warn(`watch ${t.name}: could not queue the watch.changed webhooks: ${errText(e)}`));
+  }
 
   // Max watchers entitled to an automatic re-check now (the alerts just written carry no checkId yet, so they don't
   // count), each with a slot of today's MAX_AUTO_RECHECKS_PER_DAY reserved; every path that starts no re-check gives

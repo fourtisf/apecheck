@@ -5,11 +5,13 @@
  */
 import { Queue } from 'bullmq';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
-import { QUEUES, getEnv, type CheckJob, type RecheckJob } from '@apecheck/core';
+import { QUEUES, getEnv, type CheckJob, type RecheckJob, type WebhookJob } from '@apecheck/core';
 import { prisma as defaultPrisma } from '@apecheck/db';
 import { createDexScreener, createEvm, createHttp, createSolana } from '@apecheck/sources';
 import { createAskBroker } from './asks';
 import type { ApiSources, AppDeps } from './context';
+import { McpRegistry, registerMcpRoutes } from './mcp';
+import { registerApiKeyAuth } from './plugins/apiKeys';
 import { registerCors } from './plugins/cors';
 import { registerErrorHandler, registerNotFound } from './plugins/errors';
 import { registerRateLimit } from './plugins/rateLimit';
@@ -19,6 +21,7 @@ import { ChannelHub, createQueueRedis, createRedis } from './redis';
 import { registerAuthRoutes } from './routes/auth';
 import { registerCheckRoutes } from './routes/checks';
 import { registerCommunityRoutes } from './routes/community';
+import { registerDeveloperRoutes } from './routes/developer';
 import { registerEventRoutes } from './routes/events';
 import { registerFeedRoutes } from './routes/feed';
 import { registerInsightRoutes } from './routes/insights';
@@ -49,34 +52,29 @@ export async function buildServer(opts: BuildOptions = {}): Promise<FastifyInsta
   const hub = opts.hub ?? new ChannelHub(createRedis(env.REDIS_URL, { maxRetriesPerRequest: null }));
   if (!opts.hub) owned.push(() => hub.close());
 
-  let queue = opts.queue;
-  if (!queue) {
+  /** a BullMQ producer on its own connection, closed with the app */
+  function ownedQueue<T>(name: string): Queue<T> {
     const conn = createQueueRedis(env.REDIS_URL);
-    const q = new Queue<CheckJob>(QUEUES.checks, { connection: conn });
-    queue = q;
+    const q = new Queue<T>(name, { connection: conn });
     owned.push(async () => {
+      // closing while BullMQ still sets the connection up (a quick restart) would reject inside the library
+      await q.waitUntilReady().catch(() => undefined);
       await q.close();
       await conn.quit();
     });
+    return q;
   }
 
-  let rechecks = opts.rechecks;
-  if (!rechecks) {
-    const conn = createQueueRedis(env.REDIS_URL);
-    const q = new Queue<RecheckJob>(QUEUES.rechecks, { connection: conn });
-    rechecks = q;
-    owned.push(async () => {
-      await q.close();
-      await conn.quit();
-    });
-  }
+  const queue = opts.queue ?? ownedQueue<CheckJob>(QUEUES.checks);
+  const rechecks = opts.rechecks ?? ownedQueue<RecheckJob>(QUEUES.rechecks);
+  const webhooks = opts.webhooks ?? ownedQueue<WebhookJob>(QUEUES.webhooks);
 
   const sources = opts.sources ?? createApiSources(env);
 
   const asks = opts.asks ?? createAskBroker(env);
   if (!opts.asks) owned.push(() => asks.close());
 
-  const deps: AppDeps = { env, prisma, redis, hub, queue, rechecks, sources, asks };
+  const deps: AppDeps = { env, prisma, redis, hub, queue, rechecks, sources, asks, webhooks, mcpWaitMs: opts.mcpWaitMs };
 
   const app = Fastify({
     logger: opts.logger ?? { level: env.LOG_LEVEL },
@@ -90,6 +88,8 @@ export async function buildServer(opts: BuildOptions = {}): Promise<FastifyInsta
   registerErrorHandler(app);
   await registerCors(app, env);
   await registerSession(app, deps);
+  // M4: after the session hook (a Bearer request is never a cookie session), before every route
+  registerApiKeyAuth(app, deps);
   await registerRateLimit(app, redis);
   registerNotFound(app);
   await registerShots(app, env.SCREENSHOT_DIR);
@@ -103,9 +103,15 @@ export async function buildServer(opts: BuildOptions = {}): Promise<FastifyInsta
   registerEventRoutes(app, deps, streams);
   registerFeedRoutes(app, deps);
   registerInsightRoutes(app, deps);
+  registerDeveloperRoutes(app, deps);
+  const mcp = new McpRegistry();
+  registerMcpRoutes(app, deps, mcp);
 
-  // open SSE streams would hold server.close() forever
-  app.addHook('preClose', async () => streams.endAll());
+  // open SSE streams would hold server.close() forever; MCP tools stop waiting and answer
+  app.addHook('preClose', async () => {
+    streams.endAll();
+    mcp.abortAll();
+  });
   app.addHook('onClose', async () => {
     for (const close of owned) await close().catch(() => undefined);
   });

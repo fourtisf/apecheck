@@ -95,6 +95,10 @@ export const USER_RATE = {
   watchlist: 60,
   notifications: 60,
   notificationsRead: 30,
+  // M4: key and webhook management (session only), test pings
+  keys: 30,
+  webhooks: 30,
+  webhookTest: 10,
 } as const;
 
 /** One per-minute burst hit for this user on `name`; 429 rate_limited when over. */

@@ -56,6 +56,13 @@ export class FakeSources implements ApiSources {
   dexCalls = 0;
   httpCalls: FakeHttpCall[] = [];
   httpHandlers: FakeHttpHandler[] = [];
+  /** M4: host → addresses for the webhook URL check (missing = the name doesn't resolve) */
+  dns = new Map<string, string[]>();
+  readonly lookup = async (host: string): Promise<string[]> => {
+    const a = this.dns.get(host);
+    if (!a) throw new Error(`ENOTFOUND ${host}`);
+    return a;
+  };
 
   readonly evm = {
     tokenBalance: async (chain: ChainKey, token: string, owner: string) => {
@@ -103,6 +110,8 @@ export class FakeSources implements ApiSources {
 
 export interface HarnessOptions {
   sources?: FakeSources;
+  /** M4: how long the MCP tool run_check waits */
+  mcpWaitMs?: number;
   /** how long POST /v1/checks/:id/asks waits for the worker */
   askWaitMs?: number;
   /** record the SQL of every Prisma query in `queries` */
@@ -146,7 +155,7 @@ export async function makeHarness(envOverrides: Record<string, string> = {}, opt
   const publisher = new Redis(TEST_REDIS_URL);
   const sources = opts.sources ?? new FakeSources();
   const asks = createAskBroker(env, { waitMs: opts.askWaitMs ?? 5_000 });
-  const app = await buildServer({ env, prisma, redis, hub, queue, sources, asks, logger: false });
+  const app = await buildServer({ env, prisma, redis, hub, queue, sources, asks, mcpWaitMs: opts.mcpWaitMs, logger: false });
   await app.ready();
   return {
     app,
@@ -162,6 +171,9 @@ export async function makeHarness(envOverrides: Record<string, string> = {}, opt
     publisher,
     queries,
     async close() {
+      // a harness closed right after it was made would otherwise cut the queue's connection while BullMQ is still
+      // setting it up (an unhandled "Connection is closed")
+      await queue.waitUntilReady().catch(() => undefined);
       await app.close();
       await asks.close();
       await queue.close();
@@ -183,7 +195,7 @@ export function dbUrlInTimeZone(tz: string): string {
 }
 
 const TABLES = [
-  'Notification', 'NoteVote', 'Note', 'Ask', 'BotMention', 'Watch', 'ApiKey', 'Webhook', 'PricePoint',
+  'Notification', 'NoteVote', 'Note', 'Ask', 'BotMention', 'Watch', 'ApiKey', 'WebhookDelivery', 'Webhook', 'PricePoint',
   'CoinFacts', 'Claim', 'CheckStep', 'Check', 'Deployer', 'Target', 'User',
 ];
 

@@ -207,11 +207,19 @@ Michael defines the real endpoints. Until then the adapter calls, with `Authoriz
 |---|---|---|
 | `devRadar` | `GET {FOURTIS_API_URL}/devradar/{chain}/{address}` | `{ deployer, fundedFrom?, launched, dead, firstSeen?, launches?: [{ address, chain?, createdAt?, dead }] }` |
 | `bundleScan` | `GET {FOURTIS_API_URL}/bundlescan/{chain}/{address}` | `{ bundlePct, wallets, launchBlock? }` |
-| `whaleFlow` | `GET {FOURTIS_API_URL}/whaleflow/{chain}/{address}` | `{ top10Pct, devHoldPct, holders?, lp?: { status: "burned" \| "locked" \| "unlocked", lockedDays? } }` |
+| `whaleFlow` | `GET {FOURTIS_API_URL}/whaleflow/{chain}/{address}` | `{ top10Pct, devHoldPct, holders?, lp?: { status: "burned" \| "locked" \| "unlocked", lockedDays? }, clusters?: [{ label, wallets, pct, fundedFrom? }] }` |
 
 `{chain}` is the ApeCheck chain key (`sol`, `base`, `eth`, `bnb`, `arb`, `rh`, `trx`). Paths live in
 `FOURTIS_PATHS` and the shapes in the zod schemas at the top of `adapters/fourtis.ts`; change both there when
 the real API lands. A 404 means "no data for this coin" (not an error); a shape mismatch is recorded in `lastError`.
+
+**Holder clusters (M4, Pro/Max "deep holder clusters", placeholder shape).** WhaleFlow may add `clusters`: groups of
+holder wallets it ties together because one source funded them — `label` (non-empty, clipped to 80 characters),
+`wallets` (integer ≥ 1), `pct` (% of supply the group holds, 0–100; numbers or numeric strings, never null), `fundedFrom`
+(the common funder, address or name, clipped to 120; null/absent = unknown). `parseHolderClusters()` validates them
+item by item (`WhaleClusterZ`): an odd item is left out and reported (`lastError = "fourtis.whaleFlow: 2 holder
+cluster(s) with an unexpected shape left out"`) without costing the holder numbers or the other clusters; the 20
+largest by `pct` are kept, largest first. No `clusters`, an empty list or nothing usable → no `clusters` key at all.
 
 ## coinFacts (Stage D for coins)
 
@@ -224,6 +232,7 @@ chain's public fallbacks. **Fourtis values win**; every section records its `sou
 | bundle | BundleScan | none (`null`) |
 | holders | WhaleFlow | Solana: top-10 % from the largest accounts, leaving out the DexScreener pair and known AMM vault authorities (Raydium AMM v4 / CPMM / LaunchLab, Meteora DAMM v2) and the incinerator |
 | lp | WhaleFlow | none (`null`) |
+| clusters (M4) | WhaleFlow | none: the key is absent (never empty, never estimated from the largest accounts) |
 | authorities | — | Solana: mint/freeze authority ("Renounced" / "Mint renounced, freeze active" / "Mint still active"); EVM/Tron: mint renounced = no mint function OR owner renounced (an ownerless contract with a mint function is unknown, not renounced) |
 | market | DexScreener | — |
 

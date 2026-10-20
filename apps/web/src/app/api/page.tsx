@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { CodeTabs } from '@/components/pages/CodeTabs';
+import { DevNote, DevTools } from '@/components/pages/Developers';
 import { AccessTiers } from '@/components/Tiers';
 
 export const metadata: Metadata = {
@@ -7,7 +8,10 @@ export const metadata: Metadata = {
   description: 'Run ApeCheck from your own app or AI: REST API, MCP server and webhooks, with the same agent and the same report as JSON.',
 };
 
-/** viewApi(): developer docs (REST / MCP / webhook) and the access tiers. */
+/**
+ * viewApi(): developer docs (REST / MCP / webhook) and the access tiers. M4: a signed-in Max viewer manages API keys and
+ * webhooks under the docs; everyone else reads that they come with Max under the code.
+ */
 export default function ApiPage() {
   return (
     <section className="wrap page">
@@ -29,8 +33,12 @@ export default function ApiPage() {
             </li>
           </ul>
         </div>
-        <CodeTabs />
+        <div className="dev-code">
+          <CodeTabs />
+          <DevNote />
+        </div>
       </div>
+      <DevTools />
       <div className="sec2">
         <h2>Access</h2>
         <AccessTiers />

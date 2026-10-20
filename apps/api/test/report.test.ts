@@ -236,6 +236,8 @@ describe('GET /v1/checks/:id', () => {
         },
         deployerAddress: DEP,
         deployerText: '6 earlier tokens, 2 dead',
+        // M4: the deep holder clusters are for Pro/Max viewers only (test/clusters.test.ts)
+        clusters: null,
       },
       market: {
         priceAtCheck: 0.001,

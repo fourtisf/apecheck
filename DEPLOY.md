@@ -10,12 +10,13 @@ Processes (PM2, `ecosystem.config.cjs`):
 | `api` | Fastify REST + SSE (`apps/api`) | 4000 (localhost only) |
 | `worker-checks` | check pipeline; drives the browser agent | — |
 | `worker-bot` | @ApeCheckBot mentions + replies (§14); answers the site's follow-up questions (M3, queue `asks`), so it must run even before the bot has X keys | — |
-| `worker-prices` | price tracking, screenshot cleanup; M3: re-check alerts for watchlists (queue `rechecks`), daily deployer refresh, hourly tier refresh | — |
+| `worker-prices` | price tracking, screenshot cleanup; M3: re-check alerts for watchlists (queue `rechecks`), daily deployer refresh, hourly tier refresh; M4: webhook deliveries (queue `webhooks`, outbound HTTPS to developers' URLs through the SSRF guard) | — |
 
 Plus one systemd unit, `apecheck-browser.service` (`deploy/browser`): Chromium itself, as a separate user with no access
 to the app's secrets (§6). Its Playwright endpoint is `127.0.0.1:9223` (localhost only); worker-checks' SSRF guard proxy is `127.0.0.1:9224`.
 
-Nginx terminates TLS: `apecheck.io` → `:3000`, `api.apecheck.io` → `:4000` (SSE-safe), `www` → apex.
+Nginx terminates TLS: `apecheck.io` → `:3000`, `api.apecheck.io` → `:4000` (SSE-safe), `mcp.apecheck.io` → the API's
+`/mcp` (MCP server, M4; SSE-safe), `www` → apex.
 
 ---
 
@@ -184,6 +185,7 @@ Check: `pm2 ls` (all five `online`), `pm2 logs --lines 50`, `curl -s localhost:4
 | A | `@` | VPS IP |
 | A | `www` | VPS IP |
 | A | `api` | VPS IP |
+| A | `mcp` | VPS IP (M4: the MCP server) |
 
 ## 8. Nginx + SSL
 
@@ -193,10 +195,17 @@ sudo ln -sf /etc/nginx/sites-available/apecheck.conf /etc/nginx/sites-enabled/ap
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 
-sudo certbot --nginx -d apecheck.io -d www.apecheck.io -d api.apecheck.io
+sudo certbot --nginx -d apecheck.io -d www.apecheck.io -d api.apecheck.io -d mcp.apecheck.io
 ```
 
 `/v1/checks/*/events` (SSE) is proxied with `proxy_buffering off` and a 1 h read timeout, so the live log streams through.
+`mcp.apecheck.io` (`/` and `/mcp`) and `api.apecheck.io/mcp` go to the API's `/mcp` the same way (no buffering, 300 s
+reads): the MCP tool `run_check` answers over SSE after up to 150 s. `MCP_ENABLED=false` turns the MCP server off (404).
+Adding `mcp` to an existing certificate later: `sudo certbot --nginx --expand -d apecheck.io -d www.apecheck.io -d api.apecheck.io -d mcp.apecheck.io`.
+
+Verify the MCP server: `curl -s -X POST https://mcp.apecheck.io -H 'content-type: application/json' -d '{}'` answers 401
+`key_required`; with `-H "authorization: Bearer <a Max user's key>" -H 'accept: application/json, text/event-stream'` and an
+MCP `initialize` body it answers `event: message` with the server info.
 
 Verify SSE end to end once a check exists: `curl -N https://api.apecheck.io/v1/checks/<id>/events` prints `event: step` lines as they happen.
 

@@ -1,6 +1,6 @@
 /**
  * Settings of the browser suite: its own database, Redis db and ports, so it never touches dev data or another
- * suite. Override with E2E_DATABASE_URL, E2E_REDIS_URL, E2E_API_PORT, E2E_WEB_PORT, E2E_DIST_DIR.
+ * suite. Override with E2E_DATABASE_URL, E2E_REDIS_URL, E2E_API_PORT, E2E_WEB_PORT, E2E_HOOK_PORT, E2E_DIST_DIR.
  */
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -16,6 +16,8 @@ export const DB_URL = process.env.E2E_DATABASE_URL ?? 'postgresql://apecheck:ape
 export const REDIS_URL = process.env.E2E_REDIS_URL ?? 'redis://localhost:6379/3';
 export const API_PORT = Number(process.env.E2E_API_PORT ?? 4611);
 export const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 3611);
+/** M4: the tests' webhook receiver; the API and worker-prices let it through the SSRF guard (SSRF_ALLOW_HOSTS) */
+export const HOOK_PORT = Number(process.env.E2E_HOOK_PORT ?? 4612);
 export const API_URL = `http://127.0.0.1:${API_PORT}`;
 export const WEB_URL = `http://127.0.0.1:${WEB_PORT}`;
 /** `next build` output of this suite (git-ignored, like every .next-* folder); E2E_DIST_DIR for a second copy */

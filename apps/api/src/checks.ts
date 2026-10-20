@@ -30,6 +30,8 @@ export interface CreateInput {
   target: string;
   recheck?: boolean;
   private?: boolean;
+  /** M4: who started it: the site (default) or a developer's API key (REST or MCP) */
+  via?: 'WEB' | 'API';
 }
 
 export interface CreateResult {
@@ -70,7 +72,7 @@ export async function createCheck(deps: AppDeps, input: CreateInput, subject: Cr
 
     let check: { id: string; shortId: string; targetId: string; isPrivate: boolean };
     try {
-      check = await createCheckRow(prisma, d, { raw: input.target, via: 'WEB', requesterId: subject.userId ?? null, requesterSid: subject.sid, isPrivate });
+      check = await createCheckRow(prisma, d, { raw: input.target, via: input.via ?? 'WEB', requesterId: subject.userId ?? null, requesterSid: subject.sid, isPrivate });
     } catch (err) {
       await refundCredit(redis, subject).catch(() => undefined);
       throw err;

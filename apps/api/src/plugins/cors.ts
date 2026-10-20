@@ -33,7 +33,8 @@ export async function registerCors(app: FastifyInstance, env: Env) {
     },
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Last-Event-ID'],
+    // Mcp-Protocol-Version: browser-based MCP tools on a local dev origin (M4)
+    allowedHeaders: ['Content-Type', 'Authorization', 'Last-Event-ID', 'Mcp-Protocol-Version'],
     exposedHeaders: ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'retry-after'],
     maxAge: 600,
   });

@@ -39,7 +39,7 @@ Data only comes from the API (`src/lib/api.ts`, shapes in `packages/core/src/dto
 
 | File | What |
 |---|---|
-| `lib/api.ts` | Typed client: `me`, `createCheck` (`private` for Max), `report`, `eventsUrl(id)` (SSE, `new EventSource(url, { withCredentials: true })`, close it on `done`), `feed`, `live`, `insights`, `coins`, `deployers`, `botStats`, `asks`, `notes`, `helpful`, `shotUrl(path)`; M3: `watch` / `unwatch` (POST / DELETE `/v1/watch/:targetId`), `watchlist`, `notifications(limit?)`, `readNotifications(ids?)`, `authNonce(chain, address, chainId?)`, `authVerify(body)`, `logout`, `xLinkUrl()` (the browser goes there for "Link your X"), `xUnlink`. Also `ApiRequestError`, `isApiError(e, code?)`, `isAbortError(e)`, `NETWORK_ERROR`, param types `FeedParams`, `CoinsParams`, `DeployersParams`, `FeedTab`, `FeedType`. |
+| `lib/api.ts` | Typed client: `me`, `createCheck` (`private` for Max), `report`, `eventsUrl(id)` (SSE, `new EventSource(url, { withCredentials: true })`, close it on `done`), `feed`, `live`, `insights`, `coins`, `deployers`, `botStats`, `asks`, `notes`, `helpful`, `shotUrl(path)`; M3: `watch` / `unwatch` (POST / DELETE `/v1/watch/:targetId`), `watchlist`, `notifications(limit?)`, `readNotifications(ids?)`, `authNonce(chain, address, chainId?)`, `authVerify(body)`, `logout`, `xLinkUrl()` (the browser goes there for "Link your X"), `xUnlink`; M4 (Max, wallet session only; the API refuses API keys on these): `apiKeys`, `createApiKey(name?)` (the key is in that response only), `revokeApiKey(id)`, `webhooks`, `createWebhook({ url, events })` (the signing secret is in that response only), `deleteWebhook(id)`, `enableWebhook(id)`, `testWebhook(id)` (queues a ping, returns the pending `WebhookDeliveryDTO`), `webhookDeliveries(id)` (last 50). Also `ApiRequestError`, `isApiError(e, code?)`, `isAbortError(e)`, `NETWORK_ERROR`, param types `FeedParams`, `CoinsParams`, `DeployersParams`, `FeedTab`, `FeedType`. |
 | `lib/server-api.ts` | Server only: `serverCall({ timeoutMs? })`, `forwardedHeaders()` (X-Forwarded-For, User-Agent, the API cookies), `apiCookieHeader(cookie)`, `orNull(promise)`. |
 | `lib/wallet/` | Wallet sign-in without wallet libraries. `walletRegistry()` (the page's one `createWalletRegistry(window)`): `list(chain?)`, `refresh()`, `subscribe(fn)`. EVM: EIP-6963 (`eip6963:requestProvider` / `announceProvider`; name, rdns, icon only when it is a `data:image/…` URL), `window.ethereum` while nothing announced (named by its `isX` flags). Solana: the Wallet Standard handshake (`wallet-standard:app-ready` with `{ register }`, `wallet-standard:register-wallet`), wallets with `standard:connect` + `solana:signMessage`; `window.phantom.solana` / `window.solana` while none registered. `walletSignIn(option, { nonce, verify }, onStep?)`: connect (`eth_requestAccounts` + `eth_chainId` / `standard:connect`) → `GET /v1/auth/nonce` → sign the exact message (`personal_sign [hexUtf8(message), address]` / `signMessage(utf8 bytes)` → base64) → `POST /v1/auth/verify`. Wallet failures are `WalletFlowError` (`declined_connect`, `declined_sign`, `pending`, `no_account`, `bad_signature`, `wallet_error`); `signInErrorText(e)` is the toast ("Signature request was declined", or the API's message). |
 | `lib/env.ts` | `PUBLIC_API_URL`, `APP_URL`, `APP_HOST` ("apecheck.io"), `reportPath(id)` → `/c/<id>`. Server renders reach the API at `API_INTERNAL_URL` (default `http://127.0.0.1:4000`, handled inside `api.ts`). |
@@ -147,9 +147,48 @@ an older URL after Back.
 - Deployer: `coin.deployer` (known record) → the record card and badge; only `coin.deployerAddress` (history unknown) → the
   short address with "Launch history unavailable" (Coin tab, side card, coins table), never a made-up record.
 - A pasted contract whose chain couldn't be read (`kind === 'coin' && !hasCoin`) says so; it is never "No coin linked".
+- Coin tab, M4: **Wallet clusters** (`Clusters` in `CoinTab.tsx`) under the coin facts when `coin.clusters` has items (the
+  API sends them to Pro/Max viewers only): heading with the `.lock` "Pro" marker, one `.facts` row per cluster: label,
+  "12.4% of supply", "14 wallets, funded from …" (a wallet address in mono, shortened; a name as written), source
+  WhaleFlow. Nothing otherwise.
 - A check that stopped without a verdict (`noVerdict(r)` in `report/util.tsx`: failed, or finished with no narrative
   score) opens on the Agent run tab (`initialTab`), and Claims, Coin and the price card say the run stopped before
   that point instead of "no claims found" / "no coin linked". Claims or coin facts saved before it stopped still show.
+
+## /api (M4: API keys, webhooks, MCP)
+
+`app/api/page.tsx` keeps the prototype's `viewApi()` layout: the `.dev-g` intro and the code card, then Access.
+
+- `CodeTabs` (`pages/CodeTabs.tsx`): the prototype's three tabs and markup, with the real shapes. REST: `POST /v1/checks`
+  with the Bearer key and `Content-Type: application/json` (the API parses JSON only), then the `GET /v1/checks/:id`
+  fields apps/api documents for this page (`id`, `status`, `narrative`, `coin`, `total`, `summary`, `claims[].result`,
+  `report_url`; ids are 7 characters). MCP: server `"apecheck"` at `https://mcp.apecheck.io` and the four tools, labelled `~/.cursor/mcp.json` (the prototype
+  said `claude_desktop_config.json`, but Claude Desktop needs the mcp-remote bridge to send the key; apps/api README).
+  Webhook: the `ApeCheck-Signature: t=…,v1=…` header (`WEBHOOK_SIGNATURE_HEADER`) above the `WebhookPayload` body
+  (`id`, `event`, `created`, `check`), and how `v1` is computed. Static docs: no viewer data.
+- `DevNote` (`pages/Developers.tsx`), under the code card (`.dev-code` keeps the card's long lines scrolling inside it):
+  "API keys, webhooks and MCP are part of Max." for everyone but a signed-in Max viewer, with Connect wallet when signed
+  out (`devViewer(me)`: `signed-out` / `signed-in` / `max`).
+- `DevTools`, between the docs and Access, only for a signed-in Max viewer (`MeDTO.tier`; keyed by the user, so signing
+  out or switching wallets drops everything, a shown-once secret included). A 401/403 from any of its calls re-reads
+  `/v1/me` (the tier is re-read by the API per the M3 rules), so a lapsed Max viewer falls back to the Max line.
+  - **Your API keys**: a pill field "Key name (optional)" (40 characters) + Create key; the new key appears once in
+    `OnceSecret` (read-only mono field, focused, Copy → toast "Copied" with a select-and-copy fallback, "Copy it now and
+    keep it somewhere safe. It won't be shown again.", Done). The list (`.tbl.dev-tbl.ktbl`) shows name, `prefix…`
+    (`keyShown`), created, last used ("Never") and Revoke → "Yes, revoke" / "Cancel" (`ConfirmButton`, focus follows).
+    The API's words under the field on failure (409 `too_many_keys`, …). Revoking the key still on show hides it.
+  - **Webhooks**: URL field + event checkboxes (`.dev-ev`; check.completed ticked by default, watch.changed) → the
+    signing secret once in `OnceSecret`. The page only checks the URL's shape (`webhookUrlProblem`); https in
+    production and "public" are the API's (400 `bad_url` with its message). Rows (`.htbl`): URL, events, status pill
+    (`hookStatus`: Active / Failing / Disabled with "Turned off after N failed deliveries in a row"), last delivery
+    ("HTTP 200 · 5m ago", `responseText`), Send test (Enable when disabled, the same button node so focus stays),
+    Deliveries (expands `.dep-more` with the last 50: `deliveryStatus` pill Delivered / Pending / Retrying / Failed,
+    event, HTTP code, attempts, Report link, error) and Delete → "Yes, delete". Send test opens the deliveries and
+    looks again every 1.5 s (40 times) until that ping settles, then re-reads the row's own status; only the newest
+    deliveries answer is shown.
+  - Buttons waiting for a request are `aria-disabled` (not `disabled`), so keyboard focus never drops to `<body>`.
+  - Columns have fixed widths (each `.tr` is its own grid); up to 1000px rows stack (name and status, then the dates in
+    `.c-mob`, then the actions).
 
 ## /coins and /deployers
 
@@ -183,12 +222,13 @@ pnpm --filter @apecheck/web typecheck   # src and test/
   a report that stopped before a verdict; M3: wallet discovery and sign-in with fake providers (`wallet.test.ts`:
   EIP-6963, `window.ethereum`, Wallet Standard, `window.phantom.solana`, declines, API errors) and the account rules
   and markup (`account.test.tsx`: tier cards, `$APECHECK` quote, holding line, watch toasts, watchlist filters and
-  migration, forwarded cookies, `?x=`). Components render with `react-dom/server`.
+  migration, forwarded cookies, `?x=`); M4 (`m4-ui.test.tsx`): who gets keys and webhooks or the Max line, status
+  pills, the webhook URL check, the code tabs' shapes, the Coin tab's clusters. Components render with `react-dom/server`.
 - Browser suite (`test/e2e`, `vitest.e2e.config.ts`): its own database `apecheck_test_web` (created and migrated, then
   seeded by `test/e2e/seed.ts`), Redis db 3, the API on 127.0.0.1:4611 and the web on 127.0.0.1:3611 (built into
   `.next-e2e`; `tsconfig.json` is put back after the build). Needs local Postgres + Redis; Playwright and its Chromium
   come from `@apecheck/worker` (no install). Override with `E2E_DATABASE_URL`, `E2E_REDIS_URL`, `E2E_API_PORT`,
-  `E2E_WEB_PORT`, `E2E_DIST_DIR` (a second build folder, e.g. for a parallel run); `E2E_SKIP_BUILD=1` reuses the last build. Covers: feed state after a report and Back, `/coins` and
+  `E2E_WEB_PORT`, `E2E_HOOK_PORT`, `E2E_DIST_DIR` (a second build folder, e.g. for a parallel run); `E2E_SKIP_BUILD=1` reuses the last build. Covers: feed state after a report and Back, `/coins` and
   `/deployers` filters on Back, the dark theme on an unknown `/c/<id>`, a failed check's tabs, the `/bot` thread, the
   header from 1001 to 1240px and the segmented controls at phone width.
 - M3 (`test/e2e/account.e2e.test.ts`): global setup also starts worker-bot (`apps/worker src/bot.ts`: the asks consumer;
@@ -208,3 +248,12 @@ pnpm --filter @apecheck/web typecheck   # src and test/
   keyboard focus after sign-in / linking / asking / posting / sign-out, the private report's marker and share card,
   the account menu on short windows, the header with the token live (as Max, 1241–1440px), and alerts arriving on an
   open page (`page.clock`).
+- M4 (`test/e2e/developers.e2e.test.ts`): global setup also starts worker-prices (`apps/worker src/prices.ts`: the
+  webhook deliveries on queue "webhooks") and sets `SSRF_ALLOW_HOSTS=127.0.0.1:<E2E_HOOK_PORT>` (default 4612) for the
+  API and the worker, where the test runs its own receiver. Covers: the Max line signed out (with Connect wallet) and for
+  Pro, the code tabs' shapes, a Max wallet creating a key (shown once and copied, then only its prefix; the key calls
+  the API and shows "last used"; revoked, it gets 401 `invalid_key`), adding a webhook (a malformed and a private URL
+  refused, the secret shown once), Send test delivered by the worker with a valid `ApeCheck-Signature`, a disabled
+  webhook enabled again, focus kept on Send test, the Coin tab's clusters for Pro and not for a signed-out reader, and
+  /api as Max and signed out at 1440, 900 and 390px, light and dark (no sideways scroll, header columns aligned;
+  screenshots in the log folder's `m4-shots/`).

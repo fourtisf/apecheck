@@ -699,3 +699,79 @@ footer{border-top:1px solid var(--line);padding:30px 0 48px}
   .acct-menu{position:fixed;top:60px;right:16px;left:16px;width:auto;max-width:none;max-height:calc(100vh - 76px);max-height:calc(100dvh - 76px)}
   .probe-priv{order:1;margin-left:auto}
 }
+
+/* ---------- M4: API keys and webhooks on /api (Max), wallet clusters on the Coin tab ---------- */
+
+/* the code card and the line under it share the grid cell; min-width 0 keeps the long <pre> lines scrolling inside the
+   card (the card alone was a scroll container, whose automatic minimum width is 0) */
+.dev-code{min-width:0}
+/* the line under the code card for everyone who isn't Max */
+.dev-note{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;margin:14px 2px 0;font-size:15px;color:var(--mute)}
+.dev-sub{margin:-4px 0 16px;color:var(--mute);font-size:15px;max-width:76ch}
+.dev-sub code{font-family:var(--mono);font-size:.88em;color:var(--ink)}
+/* create forms: a pill field with its button, like the asks box */
+.dev-form{display:grid;gap:10px;margin-bottom:14px}
+.dev-field{display:flex;align-items:center;gap:8px;max-width:640px;padding:5px 5px 5px 16px;border:1px solid var(--line2);border-radius:999px;background:var(--panel)}
+.dev-field:focus-within{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
+.dev-field input{flex:1;min-width:0;background:none;border:0;outline:0;font-size:15px;padding:6px 0;color:var(--ink)}
+.dev-field input::placeholder{color:var(--dim)}
+.dev-field input[readonly]{opacity:.6}
+.dev-evs{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;border:0;min-width:0}
+.dev-ev{display:inline-flex;align-items:center;gap:8px;padding:7px 14px 7px 11px;border:1px solid var(--line2);border-radius:999px;background:var(--panel);font-size:13.5px;cursor:pointer}
+.dev-ev:has(input:checked){border-color:color-mix(in srgb,var(--acc) 40%,transparent);background:var(--acc-soft)}
+.dev-ev:has(input:focus-visible){outline:2px solid var(--acc);outline-offset:2px}
+.dev-ev input{accent-color:var(--acc);margin:0}
+.dev-ev .mono{font-weight:600}
+.dev-ev small{color:var(--dim);font-size:12.5px}
+.dev-msg{margin:-4px 4px 14px;font-size:14px;color:var(--mute)}
+/* a key or signing secret, shown once */
+.dev-once{display:grid;gap:10px;max-width:760px;padding:16px;margin-bottom:14px;border-radius:16px;background:var(--bg2);border:1px solid color-mix(in srgb,var(--acc) 40%,var(--line))}
+.dev-once p{margin:0;font-size:14.5px;color:var(--mute)}
+.dev-once p b{color:var(--ink);font-weight:700;word-break:break-all}
+.dev-secret{display:flex;align-items:center;gap:8px;padding:5px 5px 5px 14px;border:1px solid var(--line2);border-radius:999px;background:var(--panel)}
+.dev-secret input{flex:1;min-width:0;background:none;border:0;outline:0;font-size:13px;padding:6px 0;color:var(--ink)}
+.dev-secret:focus-within{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
+.dev-once .dev-warn{color:var(--ink);font-weight:600}
+/* key and webhook lists: every row is its own grid, so each track has a fixed width (an auto actions column would
+   size per row and the header would not line up) */
+.dev-tbl .tr{grid-template-columns:minmax(0,1fr) 130px 130px 190px;gap:16px}
+.htbl .tr{grid-template-columns:minmax(0,1fr) 92px 180px 290px}
+.dev-tbl .nm2.mono{font-size:12.5px}
+.dev-t{font-size:13.5px;color:var(--mute);white-space:nowrap}
+.dev-acts{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:6px}
+.dev-url{font-size:13.5px;font-weight:600}
+.btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
+.btn.danger{color:var(--dn);border-color:color-mix(in srgb,var(--dn) 45%,var(--line2))}
+.btn.danger:hover{background:color-mix(in srgb,var(--dn) 8%,var(--panel))}
+.dev-more{padding-left:20px}
+.dev-more > p{margin:0}
+.dlv{list-style:none;margin:0;padding:0}
+.dlv li{display:grid;grid-template-columns:92px minmax(0,1fr) auto;align-items:center;gap:4px 12px;padding:9px 0;border-top:1px solid var(--line);font-size:13.5px}
+.dlv li:first-child{border-top:0;padding-top:0}
+.dlv .pill{justify-self:start}
+.dlv-m{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;min-width:0;color:var(--mute)}
+.dlv-m b{color:var(--ink);font-size:13px}
+.dlv-t{font-size:12.5px;color:var(--dim);white-space:nowrap}
+.dlv small{grid-column:2/-1;color:var(--dim);font-size:12.5px;overflow-wrap:anywhere}
+/* up to 1000px the columns don't fit beside a URL: each row stacks (name and status, then the dates, then actions) */
+@media (max-width:1000px){
+  .dev-tbl .th{display:none}
+  .dev-tbl .tr{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"nm act" "mob mob";gap:8px 12px}
+  .htbl .tr{grid-template-areas:"nm sc" "mob mob" "act act"}
+  .dev-tbl .c-nm{grid-area:nm}
+  .dev-tbl .c-col{display:none}
+  .dev-tbl .c-mob{grid-area:mob;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--dim)}
+  .dev-tbl .c-sc{grid-area:sc}
+  .dev-tbl .c-act{grid-area:act}
+  .htbl .dev-acts{justify-content:flex-start}
+}
+@media (max-width:760px){
+  .dev-more{padding:12px 16px 16px}
+  .dlv li{grid-template-columns:minmax(0,1fr) auto}
+  .dlv .dlv-m{grid-column:1/-1;order:3}
+  .dlv small{grid-column:1/-1;order:4}
+}
+
+/* Coin tab: Pro/Max wallet clusters under the coin facts */
+.clusters{margin-top:26px}
+.clusters .h4{display:flex;align-items:center;gap:8px}
