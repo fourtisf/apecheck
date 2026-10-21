@@ -1,6 +1,6 @@
 /** Stage A: target detection and gap filling with FakeSources, Target re-keying in the test database. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createX, reportError, type DexOtherChainToken, type Http, type Sources } from '@apecheck/sources';
+import { createEvm, createX, reportError, type DexOtherChainToken, type Http, type HttpResponse, type Sources } from '@apecheck/sources';
 import { memoryLogger } from '../src/log';
 import { CheckRun, type PipelineDeps } from '../src/pipeline/context';
 import { findCoin, finishResolve, projectSite, resolveStage, saveTarget, xHandleFromLinks } from '../src/pipeline/resolve';
@@ -133,7 +133,7 @@ describe('Stage A — resolve', () => {
         return null;
       };
       s.evm.detectChain = async () => {
-        for (const c of ['base', 'eth', 'bnb', 'arb']) reportError(`evm.getCode ${c}: getaddrinfo ENOTFOUND rpc`);
+        for (const c of ['base', 'eth', 'bnb', 'arb', 'rh']) reportError(`evm.getCode ${c}: getaddrinfo ENOTFOUND rpc`);
         return null;
       };
     });
@@ -155,8 +155,48 @@ describe('Stage A — resolve', () => {
   it('EVM contract found on no chain (only the chains that were asked are named)', async () => {
     const coin = '0x4444444444444444444444444444444444444444';
     const { texts, target } = await resolve(coin, {});
-    expect(texts).toEqual(['warn|On-chain|Contract 0x444…4444 not found on Base, Ethereum, BNB Chain or Arbitrum']);
+    expect(texts).toEqual(['warn|On-chain|Contract 0x444…4444 not found on Base, Ethereum, BNB Chain, Arbitrum or Robinhood Chain']);
     expect(target.key).toBe(`ca:evm:${coin}`);
+  });
+
+  describe('code only on Robinhood Chain, RPC_ROBINHOOD empty (the real EVM adapter, its public node)', () => {
+    const coin = '0x659000000000000000000000000000000000db19';
+    /** every chain's public RPC answers eth_getCode: code on the Robinhood host only (or that host failing) */
+    const nodes = (rh: 'code' | 'down'): Http => {
+      async function request(url: string, req: { body?: unknown } = {}): Promise<HttpResponse> {
+        const host = new URL(url).host;
+        const { id } = JSON.parse(String(req.body)) as { id: number };
+        const res = (status: number, text: string): HttpResponse => ({ status, ok: status < 300, url, finalUrl: url, headers: {}, text, truncated: false, ms: 1 });
+        if (host === 'rpc.mainnet.chain.robinhood.com' && rh === 'down') return res(429, 'rate limited');
+        return res(200, JSON.stringify({ jsonrpc: '2.0', id, result: host === 'rpc.mainnet.chain.robinhood.com' ? '0x6080604052' : '0x' }));
+      }
+      return {
+        request,
+        async json<T>(url: string, req = {}) {
+          const r = await request(url, req);
+          if (!r.ok) throw new Error(`HTTP ${r.status} from ${new URL(url).host}`);
+          return JSON.parse(r.text) as T;
+        },
+      };
+    };
+    const realEvm = (rh: 'code' | 'down') => (s: Sources) => {
+      s.evm = createEvm(env, nodes(rh), { detectRetryDelayMs: 0 });
+    };
+
+    it('resolves to Robinhood Chain, never "Not enough to check"', async () => {
+      const { texts, target, run } = await resolve(coin, {}, realEvm('code'));
+      expect(texts).toEqual(['info|On-chain|Contract on Robinhood Chain: 0x659…db19', 'info|DexScreener|No trading pair found on DexScreener']);
+      expect(target).toMatchObject({ key: `ca:rh:${coin}`, chain: 'RH', ca: coin });
+      expect(run.missingCoin).toBeNull();
+      expect(run.unconfirmedCoin).toBeNull();
+    });
+
+    it('its public node not answering: "Robinhood Chain RPC unavailable", never "not on" it', async () => {
+      const { texts, run } = await resolve(coin, {}, realEvm('down'));
+      expect(texts[0]).toBe('warn|On-chain|Contract 0x659…db19 not found on Base, Ethereum, BNB Chain or Arbitrum; Robinhood Chain RPC unavailable');
+      expect(run.missingCoin).toBeNull();
+      expect(run.unconfirmedCoin).toEqual({ address: coin, why: 'the Robinhood Chain RPC unavailable' });
+    });
   });
 
   it('never says "not found" for chains whose RPC could not answer', async () => {
@@ -171,13 +211,13 @@ describe('Stage A — resolve', () => {
         return null;
       };
     };
-    const all = await resolve(coin, {}, down(['base', 'eth', 'bnb', 'arb']));
+    const all = await resolve(coin, {}, down(['base', 'eth', 'bnb', 'arb', 'rh']));
     expect(all.texts).toEqual([
-      'warn|On-chain|Couldn\'t reach the Base, Ethereum, BNB Chain and Arbitrum RPCs, so the chain of 0x555…5555 is unknown',
+      'warn|On-chain|Couldn\'t reach the Base, Ethereum, BNB Chain, Arbitrum and Robinhood Chain RPCs, so the chain of 0x555…5555 is unknown',
       'warn|DexScreener|DexScreener unavailable, no market data',
     ]);
     const some = await resolve(coin, {}, down(['bnb']));
-    expect(some.texts[0]).toBe('warn|On-chain|Contract 0x555…5555 not found on Base, Ethereum or Arbitrum; BNB Chain RPC unavailable');
+    expect(some.texts[0]).toBe('warn|On-chain|Contract 0x555…5555 not found on Base, Ethereum, Arbitrum or Robinhood Chain; BNB Chain RPC unavailable');
   });
 
   describe('an earlier chain\'s RPC did not answer but a later chain has the code', () => {
@@ -319,7 +359,7 @@ describe('Stage A — resolve', () => {
           return null;
         };
       });
-      expect(texts).toEqual(['warn|On-chain|Contract 0x17c…d1fc not found on Base, Ethereum, BNB Chain or Arbitrum', 'warn|DexScreener|DexScreener unavailable, no market data']);
+      expect(texts).toEqual(['warn|On-chain|Contract 0x17c…d1fc not found on Base, Ethereum, BNB Chain, Arbitrum or Robinhood Chain', 'warn|DexScreener|DexScreener unavailable, no market data']);
     });
 
     it('in an X post without a link: named in the post, and its website is the one checked', async () => {

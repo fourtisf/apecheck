@@ -9,7 +9,7 @@ import { createSources, startGuardProxy, captureErrors } from '@apecheck/sources
 
 const env = loadEnv();
 const sources = createSources(env);           // one shared Http client, all adapters
-sources.stubbed();                            // e.g. ["x", "etherscan", "rpc-rh"]
+sources.stubbed();                            // e.g. ["x", "etherscan"]
 const facts = await sources.coinFacts('sol', mint); // never throws; facts.errors / facts.stubbed explain gaps
 ```
 
@@ -33,8 +33,8 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
 | Adapter | File | Env | Stub / fallback behaviour |
 |---|---|---|---|
 | DexScreener | `adapters/dexscreener.ts` | `DEXSCREENER_BASE` (default `https://api.dexscreener.com`) | Public API, never stubbed. |
-| EVM RPC | `adapters/evm.ts` | `RPC_BASE`, `RPC_ETH`, `RPC_BSC`, `RPC_ARB`, `RPC_ROBINHOOD` | Public fallbacks: Base `https://mainnet.base.org`, Ethereum `https://ethereum-rpc.publicnode.com`, BNB `https://bsc-dataseed.binance.org`, Arbitrum `https://arb1.arbitrum.io/rpc`. Robinhood Chain only from env; without it `rh` is skipped and listed as `rpc-rh`. |
-| Etherscan V2, Blockscout | `adapters/evm.ts` (`creator()`) | `ETHERSCAN_API_KEY` | Etherscan first when keyed; when it has no key or no answer (its free plan leaves out Base and BNB Chain), Blockscout's free API on Ethereum, Base and Arbitrum. BNB Chain has no Blockscout: there the creator needs a keyed plan that covers it. Without a key, listed as `etherscan`. |
+| EVM RPC | `adapters/evm.ts` | `RPC_BASE`, `RPC_ETH`, `RPC_BSC`, `RPC_ARB`, `RPC_ROBINHOOD` | Public fallbacks: Base `https://mainnet.base.org`, Ethereum `https://ethereum-rpc.publicnode.com`, BNB `https://bsc-dataseed.binance.org`, Arbitrum `https://arb1.arbitrum.io/rpc`, Robinhood Chain `https://rpc.mainnet.chain.robinhood.com` (Robinhood's own, rate limited, warned once: set `RPC_ROBINHOOD` for heavy use). |
+| Etherscan V2, Blockscout | `adapters/evm.ts` (`creator()`) | `ETHERSCAN_API_KEY` | Etherscan first when keyed, on the chains it indexes (`ETHERSCAN_CHAINS`); when it has no key or no answer (its free plan leaves out Base and BNB Chain), Blockscout's free API on Ethereum, Base and Arbitrum. Robinhood Chain (chain id 4663, not on Etherscan) is Blockscout only: `https://robinhoodchain.blockscout.com/api`. BNB Chain has no Blockscout: there the creator needs a keyed plan that covers it. Without a key, listed as `etherscan`. |
 | Solana RPC | `adapters/solana.ts` | `RPC_SOLANA`, `HELIUS_API_KEY` | `RPC_SOLANA`, else `https://mainnet.helius-rpc.com/?api-key=…`, else the public `https://api.mainnet-beta.solana.com` (rate limited, warned once). |
 | TronGrid | `adapters/tron.ts` | `TRONGRID_API_KEY` (header `TRON-PRO-API-KEY`) | Works without a key at a low rate. |
 | GitHub | `adapters/github.ts` | `GITHUB_TOKEN` | Works unauthenticated at 60 requests/hour (warned once). Rate limits (403 with `x-ratelimit-remaining: 0`, or 429) → `[]` + `lastError`. |
@@ -222,7 +222,8 @@ and the worker logs it as "not checked".
 | authorities | Solana: mint/freeze authority ("Renounced" / "Mint renounced, freeze active" / "Mint still active"); EVM/Tron: mint renounced = no mint function OR owner renounced (an ownerless contract with a mint function is unknown, not renounced) |
 | market | DexScreener |
 
-`stubbed` lists the adapters that ran as stubs for this coin (`etherscan` for EVM, `rpc-rh`);
+`stubbed` lists the adapters that ran as stubs for this coin (`etherscan` for EVM; `rpc-<chain>` for an EVM chain
+without an RPC, none today);
 `errors` lists non-fatal failures in call order (`"solana.largestHolders: timeout"`). It never throws.
 
 ## HTTP client (`createHttp(env)`)

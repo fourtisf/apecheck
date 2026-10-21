@@ -10,13 +10,14 @@ import { ChainTag } from '../ChainTag';
 import { DEPLOYERS_LIMIT, deployerQuery, parseDeployerFilters, sameAddress, sameDeployerList, type DeployerFilters, type DeployerSort } from './params';
 import { useApiQuery, useSyncUrl, useUrlSearchParams } from './useApiQuery';
 
-/** chains whose deployer wallet ApeCheck looks up (EVM: the Etherscan contract creator; Tron: the origin address) */
+/** chains whose deployer wallet ApeCheck looks up (EVM: the contract creator from Etherscan or Blockscout; Tron: the origin address) */
 const CHAIN_SEG: [ChainKey | 'all', string][] = [
   ['all', 'All chains'],
   ['eth', 'Ethereum'],
   ['base', 'Base'],
   ['bnb', 'BNB'],
   ['arb', 'Arbitrum'],
+  ['rh', 'Robinhood'],
   ['trx', 'Tron'],
 ];
 const SORTS: [DeployerSort, string][] = [

@@ -280,13 +280,14 @@ describe('coinFacts: failures never throw', () => {
 describe('createSources', () => {
   it('wires every adapter; stubbed() names the missing keys', () => {
     const s = createSources(testEnv(), { http: fakeHttp() });
-    expect(s.stubbed()).toEqual(['x', 'etherscan', 'rpc-rh']);
+    expect(s.stubbed()).toEqual(['x', 'etherscan']);
     expect(s.x.configured).toBe(false);
     expect('fourtis' in s).toBe(false);
     expect(s.dex.configured).toBe(true);
-    expect(s.evm.chains()).toEqual(['base', 'eth', 'bnb', 'arb']);
+    // every EVM chain, Robinhood Chain on its public node
+    expect(s.evm.chains()).toEqual(['base', 'eth', 'bnb', 'rh', 'arb']);
     const full = createSources(
-      testEnv({ X_BEARER_TOKEN: 'b', ETHERSCAN_API_KEY: 'e', RPC_ROBINHOOD: 'https://rh' }),
+      testEnv({ X_BEARER_TOKEN: 'b', ETHERSCAN_API_KEY: 'e' }),
       { http: fakeHttp() },
     );
     expect(full.stubbed()).toEqual([]);

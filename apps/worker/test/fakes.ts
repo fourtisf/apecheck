@@ -132,7 +132,8 @@ export function fakeSources(env: Env, data: FakeData = {}): FakeSources {
     },
     evm: {
       lastError: null,
-      chains: () => ['base', 'eth', 'bnb', 'arb'],
+      // every EVM chain, as createSources(env) without RPC_* (each has a public node)
+      chains: () => ['base', 'eth', 'bnb', 'rh', 'arb'],
       async detectChain(address) {
         calls.push(`evm.detectChain ${address}`);
         return data.evmChains?.[address.toLowerCase()] ?? null;

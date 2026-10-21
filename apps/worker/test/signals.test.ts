@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { CONFIG, SIGNAL_VALUE, TUNING, scoreCheck, scoreNarrative, type ClaimStatus } from '@apecheck/core';
 import { coinSignals, docsSignal, flowSignal, gitFacts, gitSignal, launchSignal, productSignals, scoredSignals, type SiteFacts } from '../src/pipeline/signals';
 import { classifySim, simChain } from '../src/pipeline/browse';
+import { evmChainIdHex } from '../src/browser/mock-wallet';
 import { productSentence } from '../src/ai/phrases';
 import { simSkipReason } from '../src/browser/agent';
 import { detectBotWall } from '../src/browser/page';
@@ -221,8 +222,10 @@ describe('product signals', () => {
     // no chain id: the check's chain (or Ethereum)
     expect(simChain(null, '0x2105', 'base')).toBe('base');
     expect(simChain(null, '0x1', null)).toBe('eth');
-    // still on the wallet's starting chain (Robinhood Chain has no numeric id here)
-    expect(simChain('0x1', '0x1', 'rh')).toBe('rh');
+    // still on the wallet's starting chain; Robinhood Chain is chain id 4663 (0x1237), on the check's chain or switched to
+    expect(simChain('0x1237', '0x1237', 'rh')).toBe('rh');
+    expect(simChain('0x1237', '0x2105', 'base')).toBe('rh');
+    expect(evmChainIdHex('rh')).toBe('0x1237');
     expect(simChain('0x2105', '0x1', null)).toBe('base');
     // Polygon / Optimism…: not simulated at all, never on Ethereum
     expect(simChain('0x89', '0x2105', 'base')).toBeNull();

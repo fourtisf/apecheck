@@ -71,7 +71,7 @@ describe('EVM adapter: tokenBalance', () => {
     expect(noDecimals.lastError).toBe('evm.tokenBalance base: decimals() unreadable at the token address');
   });
 
-  it('transport errors → null; bad addresses and chains without an RPC → null without a request', async () => {
+  it('transport errors → null; bad addresses and chains without an EVM RPC → null without a request', async () => {
     const down = fakeHttp(() => ({ status: 502, text: 'bad gateway' }));
     const evm = createEvm(testEnv(), down);
     expect(await evm.tokenBalance('eth', TOKEN, OWNER)).toBeNull();
@@ -81,7 +81,7 @@ describe('EVM adapter: tokenBalance', () => {
     const evm2 = createEvm(testEnv(), none);
     expect(await evm2.tokenBalance('base', 'not-an-address', OWNER)).toBeNull();
     expect(await evm2.tokenBalance('base', TOKEN, '0x123')).toBeNull();
-    expect(await evm2.tokenBalance('rh', TOKEN, OWNER)).toBeNull();
+    expect(await evm2.tokenBalance('trx', TOKEN, OWNER)).toBeNull();
     expect(none.calls).toHaveLength(0);
   });
 });

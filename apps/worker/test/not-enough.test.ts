@@ -22,7 +22,7 @@ const ESCO = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
 const ORB = '0x4444444444444444444444444444444444444444';
 const STRIDE_REASON =
   "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.";
-const NOT_ON = 'is not on Base, Ethereum, BNB Chain or Arbitrum';
+const NOT_ON = 'is not on Base, Ethereum, BNB Chain, Arbitrum or Robinhood Chain';
 
 /** $ORBIT on Base, its coin facts as given (none read by default) */
 const orbit = (facts: Partial<CoinRawFacts> = {}): FakeData => ({
@@ -111,7 +111,7 @@ describe('nothing about the project could be tested: "Not enough to check", no s
     const check = await createCheck(ESCO);
     expect((await runCheck(check.id, d)).status).toBe('failed');
     const c = await expectNoScore(check.id, `Not enough to check: 0x17c…d1fc ${NOT_ON}.`, 'WARN');
-    expect(c.steps.some(s => s.text === `Contract 0x17c…d1fc not found on Base, Ethereum, BNB Chain or Arbitrum`)).toBe(true);
+    expect(c.steps.some(s => s.text === `Contract 0x17c…d1fc not found on Base, Ethereum, BNB Chain, Arbitrum or Robinhood Chain`)).toBe(true);
     // a bare contract has no name to search GitHub for: GitHub was never asked
     expect(c.steps.some(s => s.text === 'No GitHub link or project name to look up, code not checked')).toBe(true);
     expect(d.sources.calls.some(x => x.startsWith('github.'))).toBe(false);

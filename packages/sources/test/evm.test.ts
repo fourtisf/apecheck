@@ -46,15 +46,26 @@ function evmNode(
 }
 
 describe('EVM adapter: RPC selection', () => {
-  it('public fallbacks for Base/Ethereum/BNB/Arbitrum, Robinhood Chain only from env', () => {
-    expect(createEvm(testEnv(), fakeHttp()).chains()).toEqual(['base', 'eth', 'bnb', 'arb']);
-    expect(createEvm(testEnv({ RPC_ROBINHOOD: 'https://rpc.rh.example' }), fakeHttp()).chains()).toEqual(['base', 'eth', 'bnb', 'rh', 'arb']);
+  it('public fallbacks for every EVM chain, Robinhood Chain included', () => {
+    expect(createEvm(testEnv(), fakeHttp()).chains()).toEqual(['base', 'eth', 'bnb', 'rh', 'arb']);
     expect(PUBLIC_EVM_RPC).toEqual({
       base: 'https://mainnet.base.org',
       eth: 'https://ethereum-rpc.publicnode.com',
       bnb: 'https://bsc-dataseed.binance.org',
       arb: 'https://arb1.arbitrum.io/rpc',
+      rh: 'https://rpc.mainnet.chain.robinhood.com',
     });
+  });
+
+  it('Robinhood Chain: the public node when RPC_ROBINHOOD is empty, RPC_ROBINHOOD when set', async () => {
+    expect(resolveEvmRpc(testEnv(), 'rh')).toEqual({ url: 'https://rpc.mainnet.chain.robinhood.com', source: 'public' });
+    expect(resolveEvmRpc(testEnv({ RPC_ROBINHOOD: 'https://rh.own.example/k' }), 'rh')).toEqual({ url: 'https://rh.own.example/k', source: 'env' });
+    const http = fakeHttp(rpcHandler('rpc.mainnet.chain.robinhood.com', { eth_getCode: () => '0x60' }));
+    expect(await createEvm(testEnv(), http).getCode('rh', TOKEN)).toBe('0x60');
+    expect(http.calls.map(c => c.url)).toEqual(['https://rpc.mainnet.chain.robinhood.com']);
+    const own = fakeHttp(rpcHandler('rh.own.example', { eth_getCode: () => '0x61' }));
+    expect(await createEvm(testEnv({ RPC_ROBINHOOD: 'https://rh.own.example/k' }), own).getCode('rh', TOKEN)).toBe('0x61');
+    expect(own.calls.map(c => c.url)).toEqual(['https://rh.own.example/k']);
   });
 
   it('env RPC URLs win over the public fallbacks', async () => {
@@ -71,7 +82,7 @@ describe('EVM adapter: RPC selection', () => {
     expect(resolveEvmRpc(env, 'base')).toEqual({ url: 'https://base-mainnet.g.alchemy.com/v2/alc_KEY', source: 'alchemy' });
     expect(resolveEvmRpc(env, 'arb')).toEqual({ url: 'https://arb.own.example/k', source: 'env' });
     expect(resolveEvmRpc(env, 'bnb')).toEqual({ url: PUBLIC_EVM_RPC.bnb, source: 'public' });
-    expect(resolveEvmRpc(env, 'rh')).toBeNull();
+    expect(resolveEvmRpc(env, 'rh')).toEqual({ url: PUBLIC_EVM_RPC.rh, source: 'public' });
     expect(resolveEvmRpc(testEnv(), 'eth')).toEqual({ url: PUBLIC_EVM_RPC.eth, source: 'public' });
   });
 
@@ -81,9 +92,9 @@ describe('EVM adapter: RPC selection', () => {
     expect(http.calls[0].url).toBe('https://eth-mainnet.g.alchemy.com/v2/alc_KEY');
   });
 
-  it('stubs(): etherscan without a key, rpc-rh without RPC_ROBINHOOD', () => {
-    expect(createEvm(testEnv(), fakeHttp()).stubs()).toEqual(['etherscan', 'rpc-rh']);
-    expect(createEvm(testEnv({ ETHERSCAN_API_KEY: 'k', RPC_ROBINHOOD: 'https://rh' }), fakeHttp()).stubs()).toEqual([]);
+  it('stubs(): etherscan without a key; no EVM chain is skipped (each has a public node)', () => {
+    expect(createEvm(testEnv(), fakeHttp()).stubs()).toEqual(['etherscan']);
+    expect(createEvm(testEnv({ ETHERSCAN_API_KEY: 'k' }), fakeHttp()).stubs()).toEqual([]);
   });
 });
 
@@ -96,6 +107,32 @@ describe('EVM adapter: detectChain', () => {
       rpcHandler('arb1.arbitrum.io', { eth_getCode: () => '0x' }),
     );
     expect(await createEvm(testEnv(), http).detectChain(TOKEN)).toBe('eth');
+  });
+
+  it('code only on Robinhood Chain: found through its public node (RPC_ROBINHOOD empty)', async () => {
+    const http = fakeHttp(
+      rpcHandler('mainnet.base.org', { eth_getCode: () => '0x' }),
+      rpcHandler('ethereum-rpc.publicnode.com', { eth_getCode: () => '0x' }),
+      rpcHandler('bsc-dataseed.binance.org', { eth_getCode: () => '0x' }),
+      rpcHandler('arb1.arbitrum.io', { eth_getCode: () => '0x' }),
+      rpcHandler('rpc.mainnet.chain.robinhood.com', { eth_getCode: () => '0x6080604052' }),
+    );
+    const r = await captureErrors(() => createEvm(testEnv(), http).detectChain(TOKEN));
+    expect(r).toEqual({ value: 'rh', errors: [] });
+    // all five asked at once, once each
+    expect(http.calls.map(c => new URL(c.url).host).sort()).toEqual([
+      'arb1.arbitrum.io', 'bsc-dataseed.binance.org', 'ethereum-rpc.publicnode.com', 'mainnet.base.org', 'rpc.mainnet.chain.robinhood.com',
+    ]);
+  });
+
+  it('a Robinhood node that does not answer costs one retry, then is reported (never "not found")', async () => {
+    const http = fakeHttp(
+      url => (url.host === 'rpc.mainnet.chain.robinhood.com' ? { status: 429, text: 'rate limited' } : { json: { jsonrpc: '2.0', id: 1, result: '0x' } }),
+    );
+    const r = await captureErrors(() => createEvm(testEnv(), http, { detectRetryDelayMs: 0 }).detectChain(TOKEN));
+    expect(r).toEqual({ value: null, errors: ['evm.getCode rh: HTTP 429 from rpc.mainnet.chain.robinhood.com'] });
+    expect(http.calls.filter(c => new URL(c.url).host === 'rpc.mainnet.chain.robinhood.com')).toHaveLength(2);
+    expect(http.calls).toHaveLength(6);
   });
 
   it('a failing chain does not stop detection; nothing found → null', async () => {
@@ -423,9 +460,9 @@ describe('EVM adapter: tokenBasics', () => {
     expect(await createEvm(testEnv(), http).tokenBasics('base', TOKEN)).toMatchObject({ hasMintFunction: true, ownerRenounced: false });
   });
 
-  it('chain without an RPC → null, no request', async () => {
+  it('chain without an EVM RPC → null, no request', async () => {
     const http = fakeHttp();
-    expect(await createEvm(testEnv(), http).tokenBasics('rh', TOKEN)).toBeNull();
+    expect(await createEvm(testEnv(), http).tokenBasics('trx', TOKEN)).toBeNull();
     expect(http.calls).toHaveLength(0);
   });
 });
@@ -535,8 +572,20 @@ describe('EVM adapter: creator (Etherscan V2, Blockscout)', () => {
     expect(evm.lastError).toBe('evm.creator: Invalid API Key');
   });
 
-  it('Robinhood Chain has no Etherscan chain id → null', async () => {
-    expect(await createEvm(testEnv({ ETHERSCAN_API_KEY: 'k', RPC_ROBINHOOD: 'https://rh' }), fakeHttp()).creator('rh', TOKEN)).toBeNull();
+  it('Robinhood Chain: Blockscout only (Etherscan does not index chain 4663), with or without a key', async () => {
+    for (const env of [testEnv(), testEnv({ ETHERSCAN_API_KEY: 'k' })]) {
+      const http = fakeHttp(url => (url.host === 'robinhoodchain.blockscout.com' ? { json: blockscoutAnswer } : undefined));
+      expect(await createEvm(env, http).creator('rh', TOKEN)).toEqual({ creator: '0xc0ffee0000000000000000000000000000000002', txHash: '0xbeef', createdAt: null, via: 'blockscout' });
+      expect(http.calls).toHaveLength(1);
+      const u = new URL(http.calls[0].url);
+      expect(u.origin + u.pathname).toBe('https://robinhoodchain.blockscout.com/api');
+      expect(Object.fromEntries(u.searchParams)).toEqual({ module: 'contract', action: 'getcontractcreation', contractaddresses: TOKEN });
+    }
+    // Blockscout down: null with its reason, and still no Etherscan request
+    const down = fakeHttp(url => (url.host === 'robinhoodchain.blockscout.com' ? { status: 503, text: 'busy' } : undefined));
+    const r = await captureErrors(() => createEvm(testEnv({ ETHERSCAN_API_KEY: 'k' }), down).creator('rh', TOKEN));
+    expect(r).toEqual({ value: null, errors: ['evm.creator.blockscout: HTTP 503 from robinhoodchain.blockscout.com'] });
+    expect(down.calls.map(c => new URL(c.url).host)).toEqual(['robinhoodchain.blockscout.com']);
   });
 });
 

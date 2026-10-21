@@ -214,8 +214,9 @@ runs:
   browser through worker-checks' guard;
 - both AI models (`AI_MODEL_JUDGE`, `AI_MODEL_FAST`), each with one small real call; the two calls together cost well
   under one cent;
-- each EVM RPC (chain id, latest block, and one known token decoded by the same adapter), Robinhood Chain when
-  configured, the EVM deployer lookup (Etherscan, Blockscout), Solana, TronGrid, DexScreener and GitHub (with its remaining rate limit);
+- each EVM RPC (chain id, latest block, and one known token decoded by the same adapter; Robinhood Chain: chain id
+  4663 and latest block, on Robinhood's public node while `RPC_ROBINHOOD` is empty), the EVM deployer lookup (Etherscan,
+  Blockscout), Solana, TronGrid, DexScreener and GitHub (with its remaining rate limit);
 - X posts through the free embed endpoints X post checks use (no key; `WARN` when they fail) and the X bot's OAuth 1.0a
   keys (a signed `GET /2/users/me`; it never posts).
 

@@ -213,9 +213,9 @@ another day of checks. Job priority by tier (`PRIORITY`: max 1, pro 2, free 5).
      wallet (smart wallets), EIP-1271 `isValidSignature(hash, signature)` returning the whole ABI word `0x1626ba7e` + 28
      zero bytes (never just its first 4 bytes: a contract echoing its call data would pass) via `eth_call` (4 s) on exactly
      one chain chosen by the server, `contractWalletChain(env)`: `TOKEN_CHAIN` when it is an EVM chain (the chain whose
-     balance makes the tier), else Base; an EVM `TOKEN_CHAIN` without a known chain id (Robinhood Chain) turns smart
-     wallets off. The message's `Chain ID` must be that chain's id (EIP-4361: contract accounts resolve on it), else 401
-     `bad_signature` ("switch it to <chain>") without any RPC call; that chain's RPC failing is 503
+     balance makes the tier; Robinhood Chain: chain id 4663), else Base; an EVM `TOKEN_CHAIN` without a known chain id
+     would turn smart wallets off. The message's `Chain ID` must be that chain's id (EIP-4361: contract accounts
+     resolve on it), else 401 `bad_signature` ("switch it to <chain>") without any RPC call; that chain's RPC failing is 503
      `wallet_check_unavailable`, never a fallback to another chain. A contract address is controlled separately on
      each chain (owners rotated per chain, a replayed factory, nothing deployed yet), so whoever controls it elsewhere
      can't sign in as it. Key wallets (ecrecover) sign in whatever chain their wallet is on. Set `TOKEN_CHAIN` before

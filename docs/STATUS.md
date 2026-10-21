@@ -42,7 +42,7 @@ through the real queue), deploy checks. `pnpm -r typecheck` and `next build` are
   `E2E=1 E2E_TARGET=<a real project site> pnpm e2e`.
 - **Coin facts without an ApeCheck source**: bundle share, LP status, holder count and EVM/Tron holder share are "not
   checked" (scored `warn`, said so in the log). Deployer history counts only coins ApeCheck has checked from the same
-  wallet (EVM: Etherscan creator, else Blockscout's on Ethereum, Base and Arbitrum; Tron: contract origin address; Solana deployers are not looked up) and never lifts the
+  wallet (EVM: Etherscan creator, else Blockscout's on Ethereum, Base, Arbitrum and Robinhood Chain, where Blockscout is the only source; Tron: contract origin address; Solana deployers are not looked up) and never lifts the
   deployer signal above `warn`.
 - **X handle-rename history**: needs a third-party source; always "unknown".
 - **Token**: `TOKEN_ADDRESS` is empty, so everyone is Free and the site says "Pro and Max open at token launch". Team wallets can
@@ -52,7 +52,7 @@ through the real queue), deploy checks. `pnpm -r typecheck` and `next build` are
 
 `ANTHROPIC_API_KEY` · `X_API_KEY` `X_API_SECRET` `X_ACCESS_TOKEN` `X_ACCESS_SECRET` `X_BEARER_TOKEN` `X_BOT_USER_ID` ·
 `X_OAUTH2_CLIENT_ID` `X_OAUTH2_CLIENT_SECRET` (X account linking) · `HELIUS_API_KEY` `ALCHEMY_API_KEY` (Ethereum, Base and Arbitrum in one key) `ETHERSCAN_API_KEY` `TRONGRID_API_KEY` ·
-`RPC_ROBINHOOD` (other RPCs fall back to public endpoints) · `GITHUB_TOKEN` (works unauthenticated at 60 requests/hour;
+`RPC_*` (every EVM RPC, Robinhood Chain's included, falls back to a public endpoint) · `GITHUB_TOKEN` (works unauthenticated at 60 requests/hour;
 old `FOURTIS_*` lines in `.env` are ignored, delete them) · `TOKEN_ADDRESS` · production `SESSION_SECRET`, database password, `BACKUP_REMOTE`;
 `BROWSER_WS_ENDPOINT` is filled in by `deploy/browser/install.sh`.
 

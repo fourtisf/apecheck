@@ -113,8 +113,8 @@ describe('deployers page', () => {
       ['checked', 'Most checked coins first'],
       ['recent', 'Recently checked first'],
     ]);
-    const chains = [...out.slice(out.indexOf('id="dChain"')).matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map(m => m[1]).slice(0, 7);
-    expect(chains).toEqual(['All chains', 'Ethereum', 'Base', 'BNB', 'Arbitrum', 'Tron']);
+    const chains = [...out.slice(out.indexOf('id="dChain"')).matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map(m => m[1]).slice(0, 8);
+    expect(chains).toEqual(['All chains', 'Ethereum', 'Base', 'BNB', 'Arbitrum', 'Robinhood', 'Tron']);
     for (const sort of ['dead', 'launched']) expect(parseDeployerFilters(new URLSearchParams(`sort=${sort}`)).sort).toBe('checked');
     expect(parseDeployerFilters(new URLSearchParams('sort=recent')).sort).toBe('recent');
     expect(parseDeployerFilters(new URLSearchParams('sort=nope')).sort).toBe('real');

@@ -237,8 +237,7 @@ describe('EVM signatures', () => {
     expect(contractWalletChain({ TOKEN_CHAIN: 'eth' })).toEqual({ chain: 'eth', chainId: 1 });
     expect(contractWalletChain({ TOKEN_CHAIN: ' BASE ' })).toEqual({ chain: 'base', chainId: 8453 });
     expect(contractWalletChain({ TOKEN_CHAIN: 'arb' })).toEqual({ chain: 'arb', chainId: 42161 });
-    // an EVM token chain without a known chain id: smart wallets can't sign in (never a fallback to another chain)
-    expect(contractWalletChain({ TOKEN_CHAIN: 'rh' })).toBeNull();
+    expect(contractWalletChain({ TOKEN_CHAIN: 'rh' })).toEqual({ chain: 'rh', chainId: 4663 });
   });
 });
 

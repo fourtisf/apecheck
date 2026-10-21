@@ -72,8 +72,9 @@ Such a check ends `FAILED`, never `DONE`, so it never takes `isLatest`, a feed s
   GitHub repo was found for @stridefun. Tag me under a post with its link or contract." (an X profile: only the GitHub
   search by its name ran), "Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, and its
   token info lists no website." (`run.otherChain`), "Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB
-  Chain or Arbitrum." (`run.missingCoin`: every RPC asked and DexScreener answered; a bare contract has no name to
-  search GitHub for), "Not enough to check: foo.xyz blocks automated browsers, and no GitHub repo was found for it.",
+  Chain, Arbitrum or Robinhood Chain." (`run.missingCoin`: every RPC asked and DexScreener answered; a bare contract
+  has no name to search GitHub for), "Not enough to check: foo.xyz blocks automated browsers, and no GitHub repo was
+  found for it.",
   "Not enough to check: the post by @foo links no project website, no coin was found in it, and no GitHub repo was
   found for @foo.", "Not enough to check: none of the coin facts ApeCheck scores were found for $ORB on Base, and no
   GitHub repo was found for it.". It is an answer, not an outage (`isNotEnough`): the bot posts the reason, a recent one is reused like a cached

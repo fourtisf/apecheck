@@ -37,7 +37,7 @@ export {
 } from './links';
 export { metadataPda, findProgramAddress, isOnCurve, decodeMetaplexMetadata, METAPLEX_METADATA_PROGRAM, type MetaplexMetadata } from './solana-pda';
 export {
-  createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, ALCHEMY_NETWORKS, BLOCKSCOUT_API, resolveEvmRpc, type EvmRpcSource, DETECT_RETRY_DELAY_MS, ERC1271_MAGIC, ERC1271_MAGIC_WORD, ERC1271_TIMEOUT_MS, encodeIsValidSignature,
+  createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, ALCHEMY_NETWORKS, BLOCKSCOUT_API, ETHERSCAN_CHAINS, resolveEvmRpc, type EvmRpcSource, DETECT_RETRY_DELAY_MS, ERC1271_MAGIC, ERC1271_MAGIC_WORD, ERC1271_TIMEOUT_MS, encodeIsValidSignature,
   type EvmOptions,
 } from './adapters/evm';
 export { createSolana, SolanaAdapter, SOL_READ_METHODS, SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM, SOLANA_BUSY, SOLANA_PUBLIC_FALLBACK, solanaRpcUrl } from './adapters/solana';

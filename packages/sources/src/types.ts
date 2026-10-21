@@ -471,7 +471,7 @@ export interface CoinRawFacts {
     source: FactSource;
   } | null;
   market: DexTokenInfo | null;
-  /** adapters that ran as stubs for this coin, e.g. ["etherscan"] or ["rpc-rh"] */
+  /** adapters that ran as stubs for this coin, e.g. ["etherscan"] (or ["rpc-<chain>"] for an EVM chain without an RPC) */
   stubbed: string[];
   /** non-fatal errors, e.g. ["solana.largestHolders: timeout"] */
   errors: string[];
@@ -492,6 +492,6 @@ export interface Sources {
   x: XSource;
   /** Stage D for coins: on-chain reads and DexScreener. Never throws. */
   coinFacts(chain: ChainKey, address: string): Promise<CoinRawFacts>;
-  /** names of adapters currently running as stubs (missing keys), e.g. ["x", "etherscan", "rpc-rh"] */
+  /** names of adapters currently running as stubs (missing keys), e.g. ["x", "etherscan"] */
   stubbed(): string[];
 }

@@ -296,11 +296,33 @@ describe('EVM probes', () => {
     expect(r.status).toBe('PASS');
     expect(r.detail).not.toContain('over the');
   });
-  it('Robinhood Chain without RPC_ROBINHOOD is SKIP; with it, liveness only', async () => {
-    expect((await probeRobinhood({ env: prodEnv(), http: fakeHttp(() => new Error('unused')) })).status).toBe('SKIP');
-    const r = await probeRobinhood({ env: prodEnv({ RPC_ROBINHOOD: 'https://rh.example/KEY' }), http: fakeHttp(rpcNode({ eth_chainId: '0xabc', eth_blockNumber: '0x5' })) });
-    expect(r).toMatchObject({ status: 'PASS' });
-    expect(r.detail).toContain('chainId 0xabc');
+  it('Robinhood Chain without RPC_ROBINHOOD: the public node is probed (WARN, chain id 4663 checked), with it PASS', async () => {
+    const http = fakeHttp(rpcNode({ eth_chainId: '0x1237', eth_blockNumber: '0x5' }));
+    const pub = await probeRobinhood({ env: prodEnv(), http });
+    expect(pub.status).toBe('WARN');
+    expect(pub.detail).toBe('rpc.mainnet.chain.robinhood.com (public fallback, RPC_ROBINHOOD empty), chainId 0x1237, block 5');
+    expect(pub.remedy).toMatch(/^set RPC_ROBINHOOD .*chain id 4663.*the public node is rate limited/);
+    // only read methods, to Robinhood's public node
+    expect(http.calls.map(c => [new URL(c.url).host, JSON.parse(String(c.req.body)).method]).sort()).toEqual([
+      ['rpc.mainnet.chain.robinhood.com', 'eth_blockNumber'],
+      ['rpc.mainnet.chain.robinhood.com', 'eth_chainId'],
+    ]);
+    const own = await probeRobinhood({ env: prodEnv({ RPC_ROBINHOOD: 'https://rh.example/KEY' }), http: fakeHttp(rpcNode({ eth_chainId: '0x1237', eth_blockNumber: '0x5' })) });
+    expect(own).toEqual({ status: 'PASS', detail: 'rh.example (RPC_ROBINHOOD), chainId 0x1237, block 5' });
+  });
+  it('Robinhood Chain on the wrong network (a testnet URL) is a FAIL naming it; a node that does not answer is a FAIL', async () => {
+    const testnet = await probeRobinhood({ env: prodEnv({ RPC_ROBINHOOD: 'https://rh-testnet.example/KEY' }), http: fakeHttp(rpcNode({ eth_chainId: '0xb626', eth_blockNumber: '0x5' })) });
+    expect(testnet.status).toBe('FAIL');
+    expect(testnet.detail).toBe('rh-testnet.example (RPC_ROBINHOOD): wrong network, chainId 0xb626 (Robinhood Chain testnet), expected 0x1237 (Robinhood Chain)');
+    expect(testnet.remedy).toMatch(/RPC_ROBINHOOD must give a Robinhood Chain mainnet endpoint \(chain id 4663\)/);
+    const other = await probeRobinhood({ env: prodEnv(), http: fakeHttp(rpcNode({ eth_chainId: '0xa4b1', eth_blockNumber: '0x5' })) });
+    expect(other.detail).toContain('wrong network, chainId 0xa4b1 (Arbitrum One), expected 0x1237');
+    const down = await probeRobinhood({ env: prodEnv(), http: fakeHttp(() => new Error('getaddrinfo ENOTFOUND rpc.mainnet.chain.robinhood.com')) });
+    expect(down.status).toBe('FAIL');
+    expect(down.remedy).toMatch(/no answer from rpc\.mainnet\.chain\.robinhood\.com/);
+    const ownDown = await probeRobinhood({ env: prodEnv({ RPC_ROBINHOOD: 'https://rh.example/KEY' }), http: fakeHttp(() => ({ status: 401, body: 'unauthorized' })) });
+    expect(ownDown).toMatchObject({ status: 'FAIL', remedy: 'RPC_ROBINHOOD does not answer: check the URL and its key' });
+    expect(ownDown.detail).not.toContain('KEY');
   });
   it('EVM deployer lookup: without a key Blockscout covers eth, base, arb (WARN, BNB needs the key, never asked)', async () => {
     const creator = vi.fn(async (chain: string) => ({ creator: '0xabc', txHash: null, createdAt: null, via: 'blockscout' as const, chain }));
@@ -635,7 +657,7 @@ describe('header', () => {
     expect(text).toContain('AI mode    heuristic (ANTHROPIC_API_KEY empty');
     expect(text).toMatch(/Ethereum +eth-mainnet\.g\.alchemy\.com +RPC_ETH/);
     expect(text).toMatch(/Solana +mainnet\.helius-rpc\.com +HELIUS_API_KEY/);
-    expect(text).toMatch(/Robinhood Chain +- +not configured \(RPC_ROBINHOOD empty\)/);
+    expect(text).toMatch(/Robinhood Chain +rpc\.mainnet\.chain\.robinhood\.com +public fallback \(RPC_ROBINHOOD empty\)/);
     expect(text).not.toContain('KEY123');
     expect(text).not.toContain('h'.repeat(20));
   });

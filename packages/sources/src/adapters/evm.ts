@@ -43,29 +43,39 @@ export const EVM_READ_METHODS: ReadonlySet<string> = new Set([
   'eth_chainId', 'eth_blockNumber', 'eth_getCode', 'eth_getStorageAt', 'eth_call', 'eth_estimateGas',
 ]);
 
+/**
+ * Each EVM chain's public node, used when its RPC_* variable (and, where it covers the chain, ALCHEMY_API_KEY) is
+ * empty. Robinhood Chain's is Robinhood's own (rate limited, not meant for heavy production use: RPC_ROBINHOOD
+ * overrides it).
+ */
 export const PUBLIC_EVM_RPC: Partial<Record<ChainKey, string>> = {
   base: 'https://mainnet.base.org',
   eth: 'https://ethereum-rpc.publicnode.com',
   bnb: 'https://bsc-dataseed.binance.org',
   arb: 'https://arb1.arbitrum.io/rpc',
+  rh: 'https://rpc.mainnet.chain.robinhood.com',
 };
 
 /**
  * Alchemy's network names: one ALCHEMY_API_KEY gives these chains a keyed RPC, the way HELIUS_API_KEY does for Solana.
- * BNB Chain and Robinhood Chain keep RPC_BSC / RPC_ROBINHOOD.
+ * BNB Chain and Robinhood Chain keep RPC_BSC / RPC_ROBINHOOD (else their public node).
  */
 export const ALCHEMY_NETWORKS: Partial<Record<ChainKey, string>> = { eth: 'eth-mainnet', base: 'base-mainnet', arb: 'arb-mainnet' };
 
 export const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
+/** The chains Etherscan V2 indexes (by CHAINS[c].chainId). Not Robinhood Chain: its creator comes from Blockscout only. */
+export const ETHERSCAN_CHAINS: ReadonlySet<ChainKey> = new Set<ChainKey>(['eth', 'base', 'bnb', 'arb']);
 /**
  * Blockscout's Etherscan-compatible API (free, no key) on the chains it runs an explorer for: the contract creator
- * when Etherscan has no key, its plan leaves the chain out (the free plan has no Base or BNB Chain) or it fails.
- * BNB Chain has no Blockscout explorer, so its creator needs an Etherscan plan that covers it.
+ * when Etherscan has no key, its plan leaves the chain out (the free plan has no Base or BNB Chain) or it fails, and
+ * the only one on Robinhood Chain (its explorer is a Blockscout). BNB Chain has no Blockscout explorer, so its creator
+ * needs an Etherscan plan that covers it.
  */
 export const BLOCKSCOUT_API: Partial<Record<ChainKey, string>> = {
   eth: 'https://eth.blockscout.com/api',
   base: 'https://base.blockscout.com/api',
   arb: 'https://arbitrum.blockscout.com/api',
+  rh: 'https://robinhoodchain.blockscout.com/api',
 };
 
 type EvmEnv = Pick<Env, 'RPC_BASE' | 'RPC_ETH' | 'RPC_BSC' | 'RPC_ARB' | 'RPC_ROBINHOOD' | 'ALCHEMY_API_KEY' | 'ETHERSCAN_API_KEY'>;
@@ -74,7 +84,7 @@ export type EvmRpcSource = 'env' | 'alchemy' | 'public';
 
 /**
  * The RPC every EVM read for `chain` uses (the adapter, the mock wallet, the doctor): its RPC_* variable, else Alchemy
- * when ALCHEMY_API_KEY is set, else the chain's public endpoint; null when there is none (Robinhood Chain).
+ * when ALCHEMY_API_KEY is set, else the chain's public endpoint; null when there is none.
  */
 export function resolveEvmRpc(env: Partial<EvmEnv>, chain: ChainKey): { url: string; source: EvmRpcSource } | null {
   const fromEnv = (env as Record<string, string | undefined>)[CHAINS[chain].rpcEnv];
@@ -157,11 +167,11 @@ export class EvmAdapter implements EvmWalletSource {
       const rpc = resolveEvmRpc(env, c);
       if (rpc) this.rpcUrls[c] = rpc.url;
     }
-    if (!this.rpcUrls.rh) {
-      warnOnce('rpc-rh', 'Robinhood Chain RPC not configured (RPC_ROBINHOOD empty): Robinhood Chain contracts are skipped');
+    if (resolveEvmRpc(env, 'rh')?.source === 'public') {
+      warnOnce('rpc-rh', 'Robinhood Chain RPC not configured (RPC_ROBINHOOD empty): using the public rpc.mainnet.chain.robinhood.com, which is rate limited');
     }
     if (!env.ETHERSCAN_API_KEY) {
-      warnOnce('etherscan', 'Etherscan not configured (ETHERSCAN_API_KEY empty): EVM contract creators come from Blockscout (Ethereum, Base, Arbitrum); BNB Chain is skipped');
+      warnOnce('etherscan', 'Etherscan not configured (ETHERSCAN_API_KEY empty): EVM contract creators come from Blockscout (Ethereum, Base, Arbitrum, Robinhood Chain); BNB Chain is skipped');
     }
   }
 
@@ -173,7 +183,8 @@ export class EvmAdapter implements EvmWalletSource {
   stubs(): string[] {
     const out: string[] = [];
     if (!this.env.ETHERSCAN_API_KEY) out.push('etherscan');
-    if (!this.rpcUrls.rh) out.push('rpc-rh');
+    // every EVM chain has a public node today; a chain added without one would be skipped and listed here
+    for (const c of EVM_CHAINS) if (!this.rpcUrls[c]) out.push(`rpc-${c}`);
     return out;
   }
 
@@ -381,12 +392,15 @@ export class EvmAdapter implements EvmWalletSource {
     }
   }
 
-  /** The contract's creator: Etherscan V2 when it has a key, else (or when it has no answer) Blockscout on its chains. */
+  /**
+   * The contract's creator: Etherscan V2 when it has a key and indexes the chain, else (or when it has no answer)
+   * Blockscout on its chains (Robinhood Chain: Blockscout only).
+   */
   async creator(chain: ChainKey, address: string): Promise<{ creator: string; txHash: string | null; createdAt: string | null; via: 'etherscan' | 'blockscout' } | null> {
     if (!RE_EVM_ADDRESS.test(address)) return null;
     const key = this.env.ETHERSCAN_API_KEY;
     const chainId = CHAINS[chain].chainId;
-    if (key && chainId) {
+    if (key && chainId && ETHERSCAN_CHAINS.has(chain)) {
       const url =
         `${ETHERSCAN_V2}?chainid=${chainId}&module=contract&action=getcontractcreation` +
         `&contractaddresses=${address}&apikey=${encodeURIComponent(key)}`;

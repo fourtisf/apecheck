@@ -138,7 +138,8 @@ function searchedFor(run: CheckRun, name: string): string {
  *  - "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under
  *    a post with its link or contract." (an X profile: only the name search ran);
  *  - "Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, and its token info lists no
- *    website." (run.otherChain); "0x17c…d1fc is not on Base, Ethereum, BNB Chain or Arbitrum" (run.missingCoin);
+ *    website." (run.otherChain); "0x17c…d1fc is not on Base, Ethereum, BNB Chain, Arbitrum or Robinhood Chain"
+ *    (run.missingCoin: the chains asked);
  *  - "foo.xyz blocks automated browsers", "the post by @foo links no project website, no coin was found in it",
  *    "none of the coin facts ApeCheck scores were found for $ORB on Base" (a deployer wallet and its history are
  *    shown, never scored); and the GitHub lookup that answered, when one ran.

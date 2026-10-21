@@ -71,7 +71,7 @@ export function classifySim(r: { ok: boolean; error?: string | null }, chain: Ch
 export function simChain(txChainId: string | null, walletChainId: string, runChain: ChainKey | null): ChainKey | null {
   const evmRun = runChain && CHAINS[runChain].family === 'evm' ? runChain : null;
   if (!txChainId) return evmRun ?? 'eth';
-  // still on the chain the wallet started on (also covers Robinhood Chain, which has no numeric id here)
+  // still on the chain the wallet started on
   if (evmRun && txChainId.toLowerCase() === walletChainId.toLowerCase()) return evmRun;
   return chainFromHex(txChainId);
 }

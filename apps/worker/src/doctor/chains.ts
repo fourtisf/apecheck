@@ -1,5 +1,5 @@
 /**
- * Chain probes: the four EVM RPCs (and Robinhood Chain when RPC_ROBINHOOD is set), the EVM deployer lookup (Etherscan V2,
+ * Chain probes: the five EVM RPCs (Robinhood Chain: chain id and liveness), the EVM deployer lookup (Etherscan V2,
  * Blockscout), Solana and TronGrid.
  * Each one goes through the adapter the check pipeline uses (createSources(env), errors read with captureErrors) on
  * one well-known mainnet token, so a PASS here means a coin check on that chain gets its on-chain facts.
@@ -47,18 +47,19 @@ export const EVM_REMEDY: Record<EvmProbeChain | 'rh', string> = {
   eth: `${ALCHEMY_HINT}, or set RPC_ETH to your own Ethereum mainnet HTTPS endpoint (${PROVIDERS})`,
   bnb: 'set RPC_BSC (not RPC_BNB) to your own BNB Chain mainnet endpoint (NodeReal MegaNode, Ankr, QuickNode, Alchemy or Chainstack; free tiers exist)',
   arb: `${ALCHEMY_HINT}, or set RPC_ARB to your own Arbitrum One HTTPS endpoint (${PROVIDERS})`,
-  rh: 'set RPC_ROBINHOOD to a Robinhood Chain mainnet RPC URL (Robinhood Chain developer docs, or a node provider that lists it)',
+  rh: 'set RPC_ROBINHOOD to your own Robinhood Chain mainnet endpoint (chain id 4663; a node provider that lists it, e.g. Alchemy, Chainstack or GetBlock): the public node is rate limited',
 };
 
 /** chain ids an RPC may answer, so a wrong network reads clearly (a testnet URL is the usual mistake) */
 const KNOWN_CHAIN_IDS: Record<number, string> = {
-  1: 'Ethereum', 8453: 'Base', 56: 'BNB Chain', 42161: 'Arbitrum One', 10: 'OP Mainnet', 137: 'Polygon',
-  11155111: 'Sepolia', 17000: 'Holesky', 84532: 'Base Sepolia', 97: 'BNB Chain testnet', 421614: 'Arbitrum Sepolia',
+  1: 'Ethereum', 8453: 'Base', 56: 'BNB Chain', 42161: 'Arbitrum One', 4663: 'Robinhood Chain', 10: 'OP Mainnet',
+  137: 'Polygon', 11155111: 'Sepolia', 17000: 'Holesky', 84532: 'Base Sepolia', 97: 'BNB Chain testnet',
+  421614: 'Arbitrum Sepolia', 46630: 'Robinhood Chain testnet',
 };
 
 /**
- * The URL the EvmAdapter uses for `chain` (resolveEvmRpc: its RPC_* variable, else Alchemy, else the public fallback;
- * none for Robinhood Chain) and the variable that keys it, when one does.
+ * The URL the EvmAdapter uses for `chain` (resolveEvmRpc: its RPC_* variable, else Alchemy, else the public fallback)
+ * and the variable that keys it, when one does.
  */
 export function evmRpc(env: Env, chain: ChainKey): { url: string | null; envVar: string; keyVar: string; keyed: boolean } {
   const envVar = CHAINS[chain].rpcEnv;
@@ -143,35 +144,42 @@ export async function probeEvm(chain: EvmProbeChain, deps: EvmProbeDeps): Promis
   return outcome({ ...f, ok: true, degraded: notes.length > 0 }, detail, keyed ? `${keyVar} is slow or rate limited: use a faster plan or provider` : remedy);
 }
 
-/** Robinhood Chain: no public fallback and no expected chain id in the code, so liveness only. */
+/**
+ * Robinhood Chain: RPC_ROBINHOOD, else Robinhood's public node. The endpoint must answer for chain id 4663 (a testnet
+ * URL would put mainnet contracts on "not found"); no token is decoded (no Robinhood Chain token is known to the code).
+ */
 export async function probeRobinhood(deps: { env: Env; http: Http }): Promise<ProbeOutcome> {
-  const { url } = evmRpc(deps.env, 'rh');
-  if (!url) {
-    return outcome(
-      { ok: null, configured: false, importance: 'optional' },
-      'not configured (RPC_ROBINHOOD empty): Robinhood Chain contracts are skipped; only DexScreener can name the chain',
-      EVM_REMEDY.rh,
-    );
-  }
+  const { url, envVar, keyed } = evmRpc(deps.env, 'rh');
+  const remedy = EVM_REMEDY.rh;
+  if (!url) return fail(`no RPC URL for ${CHAINS.rh.name}`, remedy);
+  const where = keyed ? `${hostOf(url)} (${envVar})` : `${hostOf(url)} (public fallback, ${envVar} empty)`;
+  const f = { configured: keyed, importance: 'recommended' as const };
+  let head: { chainId: bigint; block: bigint };
   try {
-    const head = await chainHead(deps.http, url);
-    return outcome(
-      { ok: true, configured: true, importance: 'optional' },
-      `${hostOf(url)} (RPC_ROBINHOOD), chainId ${hex(head.chainId)} (compare with the Robinhood Chain docs), block ${grouped(head.block)}`,
-    );
+    head = await chainHead(deps.http, url);
   } catch (e) {
     const msg = errorText(e);
-    return fail(`${hostOf(url)} (RPC_ROBINHOOD): ${msg}`, networkRemedy(msg, hostOf(url)) ?? 'RPC_ROBINHOOD does not answer: check the URL and its key');
+    return outcome({ ...f, ok: false }, `${where}: ${msg}`, networkRemedy(msg, hostOf(url)) ?? (keyed ? `${envVar} does not answer: check the URL and its key` : remedy));
   }
+  const expected = BigInt(CHAINS.rh.chainId ?? 0);
+  if (head.chainId !== expected) {
+    const name = KNOWN_CHAIN_IDS[Number(head.chainId)] ?? 'unknown chain';
+    return fail(
+      `${where}: wrong network, chainId ${hex(head.chainId)} (${name}), expected ${hex(expected)} (${CHAINS.rh.name})`,
+      `${envVar} must give a ${CHAINS.rh.name} mainnet endpoint (chain id ${expected}): contracts are looked up on this chain through it`,
+    );
+  }
+  return outcome({ ...f, ok: true }, `${where}, chainId ${hex(head.chainId)}, block ${grouped(head.block)}`, remedy);
 }
 
 export const ETHERSCAN_REMEDY =
   'set ETHERSCAN_API_KEY (etherscan.io/myapikey; one V2 key covers every chain id; the free plan is rate limited and has no Base or BNB Chain)';
 
 /**
- * The contract creator on each EVM chain with a chain id, as checks look it up: Etherscan V2 with a key, Blockscout
+ * The contract creator on each EVM chain with a probe token, as checks look it up: Etherscan V2 with a key, Blockscout
  * (free) on Ethereum, Base and Arbitrum when Etherscan can't answer. One call at a time (the free plans allow a few
- * per second).
+ * per second). Robinhood Chain's creator comes from robinhoodchain.blockscout.com alone; it is not probed here (no
+ * contract on it is known to the code).
  */
 export async function probeEtherscan(deps: { env: Env; evm: Pick<EvmSource, 'creator'> }): Promise<ProbeOutcome> {
   const keyed = !!deps.env.ETHERSCAN_API_KEY;
