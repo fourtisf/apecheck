@@ -6,6 +6,7 @@ import { CHAINS, type ChainKey, type Env } from '@apecheck/core';
 import type { EvmWalletSource, Http, SolanaWalletSource, Sources, XBotSource } from './types';
 import { createHttp } from './http';
 import { createDexScreener } from './adapters/dexscreener';
+import { createTokenLinks } from './adapters/token-links';
 import { createEvm } from './adapters/evm';
 import { createSolana } from './adapters/solana';
 import { createTron } from './adapters/tron';
@@ -29,6 +30,14 @@ export {
 } from './coin-facts';
 export { createDexScreener, DexScreenerAdapter } from './adapters/dexscreener';
 export {
+  createTokenLinks, TokenLinksAdapter, GECKOTERMINAL_BASE, GECKO_NETWORKS, GECKO_TIMEOUT_MS, META_JSON_MAX_BYTES, META_JSON_TIMEOUT_MS,
+  parseGeckoInfo, parseMetadataJson, parseDasAsset, token2022Metadata,
+} from './adapters/token-links';
+export {
+  mergeTokenLinks, linksFromDex, xHandleOf, projectWebsiteOf, telegramUrlOf, discordUrlOf, imageUrlOf, gatewayUrl, emptyLinks, NOT_PROJECT_SITES,
+} from './links';
+export { metadataPda, findProgramAddress, isOnCurve, decodeMetaplexMetadata, METAPLEX_METADATA_PROGRAM, type MetaplexMetadata } from './solana-pda';
+export {
   createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, ALCHEMY_NETWORKS, resolveEvmRpc, type EvmRpcSource, DETECT_RETRY_DELAY_MS, ERC1271_MAGIC, ERC1271_MAGIC_WORD, ERC1271_TIMEOUT_MS, encodeIsValidSignature,
   type EvmOptions,
 } from './adapters/evm';
@@ -49,6 +58,7 @@ export { createFourtis, FourtisAdapter, FOURTIS_PATHS } from './adapters/fourtis
 export function createSources(env: Env, opts: { http?: Http } = {}): Sources & { x: XBotSource; evm: EvmWalletSource; sol: SolanaWalletSource } {
   const http = opts.http ?? createHttp(env);
   const dex = createDexScreener(env, http);
+  const tokenLinks = createTokenLinks(env, http);
   const evm = createEvm(env, http);
   const sol = createSolana(env, http);
   const tron = createTron(env, http);
@@ -67,6 +77,7 @@ export function createSources(env: Env, opts: { http?: Http } = {}): Sources & {
   return {
     env,
     http,
+    tokenLinks,
     dex,
     evm,
     sol,

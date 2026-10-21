@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance } from 'fastify';
 
-const IMAGE_RE = /\.(?:jpe?g|png|webp)$/i;
+/** screenshots (jpg), share cards (png) and coin logos under logos/ (png, jpg, webp, gif; never svg) */
+const IMAGE_RE = /\.(?:jpe?g|png|webp|gif)$/i;
 
 export async function registerShots(app: FastifyInstance, dir: string) {
   fs.mkdirSync(dir, { recursive: true });

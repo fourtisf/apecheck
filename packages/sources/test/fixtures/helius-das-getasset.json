@@ -1,0 +1,31 @@
+{
+  "jsonrpc": "2.0",
+  "id": "apecheck",
+  "result": {
+    "interface": "FungibleToken",
+    "id": "CSocnzcRpgSCr1naKcNTieWZUxb6rABe45j844m7pump",
+    "content": {
+      "$schema": "https://schema.metaplex.com/nft1.0.json",
+      "json_uri": "https://ipfs.io/ipfs/QmKimchiMetadata11111111111111111111111111111111",
+      "files": [
+        {
+          "uri": "https://ipfs.io/ipfs/QmKimchiImage1111111111111111111111111111111111",
+          "cdn_uri": "https://cdn.helius-rpc.com/cdn-cgi/image//https://ipfs.io/ipfs/QmKimchiImage1111111111111111111111111111111111",
+          "mime": "image/png"
+        }
+      ],
+      "metadata": { "description": "The spiciest coin on Solana.", "name": "Kimchi", "symbol": "KIMCHI", "token_standard": "Fungible" },
+      "links": { "image": "https://ipfs.io/ipfs/QmKimchiImage1111111111111111111111111111111111" }
+    },
+    "authorities": [{ "address": "TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM", "scopes": ["full"] }],
+    "compression": { "eligible": false, "compressed": false },
+    "grouping": [],
+    "royalty": { "royalty_model": "creators", "percent": 0, "basis_points": 0, "primary_sale_happened": false, "locked": false },
+    "creators": [],
+    "ownership": { "frozen": false, "delegated": false, "ownership_model": "token", "owner": "" },
+    "supply": null,
+    "mutable": false,
+    "burnt": false,
+    "token_info": { "symbol": "KIMCHI", "supply": 999969999380000, "decimals": 6, "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
+  }
+}

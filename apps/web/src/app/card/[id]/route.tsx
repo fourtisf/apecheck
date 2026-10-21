@@ -8,6 +8,7 @@ import type { CheckReportDTO } from '@apecheck/core';
 import { isApiError, report } from '@/lib/api';
 import { serverCall } from '@/lib/server-api';
 import { CARD_FONT, CARD_H, CARD_W, ShareCardImage } from '@/components/pages/ShareCardImage';
+import { logoDataUrl } from '@/lib/logo-file';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,22 +43,26 @@ const FONTS = [
 /** Glyphs outside the bundled fonts (CJK, emoji) are downloaded by next/og; past this, draw without them. */
 const FULL_RENDER_MS = 5000;
 
-const draw = (item: CheckReportDTO, strict: boolean) =>
-  new ImageResponse(<ShareCardImage item={item} strict={strict} />, { width: CARD_W, height: CARD_H, fonts: FONTS }).arrayBuffer();
+const draw = (item: CheckReportDTO, strict: boolean, logo: string | null) =>
+  new ImageResponse(<ShareCardImage item={item} strict={strict} logo={logo} />, { width: CARD_W, height: CARD_H, fonts: FONTS }).arrayBuffer();
 
-/** Render with every glyph if the downloads work; otherwise (offline, slow, failed) with what the bundled fonts cover. */
+/**
+ * Render with every glyph if the downloads work; otherwise (offline, slow, failed) with what the bundled fonts cover.
+ * The coin's logo is read from disk (SCREENSHOT_DIR/logos) and embedded: the card never loads a remote image.
+ */
 async function renderCard(item: CheckReportDTO): Promise<ArrayBuffer> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const logo = item.kind === 'coin' ? await logoDataUrl(item.logo) : null;
   try {
     return await Promise.race([
-      draw(item, false),
+      draw(item, false, logo),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('glyph download timed out')), FULL_RENDER_MS);
       }),
     ]);
   } catch (e) {
     console.warn(`[card] ${item.id}: drawing without extra glyphs (${e instanceof Error ? e.message : String(e)})`);
-    return draw(item, true);
+    return draw(item, true, logo);
   } finally {
     clearTimeout(timer);
   }

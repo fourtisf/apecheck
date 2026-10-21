@@ -62,6 +62,7 @@ import {
   type WebhookEvent,
   type CheckResult,
   checkResultOf,
+  LOGO_PATH_RE,
 } from '@apecheck/core';
 import { num, type ApiKey, type Prisma, type PrismaClient, type Webhook, type WebhookDelivery } from '@apecheck/db';
 
@@ -188,6 +189,12 @@ export function shotUrl(p: string | null | undefined, screenshotDir: string): st
   return '/shots/' + rel;
 }
 
+/** Target.logo ("logos/<sha256>.<ext>" under SCREENSHOT_DIR) → its public path "/shots/logos/…"; null for anything else. */
+export function logoUrl(logo: string | null | undefined): string | null {
+  const m = logo ? LOGO_PATH_RE.exec(logo) : null;
+  return m ? `/shots/logos/${m[1]}.${m[2]}` : null;
+}
+
 function stepsExpectedOf(kind: TargetKindS, ev: CheckEvidence, stepCount: number, finished: boolean): number {
   const est = ev.stepsExpected && ev.stepsExpected > 0 ? Math.round(ev.stepsExpected) : STEPS_EXPECTED[kind];
   if (finished) return stepCount || est;
@@ -304,6 +311,7 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
     ca: t.ca,
     chain: chainFromDb(t.chain),
     hue: hueOf(t.key),
+    logo: logoUrl(t.logo),
     narScore: c.narScore,
     coinScore: c.coinScore,
     total: c.totalScore,
@@ -635,7 +643,7 @@ export interface LiveRow {
   requesterSid: string | null;
   requesterId?: string | null;
   evidence: unknown;
-  target: Pick<TargetRow, 'kind' | 'name' | 'ticker' | 'chain' | 'key'>;
+  target: Pick<TargetRow, 'kind' | 'name' | 'ticker' | 'chain' | 'key'> & { logo?: string | null };
   _count: { steps: number };
   steps: { text: string }[];
 }
@@ -653,6 +661,7 @@ export function toLive(c: LiveRow, ctx: MapCtx & { now: number }): LiveCheckDTO 
     ticker: c.target.ticker,
     chain: chainFromDb(c.target.chain),
     hue: hueOf(c.target.key),
+    logo: logoUrl(c.target.logo),
     status: statusFromDb(c.status),
     createdAt: c.createdAt.toISOString(),
     startedAt: iso(c.startedAt),

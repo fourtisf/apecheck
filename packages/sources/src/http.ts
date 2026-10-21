@@ -88,7 +88,7 @@ async function readBody(
   body: Readable,
   encoding: string | undefined,
   maxBytes: number,
-): Promise<{ text: string; truncated: boolean }> {
+): Promise<{ bytes: Buffer; truncated: boolean }> {
   const enc = (encoding ?? '').toLowerCase().trim();
   let stream: Readable = body;
   if (enc === 'gzip' || enc === 'x-gzip' || enc === 'deflate') stream = pipeline(body, zlib.createUnzip(), () => {});
@@ -120,7 +120,7 @@ async function readBody(
       if (stream !== body) discard(body);
     }
   }
-  return { text: new TextDecoder('utf-8').decode(Buffer.concat(chunks)), truncated };
+  return { bytes: Buffer.concat(chunks), truncated };
 }
 
 export function createHttp(env: HttpEnv, options: HttpOptions = {}): Http {
@@ -212,8 +212,12 @@ export function createHttp(env: HttpEnv, options: HttpOptions = {}): Http {
           }
           let text = '';
           let truncated = false;
+          let bytes: Buffer | undefined;
           if (method === 'HEAD') discard(res.body);
-          else ({ text, truncated } = await readBody(res.body as unknown as Readable, resHeaders['content-encoding'], maxBytes));
+          else {
+            ({ bytes, truncated } = await readBody(res.body as unknown as Readable, resHeaders['content-encoding'], maxBytes));
+            if (!req.binary) text = new TextDecoder('utf-8').decode(bytes);
+          }
           return {
             status: res.statusCode,
             ok: res.statusCode >= 200 && res.statusCode < 300,
@@ -223,6 +227,7 @@ export function createHttp(env: HttpEnv, options: HttpOptions = {}): Http {
             text,
             truncated,
             ms: Date.now() - started,
+            ...(req.binary ? { body: bytes ?? Buffer.alloc(0) } : {}),
           };
         } finally {
           await dispose?.();

@@ -37,7 +37,7 @@ export function CoinRow({ item: it }: { item: CoinRowDTO }) {
   return (
     <Link className="tr" href={reportPath(it.id)} prefetch={false}>
       <span className="td c-nm">
-        <Avatar item={{ kind: 'coin', hue: it.hue, ticker: it.ticker, name: it.name }} />
+        <Avatar item={{ kind: 'coin', hue: it.hue, ticker: it.ticker, name: it.name, logo: it.logo }} />
         <span className="nm">
           <span className="nm1">
             <b>{tickerOf(it)}</b>

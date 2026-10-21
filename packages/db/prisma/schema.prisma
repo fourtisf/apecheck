@@ -108,6 +108,10 @@ model Target {
   fingerprint   String?
   fingerprintAt DateTime?
 
+  // added: the coin's logo, downloaded by the worker (png/jpeg/webp/gif, at most 1 MB), as a path under SCREENSHOT_DIR
+  // ("logos/<sha256>.<ext>", served by the API at /shots/logos/...); null until one was found
+  logo          String?
+
   checks     Check[]
   watchers   Watch[]
   pricePoints PricePoint[]

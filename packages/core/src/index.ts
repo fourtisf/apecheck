@@ -11,3 +11,4 @@ export * from './enums';
 export * from './env';
 export * from './schemas';
 export * from './results';
+export * from './logo';

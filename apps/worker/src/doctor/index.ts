@@ -30,6 +30,7 @@ import {
 import { Redactor, WS_PATH_LABEL, hostOf } from './redact';
 import { formatReport } from './report';
 import { errorText, exitCode, runProbes, type Probe, type ProbeResult } from './result';
+import { GECKOTERMINAL_REMEDY, probeGeckoTerminal } from './gecko';
 
 export { Redactor } from './redact';
 export { exitCode, runProbe, runProbes, classify } from './result';
@@ -78,6 +79,7 @@ export function buildProbes(d: DoctorDeps): Probe[] {
     { name: 'RPC Solana', timeoutMs: 30_000, remedy: SOLANA_REMEDY, run: () => probeSolana({ env, sol: sources.sol }) },
     { name: 'TronGrid', timeoutMs: 30_000, remedy: TRON_REMEDY, run: () => probeTron({ env, http, tron: sources.tron }) },
     { name: 'DexScreener', remedy: DEXSCREENER_REMEDY, run: () => probeDexScreener({ env, dex: sources.dex }) },
+    { name: 'GeckoTerminal', remedy: GECKOTERMINAL_REMEDY, run: () => probeGeckoTerminal(sources as Parameters<typeof probeGeckoTerminal>[0]) },
     { name: 'GitHub', timeoutMs: 30_000, remedy: GITHUB_REMEDY, run: () => probeGitHub({ env, http, github: sources.github }) },
     { name: 'X reads (Bearer)', timeoutMs: 30_000, remedy: X_READ_REMEDY, run: () => probeXRead({ env, http, x: sources.x }) },
     { name: 'X bot (OAuth 1.0a)', remedy: X_BOT_REMEDY, run: () => probeXBot({ env, http }) },

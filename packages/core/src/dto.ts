@@ -176,6 +176,11 @@ export interface CheckSummaryDTO {
   chain: ChainKey | null;
   /** avatar hue 0–359 */
   hue: number;
+  /**
+   * The coin's logo as a path on the API origin ("/shots/logos/<sha256>.png"), stored by the worker; absent or null
+   * when there is none (draw the letter avatar). Never a third-party URL.
+   */
+  logo?: string | null;
   narScore: number | null;
   coinScore: number | null;
   total: number | null;
@@ -268,6 +273,8 @@ export interface LiveCheckDTO {
   ticker: string | null;
   chain: ChainKey | null;
   hue: number;
+  /** the coin's logo path on the API origin, see CheckSummaryDTO.logo */
+  logo?: string | null;
   status: CheckStatusS;
   createdAt: string;
   startedAt: string | null;

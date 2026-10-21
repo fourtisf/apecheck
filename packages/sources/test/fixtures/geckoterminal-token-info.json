@@ -1,0 +1,33 @@
+{
+  "data": {
+    "id": "base_0x3333333333333333333333333333333333333333",
+    "type": "token",
+    "attributes": {
+      "address": "0x3333333333333333333333333333333333333333",
+      "name": "Zap Finance",
+      "symbol": "ZAP",
+      "decimals": 18,
+      "image_url": "https://assets.geckoterminal.com/abc123/zap.png",
+      "image": {
+        "thumb": "https://assets.geckoterminal.com/abc123/zap-thumb.png",
+        "small": "https://assets.geckoterminal.com/abc123/zap-small.png",
+        "large": "https://assets.geckoterminal.com/abc123/zap-large.png"
+      },
+      "coingecko_coin_id": null,
+      "websites": ["https://zap.finance", "https://docs.zap.finance"],
+      "discord_url": "https://discord.gg/zapfi",
+      "farcaster_url": null,
+      "telegram_handle": "zapfinance",
+      "twitter_handle": "zapfinance",
+      "description": "Zap is a swap aggregator on Base.",
+      "gt_score": 61.4,
+      "gt_score_details": { "pool": 50, "transaction": 40, "creation": 50, "info": 80, "holders": 30 },
+      "categories": [],
+      "gt_category_ids": [],
+      "holders": { "count": 1203, "distribution_percentage": { "top_10": "48.1", "11_30": "12.3", "31_50": "5.5", "rest": "34.1" }, "last_updated": "2026-10-20T10:00:00Z" },
+      "mint_authority": "no",
+      "freeze_authority": "no",
+      "is_honeypot": "no"
+    }
+  }
+}

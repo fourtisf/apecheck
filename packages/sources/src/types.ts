@@ -32,6 +32,8 @@ export interface HttpRequest {
   guard?: boolean;
   /** follow redirects (default true, max 5, each hop re-checked when guard is on) */
   redirect?: boolean;
+  /** keep the raw bytes in HttpResponse.body (images); `text` is then empty */
+  binary?: boolean;
 }
 export interface HttpResponse {
   status: number;
@@ -43,6 +45,8 @@ export interface HttpResponse {
   /** set when the body was cut at maxBytes */
   truncated: boolean;
   ms: number;
+  /** the raw bytes, only for requests with `binary: true` */
+  body?: Buffer;
 }
 export interface Http {
   request(url: string, req?: HttpRequest): Promise<HttpResponse>;
@@ -250,6 +254,48 @@ export interface GitHubSource {
   searchByName(name: string): Promise<RepoFacts[]>;
 }
 
+/* ---------------- Token links (website, X, logo) from token metadata ---------------- */
+
+/** Where a token link came from: DexScreener's token info, the token's own metadata, GeckoTerminal. */
+export type LinkSource = 'DexScreener' | 'On-chain' | 'GeckoTerminal';
+
+/** Raw links one source gives for a token (normalised and vetted by mergeTokenLinks, src/links.ts). */
+export interface TokenLinks {
+  websites: string[];
+  /** X profile links or handles */
+  twitter: string[];
+  telegram: string[];
+  discord: string[];
+  image: string | null;
+  description: string | null;
+  name: string | null;
+  symbol: string | null;
+}
+
+/** One value per field, with its source (priority DexScreener > token metadata > GeckoTerminal). */
+export interface MergedTokenLinks {
+  website: { url: string; source: LinkSource } | null;
+  /** handle without @ */
+  x: { handle: string; source: LinkSource } | null;
+  telegram: { url: string; source: LinkSource } | null;
+  discord: { url: string; source: LinkSource } | null;
+  image: { url: string; source: LinkSource } | null;
+}
+
+export interface TokenLinksSource {
+  configured: boolean;
+  /** last non-fatal error (also reported to the current captureErrors() scope) */
+  readonly lastError?: string | null;
+  /**
+   * The token's own metadata. Solana: Helius DAS getAsset with HELIUS_API_KEY, else the Metaplex metadata account
+   * (or the Token-2022 tokenMetadata extension), then the metadata JSON at its URI (guarded fetch, 256 KB, 8 s).
+   * null for other chains, or when nothing could be read.
+   */
+  metadata(chain: ChainKey, address: string): Promise<TokenLinks | null>;
+  /** GeckoTerminal token info (no key; one call, 8 s). null for an unmapped chain, an unknown token or an error. */
+  gecko(chain: ChainKey, address: string): Promise<TokenLinks | null>;
+}
+
 /* ---------------- X (API v2, bearer for reads; OAuth 1.0a user context for the bot in M2) ---------------- */
 
 export interface XUser {
@@ -443,6 +489,8 @@ export interface CoinRawFacts {
 export interface Sources {
   env: Env;
   http: Http;
+  /** token metadata + GeckoTerminal links (optional so test fakes need not provide it) */
+  tokenLinks?: TokenLinksSource;
   dex: DexScreenerSource;
   evm: EvmSource;
   sol: SolanaSource;

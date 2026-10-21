@@ -75,10 +75,13 @@ export async function findExpiredShots(
 }
 
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;
+/** Folders of SCREENSHOT_DIR that are never a check's screenshot folder: the coin logos are kept for good. */
+export const KEEP_FOLDERS: ReadonlySet<string> = new Set(['logos', 'cards']);
 
-/** `<dir>/<name>` only for a plain file/folder name, never a path that leaves `dir`. */
-function inside(dir: string, ...names: string[]): string | null {
+/** `<dir>/<name>` only for a plain file/folder name, never a path that leaves `dir` (nor the logos folder). */
+export function inside(dir: string, ...names: string[]): string | null {
   if (!names.every(n => SAFE_SEGMENT.test(n.replace(/\.png$/, '')))) return null;
+  if (names[0] === 'logos' || (names.length === 1 && KEEP_FOLDERS.has(names[0]))) return null;
   const p = path.resolve(dir, ...names);
   return p.startsWith(path.resolve(dir) + path.sep) ? p : null;
 }

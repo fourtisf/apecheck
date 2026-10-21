@@ -5,7 +5,7 @@
 import type { Redis } from 'ioredis';
 import type { PrismaClient } from '@apecheck/db';
 import type { ChainKey, Detected, Env, ExtractedClaim, Judged, TargetKindS } from '@apecheck/core';
-import type { CoinRawFacts, DexTokenInfo, Sources, XPost, XUser } from '@apecheck/sources';
+import type { CoinRawFacts, DexTokenInfo, MergedTokenLinks, Sources, TokenLinks, XPost, XUser } from '@apecheck/sources';
 import type { AiAdapter, AiStage, SignalEvidence } from '../ai/types';
 import type { BrowserHost, BrowseSession } from '../browser/browser';
 import type { Explorer, ExploreResult } from '../browser/agent';
@@ -85,6 +85,13 @@ export interface Links {
   discord: string | null;
 }
 
+/** What the optional token-link sources answered (null: no answer, nothing known, or not asked). */
+export interface LinkReads {
+  meta: TokenLinks | null;
+  gecko: TokenLinks | null;
+  errors: string[];
+}
+
 export class CheckRun {
   readonly limits: StageLimits;
   readonly degraded: string[] = [];
@@ -106,6 +113,10 @@ export class CheckRun {
   post: XPost | null = null;
   xUser: XUser | null = null;
   market: DexTokenInfo | null = null;
+  /** website / X / Telegram / Discord / logo URL merged from DexScreener, the token's own metadata and GeckoTerminal */
+  tokenLinks: MergedTokenLinks | null = null;
+  /** the token metadata + GeckoTerminal reads for chain/ca (started once in Stage A, never rejects) */
+  linkReads: { chain: ChainKey; ca: string; promise: Promise<LinkReads> } | null = null;
   links: Links = { site: null, x: null, github: [], docs: null, telegram: null, discord: null };
   /** the contract was announced in a step already (Stage A or D) */
   coinAnnounced = false;

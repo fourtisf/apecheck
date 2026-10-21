@@ -1,0 +1,21 @@
+{
+  "data": {
+    "id": "solana_CSocnzcRpgSCr1naKcNTieWZUxb6rABe45j844m7pump",
+    "type": "token",
+    "attributes": {
+      "address": "CSocnzcRpgSCr1naKcNTieWZUxb6rABe45j844m7pump",
+      "name": "Kimchi",
+      "symbol": "KIMCHI",
+      "image_url": "missing.png",
+      "coingecko_coin_id": null,
+      "websites": [],
+      "discord_url": null,
+      "telegram_handle": null,
+      "twitter_handle": null,
+      "description": null,
+      "gt_score": 22.0,
+      "categories": [],
+      "gt_category_ids": []
+    }
+  }
+}

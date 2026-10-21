@@ -262,7 +262,7 @@ describe('pipeline run(checkId)', () => {
 
     const texts = c.steps.map(s => s.text);
     expect(texts[0]).toBe('Contract on Base: 0x111…1111');
-    expect(texts[1]).toBe('Website from token metadata: working-app.test');
+    expect(texts[1]).toBe('Token metadata: website working-app.test, X @orbitswap');
     expect(texts).toContain('Deployer: 3 earlier tokens, 2 dead');
     expect(texts).toContain('Launch: 12.4% of supply bought by 7 bundled wallets');
     expect(texts).toContain('Top 10 holders own 31%, dev wallet 2%, liquidity burned');
