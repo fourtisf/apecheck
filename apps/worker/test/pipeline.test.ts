@@ -262,7 +262,7 @@ describe('pipeline run(checkId)', () => {
 
     const texts = c.steps.map(s => s.text);
     expect(texts[0]).toBe('Contract on Base: 0x111…1111');
-    expect(texts[1]).toBe('Website from token metadata: working-app.test');
+    expect(texts[1]).toBe('Token metadata: website working-app.test, X @orbitswap');
     const step = (t: string) => c.steps.find(s => s.text === t);
     expect(step('Deployer history: no earlier launches seen by ApeCheck (0xAbC…Ef01)')).toMatchObject({ status: 'WARN', source: 'ApeCheck' });
     expect(step('Bundle share: not checked')).toMatchObject({ status: 'WARN', source: null });

@@ -1,0 +1,19 @@
+[
+  {
+    "chainId": "solana",
+    "dexId": "pumpswap",
+    "url": "https://dexscreener.com/solana/9kimchipairaddress1111111111111111111111111",
+    "pairAddress": "9KimchiPairAddress1111111111111111111111111",
+    "baseToken": { "address": "CSocnzcRpgSCr1naKcNTieWZUxb6rABe45j844m7pump", "name": "Kimchi", "symbol": "KIMCHI" },
+    "quoteToken": { "address": "So11111111111111111111111111111111111111112", "name": "Wrapped SOL", "symbol": "SOL" },
+    "priceNative": "0.0001721",
+    "priceUsd": "0.03301",
+    "txns": { "m5": { "buys": 31, "sells": 22 }, "h24": { "buys": 18210, "sells": 15002 } },
+    "volume": { "h24": 9812000.5, "h6": 2401000, "h1": 410000, "m5": 31000.4 },
+    "priceChange": { "m5": 1.2, "h1": -3.4, "h6": 12.1, "h24": 140.9 },
+    "liquidity": { "usd": 1520000.11, "base": 23000000, "quote": 3950 },
+    "fdv": 33010000,
+    "marketCap": 33010000,
+    "pairCreatedAt": 1760900000000
+  }
+]

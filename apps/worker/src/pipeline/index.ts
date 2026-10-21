@@ -22,8 +22,12 @@ import { coinAfterStage, coinFactsFor, evidenceStage } from './evidence';
 import { judgeStage, scoringStep } from './judge';
 import { UnrecoverableError, finishResolve, resolveStage, saveTarget } from './resolve';
 import { afterDone, afterFinish, announceEnd, renderCard, saveStage, type SavedCheck } from './save';
-import { runStage } from './stage';
+import { runStage, within } from './stage';
 import { RunSuperseded, StepLogger } from './steps';
+import { saveLogo } from './logo';
+
+/** how long the end of a check waits for a logo download still running (the card shows it when it made it) */
+const LOGO_WAIT_MS = 5_000;
 
 export { STAGE_LIMITS, type PipelineDeps, type WorkerHooks } from './context';
 export { RunSuperseded } from './steps';
@@ -160,6 +164,8 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
     });
     // the coin's on-chain facts take the longest: ask now, alongside the browser (Stage D waits for the answer)
     if (run.hasCoin()) coinFactsFor(run).catch(() => undefined);
+    // the coin's logo, stored on the Target before the share card is drawn (never fails the check)
+    const logo = run.hasCoin() ? saveLogo(run).catch(() => null) : null;
     steps.setProgress(0.05);
     interrupted();
 
@@ -206,6 +212,7 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
     await steps.flush();
     const saved = await saveStage(run);
     steps.setProgress(1);
+    if (logo) await within(logo, LOGO_WAIT_MS, null);
     await renderCard(deps, row).catch(e => log.warn('share card failed', e));
     await announceEnd(deps, row, 'done');
     await afterDone(deps, checkId);

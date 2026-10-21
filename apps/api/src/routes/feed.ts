@@ -176,7 +176,7 @@ export function registerFeedRoutes(app: FastifyInstance, deps: AppDeps) {
         requesterSid: true,
         requesterId: true,
         evidence: true,
-        target: { select: { kind: true, name: true, ticker: true, chain: true, key: true } },
+        target: { select: { kind: true, name: true, ticker: true, chain: true, key: true, logo: true } },
         _count: { select: { steps: true } },
         steps: { orderBy: { idx: 'desc' }, take: 1, select: { text: true, source: true } },
       },

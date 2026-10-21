@@ -24,7 +24,7 @@ export interface StepInput {
   status: StepStatusS;
   /** one plain sentence, like the prototype log */
   text: string;
-  source?: StepSource | null;
+  source?: StepSource | 'GeckoTerminal' | null;
   url?: string | null;
   /** caption pill on the screenshot */
   caption?: string | null;

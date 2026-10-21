@@ -271,7 +271,7 @@ Verify SSE end to end once a check exists: `curl -N https://api.apecheck.io/v1/c
 ## 9. Screenshots
 
 Screenshots are written under `SCREENSHOT_DIR` (`/var/apecheck/shots`) and served by the API at `/shots/*`; the share cards
-the worker saved for the bot are in `SCREENSHOT_DIR/cards/`. Every day at 03:20 UTC `worker-prices` deletes the screenshot
+the worker saved for the bot are in `SCREENSHOT_DIR/cards/`. Coin logos (downloaded by the worker, PNG/JPEG/WebP/GIF only, at most 1 MB) are in `SCREENSHOT_DIR/logos/<sha256>.<ext>`, served at `/shots/logos/*` and read from disk by the web app for share cards; the daily cleanup never deletes them. Coin checks also call `api.geckoterminal.com` (no key) and fetch token metadata JSON and logo images from their hosts (IPFS gateways, Arweave…) through the SSRF guard. Every day at 03:20 UTC `worker-prices` deletes the screenshot
 folder and saved card of each check that finished more than 30 days ago, except checks in the top 50 of the feed's Most
 checked, Most real and Least real lists (HANDOFF §12.6), and clears their screenshot references so reports show no broken
 images. Retention and list size are `TUNING.shotsKeepDays` / `TUNING.shotsKeepTop` in `packages/core/src/config.ts`.

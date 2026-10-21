@@ -1,6 +1,8 @@
 /**
  * Stage A — resolve the target (no AI). Detect what was pasted, then fill the gaps:
- * contract → DexScreener token info → website + X handle; website → contract address and X handle from
+ * contract → website + X handle from DexScreener's token info, else the token's own metadata (Solana: Helius DAS or
+ * the Metaplex account, then its JSON) and GeckoTerminal, read in parallel with DexScreener and never fatal;
+ * website → contract address and X handle from
  * the page HTML; X post → linked site and/or contract (author profile as fallback). runCheck then gives the
  * Target row its canonical key and display fields (saveTarget).
  *
@@ -25,8 +27,8 @@ import {
   type ChainKey,
 } from '@apecheck/core';
 import type { Prisma } from '@apecheck/db';
-import { captureErrors, type DexTokenInfo, type XUser } from '@apecheck/sources';
-import type { CheckRun } from './context';
+import { captureErrors, linksFromDex, mergeTokenLinks, reportError, type DexTokenInfo, type LinkSource, type TokenLinks, type XUser } from '@apecheck/sources';
+import type { CheckRun, LinkReads } from './context';
 import type { StageCtx } from './stage';
 import { within } from './stage';
 import { pgSafe } from './pgsafe';
@@ -164,27 +166,87 @@ export async function announceCoin(run: CheckRun, found: FoundCoin, where: 'page
   });
 }
 
-/** Website + X handle from token metadata (DexScreener). */
-async function fromTokenInfo(run: CheckRun, steps: StepSink) {
-  const info = run.market;
-  if (!info) return;
-  // every write first: the steps below are the only awaits
-  if (!run.handle) {
-    const tw = info.socials.find(s => /twitter|^x$/i.test(s.type));
-    const h = tw ? xHandleFromLinks([tw.url]) : null;
-    if (h) run.handle = h;
+/** Cap on each optional token-link read (token metadata incl. its JSON, GeckoTerminal). */
+export const LINK_READ_MS = 14_000;
+
+/**
+ * Start the optional token-link reads for a coin check once (token metadata + GeckoTerminal, in parallel, each
+ * capped at LINK_READ_MS). Never rejects: a failed or slow source answers null and its reason is kept in `errors`.
+ */
+export function startLinkReads(run: CheckRun, chain: ChainKey, ca: string): void {
+  const src = run.sources.tokenLinks;
+  if (!src || run.kind !== 'coin') return;
+  if (run.linkReads && run.linkReads.chain === chain && run.linkReads.ca === ca) return;
+  const read = async (fn: () => Promise<TokenLinks | null>, label: string): Promise<{ value: TokenLinks | null; errors: string[] }> => {
+    const guarded = async () => {
+      try {
+        return await fn();
+      } catch (e) {
+        reportError(`${label}: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+      }
+    };
+    const r = await within(captureErrors(guarded), LINK_READ_MS, null);
+    return r ?? { value: null, errors: [`${label}: no answer within ${LINK_READ_MS / 1000} s`] };
+  };
+  const promise: Promise<LinkReads> = Promise.all([read(() => src.metadata(chain, ca), 'tokenLinks.metadata'), read(() => src.gecko(chain, ca), 'tokenLinks.gecko')]).then(
+    ([m, g]) => ({ meta: m.value, gecko: g.value, errors: [...m.errors, ...g.errors] }),
+    e => ({ meta: null, gecko: null, errors: [String(e)] }),
+  );
+  run.linkReads = { chain, ca, promise };
+}
+
+/**
+ * Website, X handle, Telegram/Discord and the logo URL from the token's metadata: DexScreener's token info first,
+ * then the token's own metadata ("On-chain"), then GeckoTerminal (per field, see mergeTokenLinks). Logs one
+ * "Token metadata: website foo.xyz, X @foo" step per source that supplied something.
+ */
+async function fromTokenLinks(run: CheckRun, steps: StepSink, ctx: StageCtx) {
+  if (run.kind === 'coin' && run.hasCoin()) startLinkReads(run, run.chain!, run.ca!);
+  const reads = run.linkReads && run.linkReads.chain === run.chain && run.linkReads.ca === run.ca ? run.linkReads : null;
+  const extra = reads ? await within(reads.promise, Math.max(0, ctx.deadline - Date.now() - 1_500), null) : null;
+  if (ctx.signal.aborted) return;
+  if (reads && !extra) run.log.info('token links: no answer before the resolve deadline');
+  if (extra?.errors.length) run.log.info(`token links: ${extra.errors.join('; ')}`);
+  if (!run.market && !extra) return;
+  const merged = mergeTokenLinks([
+    { source: 'DexScreener', links: linksFromDex(run.market) },
+    { source: 'On-chain', links: extra?.meta },
+    { source: 'GeckoTerminal', links: extra?.gecko },
+  ]);
+  run.tokenLinks = merged;
+  if (!run.ticker && extra) {
+    const sym = extra.meta?.symbol ?? extra.gecko?.symbol;
+    if (sym) run.ticker = sym.replace(/^\$/, '').toUpperCase().slice(0, 20);
   }
-  if (!run.links.telegram) run.links.telegram = info.socials.find(s => /telegram/i.test(s.type))?.url ?? null;
-  if (!run.links.discord) run.links.discord = info.socials.find(s => /discord/i.test(s.type))?.url ?? null;
-  if (!run.siteUrl) {
-    const site = projectSite(info.websites);
-    if (site) {
-      run.siteUrl = site;
-      run.domain = normalizeDomain(new URL(site).hostname);
-      await steps.step({ status: 'ok', text: `Website from token metadata: ${run.domain}`, source: 'DexScreener', url: site });
-    } else if (run.kind === 'coin') {
-      await steps.step({ status: 'info', text: 'No website in the token metadata', source: 'DexScreener' });
-    }
+  if (!run.tokenName && extra) {
+    const name = extra.meta?.name ?? extra.gecko?.name;
+    if (name) run.tokenName = name.slice(0, 80);
+  }
+
+  // every write first: the steps below are the only awaits
+  const said = new Map<LinkSource, { parts: string[]; url: string | null }>();
+  const say = (source: LinkSource, part: string, url: string | null = null) => {
+    const cur = said.get(source) ?? { parts: [], url: null };
+    cur.parts.push(part);
+    cur.url ??= url;
+    said.set(source, cur);
+  };
+  if (!run.siteUrl && merged.website) {
+    run.siteUrl = merged.website.url;
+    run.domain = normalizeDomain(new URL(merged.website.url).hostname);
+    say(merged.website.source, `website ${run.domain}`, merged.website.url);
+  }
+  if (!run.handle && merged.x) {
+    run.handle = merged.x.handle;
+    say(merged.x.source, `X @${merged.x.handle}`);
+  }
+  if (!run.links.telegram && merged.telegram) run.links.telegram = merged.telegram.url;
+  if (!run.links.discord && merged.discord) run.links.discord = merged.discord.url;
+
+  for (const [source, { parts, url }] of said) await steps.step({ status: 'ok', text: `Token metadata: ${parts.join(', ')}`, source, url });
+  if (!run.siteUrl && run.kind === 'coin') {
+    await steps.step({ status: 'info', text: 'No website in the token metadata', source: extra ? null : 'DexScreener' });
   }
 }
 
@@ -233,6 +295,8 @@ async function resolveContract(run: CheckRun, kind: 'evm' | 'sol' | 'tron', addr
   const detection = kind === 'evm' && !chain ? await detectEvmChain(run, address) : null;
   if (ctx.signal.aborted) return;
   if (detection) chain = detection.chain;
+  // the token's own metadata and GeckoTerminal, alongside DexScreener (their links count when DexScreener has none)
+  if (chain) startLinkReads(run, chain, address);
   const lookup = (c: ChainKey | null) => within(captureErrors(() => dex.token(c, address)), 10_000, null);
   // An RPC earlier in the detection order didn't answer, so the code found on a later chain may not be the
   // deployment that trades: DexScreener (any chain) moves the check to an unanswered chain when its pair is there.
@@ -440,7 +504,7 @@ export async function resolveStage(run: CheckRun, ctx: StageCtx): Promise<void> 
     if (ctx.signal.aborted) return;
     if (info) applyMarket(run, info);
   }
-  await fromTokenInfo(run, steps);
+  await fromTokenLinks(run, steps, ctx);
   if (run.siteUrl && !ctx.signal.aborted) await scanSiteHtml(run, steps, ctx);
   if (ctx.signal.aborted) return;
   if (!run.ticker && target?.ticker && run.kind === 'coin') run.ticker = target.ticker;

@@ -175,6 +175,7 @@ describe('GET /v1/checks/:id', () => {
       ca: MINT,
       chain: 'sol',
       hue: hueOf(`ca:sol:${MINT}`),
+      logo: null,
       narScore: 66,
       coinScore: 55,
       total: 61,

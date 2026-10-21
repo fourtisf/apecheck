@@ -150,8 +150,10 @@ export type CardItem = Pick<
 /**
  * cardHTML(it) at 1200x675. A queued/running check gets the "Testing now" state of the report header.
  * `strict` keeps only text the bundled fonts cover (the fallback when downloading extra glyphs fails).
+ * `logo`: the coin's stored logo as a data: URL (lib/logo-file.ts), drawn next to the source; never a remote URL.
  */
-export function ShareCardImage({ item: it, strict = false }: { item: CardItem; strict?: boolean }) {
+export function ShareCardImage({ item: it, strict = false, logo = null }: { item: CardItem; strict?: boolean; logo?: string | null }) {
+  const logoImg = logo && /^data:image\/(?:png|jpeg|gif);base64,/.test(logo) ? logo : null;
   const testing = it.status === 'queued' || it.status === 'running';
   const total = it.total ?? it.narScore ?? 0;
   const ringColor = testing ? T.acc : NAR_COLOR[narBand(total).key];
@@ -182,7 +184,13 @@ export function ShareCardImage({ item: it, strict = false }: { item: CardItem; s
           <Logo size={px(18)} />
           <span style={{ marginLeft: px(7) }}>apecheck</span>
         </div>
-        <span style={{ maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{source}</span>
+        <div style={{ display: 'flex', alignItems: 'center', maxWidth: '60%' }}>
+          {logoImg ? (
+            // eslint-disable-next-line @next/next/no-img-element -- satori draws <img> from a data: URL
+            <img src={logoImg} width={px(18)} height={px(18)} alt="" style={{ borderRadius: px(5), marginRight: px(7), objectFit: 'cover' }} />
+          ) : null}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{source}</span>
+        </div>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', marginTop: px(18) }}>

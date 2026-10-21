@@ -105,7 +105,7 @@ describe('Stage A — resolve', () => {
       evmChains: { [coin]: 'arb' },
       dexTokens: { [coin]: dexInfo({ chain: 'arb', address: coin, symbol: 'ZAP', websites: ['https://x.com/zap', 'https://zap.finance'], socials: [{ type: 'twitter', url: 'https://twitter.com/zapfinance' }] }) },
     });
-    expect(texts).toEqual(['info|DexScreener|Contract on Arbitrum: 0x333…3333', 'ok|DexScreener|Website from token metadata: zap.finance']);
+    expect(texts).toEqual(['info|DexScreener|Contract on Arbitrum: 0x333…3333', 'ok|DexScreener|Token metadata: website zap.finance, X @zapfinance']);
     expect(target).toMatchObject({ key: `ca:arb:${coin}`, name: '$ZAP', chain: 'ARB', domain: 'zap.finance', handle: 'zapfinance' });
   });
 

@@ -82,7 +82,7 @@ describe('Stage A abandoned at its timeout', () => {
     await sleep(2500);
     const after = await stored(check.id);
     expect(after.steps.map(s => [s.idx, s.text])).toEqual(before.steps.map(s => [s.idx, s.text]));
-    expect(after.steps.some(s => /^Contract on Base|^Website from token metadata/.test(s.text))).toBe(false);
+    expect(after.steps.some(s => /^Contract on Base|^Token metadata/.test(s.text))).toBe(false);
     expect(after.targetId).toBe(before.targetId);
     expect(after.target.key).toBe(`ca:evm:${COIN}`);
     expect((await prisma.target.findUniqueOrThrow({ where: { id: owner.id } })).checkCount).toBe(1);
