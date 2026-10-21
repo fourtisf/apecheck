@@ -1,7 +1,7 @@
 /**
  * Facts → ok | warn | fail. Pure functions so every rule is unit-tested. Product rules follow the task
- * spec (HANDOFF §4 Stage B); people rules use CONFIG.acctAgeDays / CONFIG.gitBurstHours and the TUNING
- * thresholds; coin signals come only from the core helpers (deployerRecord, bandSignal, holdersSignal,
+ * spec (HANDOFF §4 Stage B); people rules use CONFIG.gitBurstHours and the TUNING thresholds (the X account is
+ * not read or scored: scoredSignals); coin signals come only from the core helpers (deployerRecord, bandSignal, holdersSignal,
  * lpSignal, authoritiesSignal). Unknown inputs never pass as ok.
  */
 import {
@@ -11,14 +11,12 @@ import {
   bandSignal,
   deployerRecord,
   deployerSignal,
-  fmtAge,
-  fmtCount,
   holdersSignal,
   lpSignal,
   type DeployerRecord,
   type Signal,
 } from '@apecheck/core';
-import type { CoinRawFacts, RepoFacts, XUser } from '@apecheck/sources';
+import type { CoinRawFacts, RepoFacts } from '@apecheck/sources';
 import type { ProductCauses, SignalEvidence } from '../ai/types';
 import { simSkipReason, type ExploreResult } from '../browser/agent';
 import type { DocsResult } from '../browser/docs';
@@ -281,21 +279,14 @@ export function gitSignal(g: GitFacts | null, opts: { claimsOpenSource: boolean;
 }
 
 /**
- * acct: ok ≥ CONFIG.acctAgeDays.ok days (warn instead when followers < TUNING.acctLowFollowers);
- * warn ≥ CONFIG.acctAgeDays.warn days; fail when younger. null when the account couldn't be read.
+ * The narrative signals scoreCheck() takes, with an X account that was not checked (null) left out of People
+ * instead of counted as `warn`. Checks no longer read X accounts (paid X API), so `acct` is null for every check.
+ * scoreNarrative() weighs People as acct·CONFIG.people.acct + git·CONFIG.people.git and those weights add up to 1:
+ * passing the GitHub signal in acct's place makes People exactly the GitHub signal, i.e. the score with acct left
+ * out and its weight moved to GitHub. scoring.ts and its weights are unchanged.
  */
-export function acctSignal(u: XUser | null, renamed: number | null, now = Date.now()): { signal: Signal; text: string } | null {
-  if (!u || !u.createdAt) return null;
-  const days = (now - Date.parse(u.createdAt)) / 86_400_000;
-  if (!Number.isFinite(days)) return null;
-  const parts = [`@${u.handle}: ${fmtAge(u.createdAt, now)} old`];
-  if (u.followers != null) parts.push(`${fmtCount(u.followers)} followers`);
-  if (renamed != null) parts.push(renamed <= 0 ? 'never renamed' : renamed === 1 ? 'renamed once' : `renamed ${renamed} times`);
-  const text = parts.join(', ');
-  const few = u.followers != null && u.followers < TUNING.acctLowFollowers;
-  if (days >= CONFIG.acctAgeDays.ok) return { signal: few ? 'warn' : 'ok', text };
-  if (days >= CONFIG.acctAgeDays.warn) return { signal: 'warn', text };
-  return { signal: 'fail', text };
+export function scoredSignals<T extends { acct: Signal | null; git: Signal }>(s: T): Omit<T, 'acct'> & { acct: Signal } {
+  return { ...s, acct: s.acct ?? s.git };
 }
 
 /* ---------------- coin (Stage D) ---------------- */

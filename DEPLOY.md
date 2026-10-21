@@ -216,7 +216,8 @@ runs:
   under one cent;
 - each EVM RPC (chain id, latest block, and one known token decoded by the same adapter), Robinhood Chain when
   configured, Etherscan, Solana, TronGrid, DexScreener and GitHub (with its remaining rate limit);
-- X reads (the Bearer token), the X bot's OAuth 1.0a keys (a signed `GET /2/users/me`; it never posts) and Fourtis.
+- X posts through the free embed endpoints X post checks use (no key; `WARN` when they fail), the X bot's OAuth 1.0a
+  keys (a signed `GET /2/users/me`; it never posts) and Fourtis.
 
 | Status | Meaning |
 |---|---|
@@ -234,8 +235,8 @@ its guard there when it starts (and again on the next check after a failed brows
 "Browser via guard" is `WARN`: worker-checks is down or its browser launch failed. Look for `browser is unusable` in
 `pm2 logs worker-checks` and at the "Browser host" row.
 
-A check that ends `partly` within a second or two usually matches a non-PASS row here. Common causes are an X post or
-profile checked without `X_BEARER_TOKEN`, a site the browser could not open, or chain RPCs the VPS cannot reach.
+A check that ends `partly` within a second or two usually matches a non-PASS row here. Common causes are an X post the
+free embed endpoints could not read, a site the browser could not open, or chain RPCs the VPS cannot reach.
 
 ## 7. DNS (at the registrar for apecheck.io)
 
@@ -351,7 +352,8 @@ The account and the app are set up once, by ALFA:
 3. **Keys and tokens** tab → `.env`:
    - API Key / API Key Secret → `X_API_KEY` / `X_API_SECRET` (the consumer keys);
    - Access Token / Secret (generate; the page must say *Read and Write*) → `X_ACCESS_TOKEN` / `X_ACCESS_SECRET`;
-   - Bearer Token → `X_BEARER_TOKEN` (post and account reads during checks);
+   - Bearer Token → `X_BEARER_TOKEN` (optional, the bot only: a mention author's account age when X leaves it out;
+     checks never use the X API, they read posts through X's free embed endpoints);
    - `X_BOT_HANDLE=ApeCheckBot` (without `@`).
    They live only in `.env` (`chmod 600`), never in the repo or the database (HANDOFF §11).
 4. **`X_BOT_USER_ID`**, the bot's numeric id:
@@ -362,12 +364,26 @@ The account and the app are set up once, by ALFA:
    Without it the bot still runs (the adapter looks the id up once per start and logs
    `X_BOT_USER_ID not set: looked up the bot account id (…)`), but set it to save the call.
 5. **Start and check:** `pm2 restart worker-bot` (it reads `.env` at start), then `pm2 logs worker-bot` shows
-   `active: polling @ApeCheckBot's mentions every 20s`. From another account that is at least 7 days old, reply to a
+   `active: polling @ApeCheckBot's mentions every 60s`. From another account that is at least 7 days old, reply to a
    project's post with `@ApeCheckBot real or larp?`: the reply with the verdict and the share card comes within a few
    minutes (the check itself takes 1–3). `curl https://api.apecheck.io/v1/bot/stats` counts it.
 
-**Costs and limits.** Mentions are read every `BOT_POLL_SECONDS` (20) with `since_id`, so only new posts are fetched;
-reading your own mentions is billed as an owned read, the cheapest read. Posting is billed per post, and X bills posts
+**Costs and limits.** Only the bot uses the X API (and its credits): checks, the web app, the API and re-check alerts
+read X posts through X's free embed endpoints and never read accounts. Mentions are read every `BOT_POLL_SECONDS`
+(default 60) with `since_id`, so only new posts are fetched; reading your own mentions is billed as an owned read, the
+cheapest read. The tagged post, its author (with the account age) and the post it replies to come in that same
+response (expansions), so a mention costs no extra read; a parent X left out is read through the free embed
+endpoints. Expected requests per hour:
+
+| What | Requests | When |
+|---|---|---|
+| `GET /2/users/:id/mentions` | 3600 / `BOT_POLL_SECONDS` = **60 an hour** at the default (one page of up to 100; up to 5 pages only when more than 100 new mentions arrived since the last poll) | always, while `worker-bot` holds the lock |
+| `GET /2/users/me` | 1 per start | only when `X_BOT_USER_ID` is empty |
+| `GET /2/users/:id` (Bearer) | 0 normally; 1 per mention whose author X left out | only with `X_BEARER_TOKEN` |
+| `POST /2/tweets` + media upload (initialize, 1–2 append, finalize, usually 0–2 STATUS) | 4–7 per reply | per answered mention, at most `BOT_HOURLY_CAP` replies an hour |
+| `GET /2/users/:id/tweets` | 1–3 | only after a reply whose outcome was lost (timeout, 5xx) |
+
+Idle, that is 60 owned reads an hour (1,440 a day); `BOT_POLL_SECONDS=120` halves it, at the cost of slower answers. Posting is billed per post, and X bills posts
 that contain a URL at a much higher rate: `BOT_INCLUDE_LINK=false` (the default) leaves the `apecheck.io/c/<id>` link out of
 every reply, even the follow-up pointer. Look at the per-post prices in the developer console (Usage / Billing) before
 setting `BOT_INCLUDE_LINK=true`. `BOT_HOURLY_CAP` (200) bounds the bill: at most that many replies an hour across all
@@ -405,6 +421,6 @@ namespace with only the guard port forwarded) instead of the systemd unit; worke
 ## Empty keys
 
 Every adapter checks its key at startup. Missing ones log one line like
-`[apecheck] WARN X API not configured (X_BEARER_TOKEN empty): ...` and are skipped: the check still finishes, and the affected signal is scored `warn`
+`[apecheck] WARN GitHub token not configured (GITHUB_TOKEN empty): ...` and are skipped or fall back: the check still finishes, and the affected signal is scored `warn`
 with a log line saying which source was unavailable.
 `pnpm diagnose` (§6) lists every empty key, the fallback used instead, and where to get the key.

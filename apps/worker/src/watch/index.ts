@@ -1,7 +1,7 @@
 /**
  * worker-prices hosts the re-check alerts (queue "rechecks"): a repeatable "scan" job every SCAN_EVERY_MS that queues
  * one RecheckJob ({ targetId }, jobId "fp-<targetId>", so a target is never queued twice) per watched target due for
- * a fingerprint, and the consumer of those jobs (recheck.ts). No browser: guarded HTTP, chain RPCs and X reads only.
+ * a fingerprint, and the consumer of those jobs (recheck.ts). No browser: guarded HTTP and chain RPCs only (no X reads).
  * Any job on this queue that is not "scan" is a RecheckJob (the API may queue one when someone starts watching).
  */
 import { Queue, Worker, type Job } from 'bullmq';

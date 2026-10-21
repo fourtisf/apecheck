@@ -1,14 +1,15 @@
 /**
  * Stage D — evidence (no AI): GitHub, the X account, and for coins the Fourtis / on-chain facts.
  * Facts become signals only through ./signals (core helpers + CONFIG/TUNING). A source that is not
- * available leaves its signal unknown and the log says which source was missing.
+ * available leaves its signal unknown and the log says which source was missing. The X account is only named:
+ * its age, followers and bio are not read (that needs the paid X API), and it is not part of the score.
  */
 import { CHAINS, deployerLine, short, type ChainKey, type Signal } from '@apecheck/core';
-import { captureErrors, type CoinRawFacts, type RepoFacts, type XUser } from '@apecheck/sources';
+import { captureErrors, type CoinRawFacts, type RepoFacts } from '@apecheck/sources';
 import type { CheckRun } from './context';
 import { announceCoin, findCoin } from './resolve';
 import type { StepSink } from './steps';
-import { acctSignal, coinSignals, gitFacts, gitSignal, worst } from './signals';
+import { coinSignals, gitFacts, gitSignal, worst } from './signals';
 import type { StageCtx } from './stage';
 import { within } from './stage';
 
@@ -62,15 +63,6 @@ async function githubEvidence(run: CheckRun, signal: AbortSignal): Promise<Githu
     return { repos: [...byName.values()], viaSearch };
   });
   return { ...value, unavailable: !value.repos.length && errors.length > 0, nothingToLookUp: false };
-}
-
-async function xAccount(run: CheckRun): Promise<{ user: XUser | null; renamed: number | null }> {
-  const handle = run.handle;
-  if (!handle) return { user: null, renamed: null };
-  const { x } = run.sources;
-  const user = run.xUser && run.xUser.handle.toLowerCase() === handle.toLowerCase() ? run.xUser : await within(x.getUser(handle), 10_000, null);
-  const renamed = user ? await within(x.renameCount(handle), 5_000, null) : null;
-  return { user, renamed };
 }
 
 export function emptyFacts(run: CheckRun, error: string): CoinRawFacts {
@@ -200,10 +192,8 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
 export async function evidenceStage(run: CheckRun, ctx: StageCtx): Promise<void> {
   const steps = run.steps.scoped(ctx.signal);
   const ghP = githubEvidence(run, ctx.signal);
-  const xP = xAccount(run);
   ghP.catch(() => undefined);
-  xP.catch(() => undefined);
-  // alongside GitHub and X, not after them (usually already started right after Stage A)
+  // alongside GitHub, not after it (usually already started right after Stage A)
   if (run.hasCoin()) coinFactsFor(run).catch(() => undefined);
 
   // GitHub
@@ -225,23 +215,13 @@ export async function evidenceStage(run: CheckRun, ctx: StageCtx): Promise<void>
   }
   run.steps.setProgress(0.7);
 
-  // X account
-  const { user, renamed } = await xP;
+  // X account: named, never read (age and followers need the paid X API) and left out of the score
   if (!run.handle) {
     // the site is where an X link would be: when it couldn't be read, the account is unknown, not missing
     if (siteUnread(run)) await steps.step({ status: 'warn', text: "X account unknown (the site couldn't be read)", source: 'X' });
     else await steps.step({ status: 'info', text: 'No X account linked to the project', source: 'X' });
-  } else if (!user) {
-    await steps.step({ status: 'warn', text: run.sources.x.configured ? `Couldn't read @${run.handle} on X` : 'X unavailable, account age unknown', source: 'X' });
   } else {
-    run.xUser = user;
-    const a = acctSignal(user, renamed);
-    if (a) {
-      const idx = await steps.step({ status: a.signal, text: a.text, source: 'X', url: `https://x.com/${user.handle}` });
-      run.acct = { signal: { signal: a.signal, text: a.text, stepIdx: idx >= 0 ? idx : null }, plain: a.text, renamed };
-    } else {
-      await steps.step({ status: 'warn', text: `@${user.handle}: account age unknown`, source: 'X' });
-    }
+    await steps.step({ status: 'info', text: `X account: @${run.handle}`, source: 'X', url: `https://x.com/${run.handle}` });
   }
   run.steps.setProgress(0.75);
 

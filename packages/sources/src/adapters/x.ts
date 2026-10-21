@@ -1,9 +1,11 @@
 /**
- * X API v2.
- *  - Reads (posts, accounts): app-only Bearer token (X_BEARER_TOKEN).
- *  - The bot (M2): mentions() is an owned read and reply() / media upload post as the bot, both signed with
- *    OAuth 1.0a user context (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET; see ../oauth1.ts).
- *    mentions() falls back to the Bearer token when only that is set.
+ * X: post reads for checks are free (./x-embed: the embed widget's syndication endpoint, then oEmbed) and never touch
+ * the paid X API, whatever keys are set. The paid X API v2 is used by the bot (M2) only:
+ *  - mentions() is an owned read and reply() / media upload post as the bot, both signed with OAuth 1.0a user context
+ *    (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET; see ../oauth1.ts). mentions() falls back to the app-only
+ *    Bearer token (X_BEARER_TOKEN) when only that is set.
+ *  - getUser() / getUserById() (Bearer) are the bot's fallbacks for its own id and a mention author's account age when
+ *    the mentions response lacked them. Checks never call them.
  */
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
@@ -13,12 +15,11 @@ import type { Http, HttpResponse, XBotSource, XPost, XReplyOptions, XUser } from
 import { HttpError } from '../http';
 import { formBody, signRequest, type OAuth1Credentials } from '../oauth1';
 import { ErrorState, errMsg, uniq } from '../util';
+import { XEmbedReader } from './x-embed';
 
 export const X_API = 'https://api.x.com/2';
 const TIMEOUT_MS = 10_000;
 export const X_USER_FIELDS = 'created_at,public_metrics,verified,description,entities,url,pinned_tweet_id,username,name';
-/** note_tweet carries the full text (and entities) of posts longer than 280 characters */
-export const X_TWEET_FIELDS = 'created_at,entities,conversation_id,referenced_tweets,author_id,note_tweet';
 
 /* ---- bot (M2) ---- */
 export const X_MENTION_EXPANSIONS = 'author_id,referenced_tweets.id,referenced_tweets.id.author_id,entities.mentions.username';
@@ -86,7 +87,6 @@ const IncludesZ = z
   .partial()
   .nullish();
 const ErrorsZ = z.array(z.object({ title: z.string().optional(), detail: z.string().optional() })).nullish();
-const TweetResponseZ = z.object({ data: TweetZ.nullish(), includes: IncludesZ, errors: ErrorsZ });
 const UserResponseZ = z.object({ data: UserZ.nullish(), includes: IncludesZ, errors: ErrorsZ });
 const MentionsResponseZ = z.object({
   data: z.array(z.unknown()).nullish(),
@@ -294,6 +294,8 @@ export class XAdapter implements XBotSource {
   private botId: Promise<string | null> | null = null;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
+  /** free post reads (checks, and the bot's parent posts) */
+  private readonly embed: XEmbedReader;
 
   constructor(private readonly env: XEnv, private readonly http: Http, private readonly opts: XOptions = {}) {
     this.configured = !!env.X_BEARER_TOKEN;
@@ -303,7 +305,7 @@ export class XAdapter implements XBotSource {
       : null;
     this.sleep = opts.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
     this.now = opts.now ?? Date.now;
-    if (!this.configured) warnOnce('x', 'X API not configured (X_BEARER_TOKEN empty): post and account lookups are skipped');
+    this.embed = new XEmbedReader(http);
   }
 
   get lastError() {
@@ -335,20 +337,12 @@ export class XAdapter implements XBotSource {
     return null;
   }
 
-  async getPost(id: string): Promise<XPost | null> {
-    if (!this.configured || !/^\d{1,25}$/.test(id)) return null;
-    try {
-      const raw = await this.get(
-        `/tweets/${id}?expansions=author_id,referenced_tweets.id&tweet.fields=${X_TWEET_FIELDS}&user.fields=${X_USER_FIELDS}`,
-      );
-      if (raw == null) return null;
-      const res = TweetResponseZ.parse(raw);
-      if (!res.data) return this.noData('getPost', res.errors);
-      return mapPost(res.data, parseIncludedUsers(res.includes?.users));
-    } catch (e) {
-      this.errors.fail('getPost', e);
-      return null;
-    }
+  /**
+   * The post through X's free embed endpoints (syndication, then oEmbed): no key, no X API credits. `handle` (the
+   * author, when the pasted URL names one) only shapes the oEmbed fallback's URL.
+   */
+  getPost(id: string, handle?: string | null): Promise<XPost | null> {
+    return this.embed.getPost(id, handle);
   }
 
   private async user(op: string, path: string): Promise<XUser | null> {

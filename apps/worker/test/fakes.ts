@@ -73,7 +73,7 @@ export interface FakeData {
   search?: RepoFacts[];
   coinFacts?: Record<string, CoinRawFacts>;
   simulate?: SimResult;
-  /** X adapter configured (defaults to true when posts/users are given) */
+  /** X_BEARER_TOKEN set: the paid account reads (getUser) answer; getPost is free and always answers (default: true when posts/users are given) */
   xConfigured?: boolean;
   /** eth_getCode by lowercase address; null = the RPC failed (reported like the real adapter) */
   evmCode?: Record<string, string | null>;
@@ -204,9 +204,10 @@ export function fakeSources(env: Env, data: FakeData = {}): FakeSources {
       configured: xConfigured,
       lastError: null,
       canPost: false,
+      // free embed read (no key): answers whether or not X_BEARER_TOKEN is set
       async getPost(id) {
         calls.push(`x.getPost ${id}`);
-        return xConfigured ? data.posts?.[id] ?? null : null;
+        return data.posts?.[id] ?? null;
       },
       async getUser(handle) {
         calls.push(`x.getUser ${handle}`);

@@ -70,14 +70,15 @@ export async function judgeStage(run: CheckRun, ctx: StageCtx): Promise<void> {
 
 /**
  * Judge output, or the stand-in when the judge stage didn't finish. The deterministic acct / git signals win.
- * When one is unknown the judge may only lower it: an unknown is never `ok` (the model has no X or GitHub
- * data, and page copy claiming "a doxxed team" is no evidence). When the source itself was unavailable (X not
- * readable, GitHub down, Stage D cut short) it is `warn`; only when there was nothing to look up (no X account,
- * no repo link or name) may the judge's `fail` stand.
+ * An X account that was not checked is null (left out of the score, see scoredSignals): checks no longer read X
+ * accounts, and the judge's own acct is never used (it has no X data either). When git is unknown the judge may
+ * only lower it: an unknown is never `ok` (the model has no GitHub data). When GitHub itself was unavailable
+ * (down, Stage D cut short) it is `warn`; only when there was nothing to look up (no repo link or name) may the
+ * judge's `fail` stand.
  */
 export function finalJudgement(run: CheckRun) {
   const judged = run.judged ?? heuristicJudge(judgeInput(run));
-  const acct: SignalEvidence['signal'] = run.acct.signal?.signal ?? (run.handle ? 'warn' : worst(judged.acct, 'warn'));
+  const acct: SignalEvidence['signal'] | null = run.acct.signal?.signal ?? null;
   const git: SignalEvidence['signal'] = run.git.signal?.signal ?? (run.git.unknown === 'nothing-to-look-up' ? worst(judged.git, 'warn') : 'warn');
   return { judged, acct, git };
 }

@@ -18,7 +18,7 @@ export function buildEvidence(run: CheckRun): CheckEvidence {
   ev.acct =
     run.acct.plain ??
     (run.handle
-      ? `@${run.handle}: account could not be read`
+      ? `@${run.handle}: account age and followers not checked`
       : run.site.hasSite && !run.site.loaded
         ? "X account unknown (the site couldn't be read)"
         : 'No X account linked to the project');

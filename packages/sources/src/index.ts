@@ -38,6 +38,9 @@ export { base58Decode, base58Encode } from './base58';
 export { createTron, TronAdapter, TRONGRID_BASE } from './adapters/tron';
 export { createGitHub, GitHubAdapter, parseGitHubRef } from './adapters/github';
 export { createX, XAdapter, X_REPLY_EXCLUDE_MAX, type XOptions } from './adapters/x';
+export {
+  createXEmbed, XEmbedReader, syndicationToken, syndicationUrl, oembedUrl, parseSyndication, parseOEmbed, X_EMBED_HOSTS, X_EMBED_TIMEOUT_MS,
+} from './adapters/x-embed';
 export { signRequest, oauth1Header, percentEncode, type OAuth1Credentials, type OAuth1Request } from './oauth1';
 export { createFourtis, FourtisAdapter, FOURTIS_PATHS } from './adapters/fourtis';
 

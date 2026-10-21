@@ -98,7 +98,7 @@ beforeAll(async () => {
   const now = Date.now();
   Object.assign(users, {
     bot: api.addUser(user(BOT_ID, 'ApeCheckBot', now - 200 * DAY)),
-    // the project: its site links x.com/orbitswap, which the pipeline reads with the Bearer token
+    // the project: its site links x.com/orbitswap; checks only name the account, they never read it (paid X API)
     orbit: api.addUser({ ...user('1500000000000000700', 'orbitswap', now - 420 * DAY), name: 'Orbit', description: 'Orbit v2: swap across chains.' }),
     rina: api.addUser(user('1600000000000000501', 'degen_rina', now - 900 * DAY)),
     other: api.addUser(user('1600000000000000601', 'other_user', now - 1200 * DAY)),
@@ -241,6 +241,6 @@ it('real X adapter end to end: one reply with the card per mention, one check pe
   expect(writes.filter(r => r.url.pathname === '/2/tweets')).toHaveLength(3);
   const stored = new Set((await prisma.botMention.findMany({ select: { tweetId: true } })).map(m => m.tweetId));
   expect(api.posted.every(p => p.inReplyToId && stored.has(p.inReplyToId))).toBe(true);
-  // the pipeline read the project's account with the app Bearer token
-  expect(api.requests.some(r => r.url.pathname === '/2/users/by/username/orbitswap' && r.auth === 'bearer' && r.status === 200)).toBe(true);
+  // the pipeline never used the paid X API (no Bearer read at all, not the project's account either): only the bot did
+  expect(api.requests.filter(r => r.auth === 'bearer' || r.url.pathname.startsWith('/2/users/by/username/') || r.url.pathname.startsWith('/2/tweets/'))).toEqual([]);
 });

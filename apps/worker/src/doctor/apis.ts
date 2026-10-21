@@ -1,5 +1,5 @@
 /**
- * API probes: DexScreener, GitHub, X (the Bearer reads every check makes, and the bot's OAuth 1.0a keys) and Fourtis,
+ * API probes: DexScreener, GitHub, X (the free embed reads X post checks make, and the bot's OAuth 1.0a keys) and Fourtis,
  * through the adapters createSources(env) builds. Where an adapter keeps only "HTTP <status>" (it turns errors into
  * null), one raw request with the same headers shows the provider's own reason. Nothing here posts or writes.
  */
@@ -8,6 +8,7 @@ import {
   FOURTIS_PATHS, captureErrors, signRequest,
   type DexScreenerSource, type FourtisSource, type GitHubSource, type Http, type HttpResponse, type XSource,
 } from '@apecheck/sources';
+import { createXEmbed, X_EMBED_HOSTS } from '@apecheck/sources';
 import { hostOf } from './redact';
 import { errorText, fail, networkRemedy, outcome, pass, warn, type ProbeOutcome } from './result';
 
@@ -113,11 +114,13 @@ export async function probeGitHub(deps: { env: Env; http: Http; github: Pick<Git
   return outcome({ ...f, ok: true, degraded: low }, detail, keyed ? 'the token budget is nearly used up: wait for the reset' : GITHUB_REMEDY);
 }
 
-/* ---------------- X reads (Bearer) ---------------- */
+/* ---------------- X posts in checks (free embed endpoints) ---------------- */
 
 const X_API = 'https://api.x.com/2';
+/** a post that has been public since 2006 (@jack, "just setting up my twttr") */
+export const X_PROBE_POST = { id: '20', handle: 'jack' } as const;
 export const X_READ_REMEDY =
-  'set X_BEARER_TOKEN (developer.x.com > your Project > App > Keys and tokens > Bearer Token; the plan must include v2 post and user lookup)';
+  'no key needed: allow outbound HTTPS from user apecheck to cdn.syndication.twimg.com:443 and publish.twitter.com:443 (X post checks read posts there, never through the paid X API)';
 
 /** X's own reason from an error answer: title, reason and detail (never the client id) */
 export function xReason(res: Pick<HttpResponse, 'status' | 'text' | 'headers'>): string {
@@ -135,39 +138,36 @@ export function xReason(res: Pick<HttpResponse, 'status' | 'text' | 'headers'>):
   return `HTTP ${res.status}${reason ? ` ${reason}` : ''}${limit}`;
 }
 
-function xRemedy(status: number): string {
-  if (status === 401) return 'X_BEARER_TOKEN is wrong or revoked: regenerate the Bearer Token in the developer portal';
-  if (status === 403) return 'the App has no v2 read access: attach it to a Project and check the plan or credits in the developer portal';
-  if (status === 429) return "the plan's read limit is used up: wait for the reset, or raise the plan";
-  return X_READ_REMEDY;
-}
-
-/** getUser('X') as the pipeline reads accounts; on failure the same lookup raw, for X's reason. */
-export async function probeXRead(deps: { env: Env; http: Http; x: Pick<XSource, 'configured' | 'getUser'> }): Promise<ProbeOutcome> {
-  if (!deps.x.configured) {
-    return outcome(
-      { ok: null, configured: false, importance: 'recommended' },
-      'not configured (X_BEARER_TOKEN empty): X post and profile checks cannot read X and end in about 2 s as "partly"; account age is unknown in every check',
-      X_READ_REMEDY,
-    );
-  }
-  const { value, errors } = await captureErrors(() => deps.x.getUser('X'));
-  if (value?.id) {
-    const followers = value.followers != null ? `, ${value.followers.toLocaleString('en-US')} followers` : '';
-    return pass(`api.x.com: @${value.handle} (id ${value.id}) read with the Bearer token${followers}`);
-  }
-  let raw: HttpResponse;
+/**
+ * The free reads an X post check makes (no key, no X API credits): the syndication endpoint (text and expanded links)
+ * and its oEmbed fallback, each once, through the same reader x.getPost() uses. A failure is a WARN: the check still
+ * finishes, it only can't read the post ("Couldn't read the post on X").
+ */
+export async function probeXRead(deps: { http: Http }): Promise<ProbeOutcome> {
+  const embed = createXEmbed(deps.http);
+  const { id, handle } = X_PROBE_POST;
+  const [synHost, oeHost] = X_EMBED_HOSTS;
+  let synErr: string;
   try {
-    raw = await deps.http.request(`${X_API}/users/by/username/X`, {
-      headers: { authorization: `Bearer ${deps.env.X_BEARER_TOKEN}`, accept: 'application/json' },
-      timeoutMs: 10_000,
-    });
+    const post = await embed.syndication(id);
+    if (post?.text) return pass(`${synHost}: post ${id} by @${post.authorHandle ?? '?'} read (free embed read, no X API credits)`);
+    synErr = 'no post in the answer';
   } catch (e) {
-    const msg = errors[0] ?? errorText(e);
-    return fail(`api.x.com: ${msg}`, networkRemedy(msg, 'api.x.com') ?? X_READ_REMEDY);
+    synErr = errorText(e);
   }
-  if (raw.ok) return fail(`api.x.com: answered 200, but the adapter read no user (${errors[0] ?? 'no data'})`, 'X changed its user payload: x.ts needs a look');
-  return fail(`api.x.com: ${xReason(raw)}`, xRemedy(raw.status));
+  try {
+    const post = await embed.oembed(id, handle);
+    if (post?.text) {
+      return warn(
+        `${synHost}: ${synErr}; the oEmbed fallback (${oeHost}) works: posts are read, their links only as the shortened text`,
+        networkRemedy(synErr, synHost) ?? 'X may have changed the syndication endpoint or its token: x-embed.ts needs a look',
+      );
+    }
+    return warn(`${synHost}: ${synErr}; ${oeHost}: no post in the answer (X post checks can't read posts)`, X_READ_REMEDY);
+  } catch (e) {
+    const msg = errorText(e);
+    return warn(`${synHost}: ${synErr}; ${oeHost}: ${msg} (X post checks can't read posts)`, networkRemedy(msg, oeHost) ?? X_READ_REMEDY);
+  }
 }
 
 /* ---------------- X bot (OAuth 1.0a user context) ---------------- */
@@ -236,7 +236,7 @@ export async function probeXBot(deps: { env: Env; http: Http }): Promise<ProbeOu
     fixes.push(`set X_BOT_HANDLE=${username}`);
   }
   if (!env.X_BEARER_TOKEN) {
-    notes.push('X_BEARER_TOKEN empty: the bot cannot read parent posts or author age');
+    notes.push("X_BEARER_TOKEN empty: a mention author's account age that X leaves out stays unknown (parent posts are read free)");
     fixes.push('set X_BEARER_TOKEN too');
   }
   const detail = `api.x.com: keys sign in as @${username} (id ${id}); write permission cannot be checked without posting${notes.length ? `; ${notes.join('; ')}` : ''}`;

@@ -5,10 +5,10 @@ import { Dot, Facts, Unknown } from './util';
 export function PeopleTab({ report: r }: { report: CheckReportDTO }) {
   const p = r.people;
   const handle = p.handle ?? r.handle;
-  // nothing known about the account (X unavailable): say so rather than leave the line bare
+  // checks no longer read X accounts (age, followers): say so rather than leave the line bare
   const acctNote =
     [p.acct.age ? `${p.acct.age} old` : null, p.acct.renamed].filter(Boolean).join(', ') ||
-    (p.acct.createdAt == null && p.acct.followers == null ? "Couldn't be read during this check" : '');
+    (p.acct.createdAt == null && p.acct.followers == null ? 'Age and followers not checked' : '');
   return (
     <Facts
       rows={[

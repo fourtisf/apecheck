@@ -333,12 +333,14 @@ export async function processMention(deps: BotDeps, row: Row, post: XPost): Prom
   let parentPost = post.repliedTo ?? null;
   if (!res) {
     if (!parentPost && post.replyToId && !replyToBot) {
-      // X didn't include the parent with the mention: read it
+      // X didn't include the parent with the mention (it usually does, through the mentions request's expansions): read it
+      // through the free embed endpoints, never a paid X API read (a parent X left out is mostly deleted or protected,
+      // which a paid read can't see either)
       parentPost = await deps.x.getPost(post.replyToId).catch(() => null);
     }
     res = resolveBotTarget(post, parentPost, bot, { botPostIds });
     if (res.kind === 'up') {
-      // the parent is a tag of the bot that names nothing: what it was asking about is the post above it
+      // the parent is a tag of the bot that names nothing: what it was asking about is the post above it (free read too)
       const above = await deps.x.getPost(res.postId).catch(() => null);
       res = resolveBotTarget(post, parentPost, bot, { botPostIds, above });
     }

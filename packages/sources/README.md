@@ -17,7 +17,7 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
 
 - **Missing key or URL → stub.** `configured === false` (where the interface has it), methods resolve
   `null` / `[]` without a request, and one warning is logged per process via `warnOnce()`, e.g.
-  `[apecheck] WARN X API not configured (X_BEARER_TOKEN empty): post and account lookups are skipped`.
+  `[apecheck] WARN X posting not configured (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET empty): the bot does not reply`.
 - **Network / HTTP / shape errors → `null` / `[]`**, never a throw. The reason is kept in `adapter.lastError`
   (`"<adapter>.<method>: <reason>"`) and is also pushed to the current `captureErrors()` scope, which is
   how `coinFacts` (and the worker) get per-call errors without mixing up checks that run concurrently:
@@ -38,7 +38,8 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
 | Solana RPC | `adapters/solana.ts` | `RPC_SOLANA`, `HELIUS_API_KEY` | `RPC_SOLANA`, else `https://mainnet.helius-rpc.com/?api-key=…`, else the public `https://api.mainnet-beta.solana.com` (rate limited, warned once). |
 | TronGrid | `adapters/tron.ts` | `TRONGRID_API_KEY` (header `TRON-PRO-API-KEY`) | Works without a key at a low rate. |
 | GitHub | `adapters/github.ts` | `GITHUB_TOKEN` | Works unauthenticated at 60 requests/hour (warned once). Rate limits (403 with `x-ratelimit-remaining: 0`, or 429) → `[]` + `lastError`. |
-| X API v2 | `adapters/x.ts`, `oauth1.ts` | `X_BEARER_TOKEN` (reads); `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` (`canPost`: the bot); `X_BOT_USER_ID` (optional), `X_BOT_HANDLE` | Without the bearer token every post/account read is `null`, listed as `x`. `renameCount()` is always `null` (needs a third-party source). Without the four user keys `reply()` is `null` and `mentions()` uses the Bearer token, or returns `{ posts: [], newestId: null }` when that is missing too (warned once each). |
+| X posts (free) | `adapters/x-embed.ts` (behind `x.getPost()`) | none | Checks read posts only here: `cdn.syndication.twimg.com` (the embed widget's endpoint), then `publish.twitter.com/oembed`. No account data. Never the paid X API. |
+| X API v2 (the bot only) | `adapters/x.ts`, `oauth1.ts` | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` (`canPost`: the bot); `X_BEARER_TOKEN` (optional: `getUser`/`getUserById` fallbacks); `X_BOT_USER_ID` (optional), `X_BOT_HANDLE` | Checks never call it. Without the bearer token `getUser`/`getUserById` are `null`, listed as `x`. `renameCount()` is always `null` (needs a third-party source). Without the four user keys `reply()` is `null` and `mentions()` uses the Bearer token, or returns `{ posts: [], newestId: null }` when that is missing too (warned once each). |
 | Fourtis | `adapters/fourtis.ts` | `FOURTIS_API_URL`, `FOURTIS_API_KEY` | Without both, `null`, listed as `fourtis`; `coinFacts` uses the public fallbacks. |
 
 ### What each one does
@@ -115,10 +116,17 @@ stub them) and always present on the adapters: `createEvm()` / `createSolana()` 
   last page, first commit = its oldest row): two requests instead of three, which matters at 60 requests/hour.
   Contributors via `?per_page=1&anon=1` + `rel="last"`. `searchByName` = `/search/repositories?q=<name>+in:name`
   plus `/users/<name>` as an org guess (its repos first), max 3.
-- **X** — `GET /2/tweets/:id` with `expansions=author_id,referenced_tweets.id`, the tweet/user fields from the
-  spec plus `note_tweet` (full text of posts over 280 characters). URLs are the `unwound_url` / `expanded_url`
-  (the post's own photo/video links are dropped), cashtags upper-cased, `replyToId` / `quotedId` from
-  `referenced_tweets`. `getUser` / `getUserById` add `expansions=pinned_tweet_id` for `pinnedText`.
+- **X posts (free, `getPost`)** — no key and no X API credits, so checks may call it: `GET
+  https://cdn.syndication.twimg.com/tweet-result?id=<id>&lang=en&token=<t>` (the endpoint X's embed widget and
+  react-tweet read; `t = ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '')`): text, author handle
+  and name, `created_at`, `entities.urls[].expanded_url` (t.co resolved, the post's own photo/video links dropped),
+  mentions, cashtags, the replied-to / quoted ids and the parent post (`repliedTo`). A 404, an empty object or a
+  `TweetTombstone` is "no post". When it fails or has nothing, `GET https://publish.twitter.com/oembed?url=<post
+  url>&omit_script=1&dnt=true`: the text from the embed HTML, the author from `author_url`, links only as their
+  visible shortened text (`kairo.ai/app…` → `https://kairo.ai/app`). Both are fixed hosts (guard off, no redirects,
+  8 s timeout, tolerant zod parsing). No account data either way: `author` has the handle and name only.
+- **X API (paid, the bot only)** — `getUser` / `getUserById` (Bearer, `expansions=pinned_tweet_id` for
+  `pinnedText`): the bot's id lookup and a mention author's age when the mention lacked it. Checks never call them.
   The bot side (`mentions()`, `reply()`) is described in [X bot](#x-bot-m2) below.
 
 ## X bot (M2)

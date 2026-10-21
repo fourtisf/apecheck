@@ -22,6 +22,7 @@ import { BrowserHost } from '../src/browser/browser';
 import { loadAnswerData } from '../src/ai';
 import { memoryLogger } from '../src/log';
 import { recoverStaleChecks, runCheck, type PipelineDeps } from '../src/pipeline';
+import { scoredSignals } from '../src/pipeline/signals';
 import { challengeHandler, closedPort, serveFixture, serveHandler, testLookup, type FixtureSite } from './fixture-server';
 import { dexInfo, fakeSources, repoFacts, xUser, type FakeData } from './fakes';
 import { createCheck, heuristicAi, prisma, resetDb, testEnv } from './helpers';
@@ -106,7 +107,8 @@ function recomputed(c: Awaited<ReturnType<typeof stored>>) {
       }
     : undefined;
   return scoreCheck(
-    { launch: s(c.sigLaunch), flow: s(c.sigFlow), docs: s(c.sigDocs), acct: s(c.sigAcct), git: s(c.sigGit), claims: c.claims.map(x => claimStatusFromDb(x.status)) },
+    // an unchecked X account (null) is left out of the score, as Stage F does
+    { ...scoredSignals({ launch: s(c.sigLaunch), flow: s(c.sigFlow), docs: s(c.sigDocs), acct: sigFromDb(c.sigAcct), git: s(c.sigGit) }), claims: c.claims.map(x => claimStatusFromDb(x.status)) },
     coin,
   );
 }
@@ -139,7 +141,9 @@ describe('pipeline run(checkId)', () => {
     expect(at(/simulation succeeded/)).toBeLessThan(at(/^Docs: /));
     expect(at(/^Docs: /)).toBeLessThan(at(/^Pulled \d+ claims/));
     expect(at(/^GitHub: 412 commits, last push 2 days ago$/)).toBeGreaterThan(at(/^Pulled/));
-    expect(at(/^@orbitswap: 2y \d+m old, 41\.2k followers$/)).toBeGreaterThan(at(/^GitHub:/));
+    // the X account is only named (never read: no paid X API in checks) and left out of the score
+    expect(at(/^X account: @orbitswap$/)).toBeGreaterThan(at(/^GitHub:/));
+    expect(texts.some(t => /followers|account age|\d+(y|m| days?) old/i.test(t))).toBe(false);
     expect(texts[texts.length - 1]).toMatch(/^Scoring \d+ claims$/);
     const shots = c.steps.filter(s => s.screenshot);
     expect(shots.length).toBeGreaterThanOrEqual(4);
@@ -151,7 +155,7 @@ describe('pipeline run(checkId)', () => {
     expect(c.steps.find(s => s.source === 'GitHub')).toBeTruthy();
 
     // signals, claims and deterministic scores
-    expect([sigFromDb(c.sigLaunch), sigFromDb(c.sigFlow), sigFromDb(c.sigDocs), sigFromDb(c.sigAcct), sigFromDb(c.sigGit)]).toEqual(['ok', 'ok', 'ok', 'ok', 'ok']);
+    expect([sigFromDb(c.sigLaunch), sigFromDb(c.sigFlow), sigFromDb(c.sigDocs), sigFromDb(c.sigAcct), sigFromDb(c.sigGit)]).toEqual(['ok', 'ok', 'ok', null, 'ok']);
     expect(c.claims.length).toBeGreaterThanOrEqual(3);
     // claims keep the extraction order (Claim.idx 0..n-1), which the API sorts by
     expect(c.claims.map(x => x.idx)).toEqual(c.claims.map((_, i) => i));

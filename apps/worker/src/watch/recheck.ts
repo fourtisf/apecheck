@@ -112,7 +112,6 @@ export async function scanWatched(deps: RecheckDeps): Promise<string[]> {
     { kind: 'SITE', domain: { not: null } },
     { kind: 'COIN', chain: { not: null }, ca: { not: null } },
   ];
-  if (deps.sources.x.configured) kinds.push({ kind: 'POST', handle: { not: null } });
   const rows = await deps.prisma.target.findMany({
     where: {
       AND: [

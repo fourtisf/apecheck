@@ -1,8 +1,9 @@
 /**
  * Stage A — resolve the target (no AI). Detect what was pasted, then fill the gaps:
  * contract → DexScreener token info → website + X handle; website → contract address and X handle from
- * the page HTML; X post → linked site and/or contract (author profile as fallback). runCheck then gives the
- * Target row its canonical key and display fields (saveTarget).
+ * the page HTML; X post → linked site and/or contract, read through X's free embed endpoints (x.getPost: never the
+ * paid X API; X profiles are not read). runCheck then gives the Target row its canonical key and display fields
+ * (saveTarget).
  *
  * The stage can be abandoned at its timeout while a lookup is still running: every step goes through the
  * stage's scoped sink and nothing is written to the run once ctx.signal has aborted, so late work can't
@@ -25,7 +26,7 @@ import {
   type ChainKey,
 } from '@apecheck/core';
 import type { Prisma } from '@apecheck/db';
-import { captureErrors, type DexTokenInfo, type XUser } from '@apecheck/sources';
+import { captureErrors, type DexTokenInfo } from '@apecheck/sources';
 import type { CheckRun } from './context';
 import type { StageCtx } from './stage';
 import { within } from './stage';
@@ -274,15 +275,12 @@ async function resolveContract(run: CheckRun, kind: 'evm' | 'sol' | 'tron', addr
 
 async function resolvePost(run: CheckRun, postId: string, urlHandle: string | null, steps: StepSink, ctx: StageCtx) {
   const { x } = run.sources;
-  const post = await within(x.getPost(postId), 12_000, null);
+  // free embed read (syndication, then oEmbed; 8 s each): no X API credits
+  const post = await within(x.getPost(postId, urlHandle), 17_000, null);
   if (ctx.signal.aborted) return;
   if (!post) {
     if (urlHandle) run.handle = urlHandle;
-    await steps.step({
-      status: 'warn',
-      text: x.configured ? "Couldn't read the post on X" : 'X unavailable, the post could not be read',
-      source: 'X',
-    });
+    await steps.step({ status: 'warn', text: "Couldn't read the post on X", source: 'X' });
     return;
   }
   run.post = post;
@@ -305,20 +303,7 @@ async function resolvePost(run: CheckRun, postId: string, urlHandle: string | nu
     const found = await findCoin(run, text, ctx.signal);
     if (found) await announceCoin(run, found, 'post', steps, ctx.signal);
   }
-  if (ctx.signal.aborted || run.siteUrl) return;
-  const user = run.xUser ?? (run.handle ? await within(x.getUser(run.handle), 10_000, null) : null);
-  await fromProfile(run, user, steps, ctx);
-}
-
-async function fromProfile(run: CheckRun, user: XUser | null, steps: StepSink, ctx: StageCtx) {
-  if (!user || ctx.signal.aborted) return;
-  run.xUser = user;
-  const site = projectSite([user.url, ...user.bioUrls, ...extractRefs(user.description ?? '').domains]);
-  if (site && !run.siteUrl) {
-    run.siteUrl = site;
-    run.domain = normalizeDomain(new URL(site).hostname);
-    await steps.step({ status: 'ok', text: `Website from @${user.handle}'s profile: ${run.domain}`, source: 'X', url: site });
-  }
+  // no fallback to the author's profile: checks never read X accounts (that needs the paid API)
 }
 
 /** Contract address and X handle from the site's HTML (guarded fetch: the URL is user-supplied). */
@@ -415,20 +400,14 @@ export async function resolveStage(run: CheckRun, ctx: StageCtx): Promise<void> 
     case 'xpost':
       if (d.postId) await resolvePost(run, d.postId, d.handle, steps, ctx);
       else {
+        // an X profile: checks never read accounts (paid X API), so only the handle is known
         run.handle = d.handle;
-        const user = d.handle ? await within(run.sources.x.getUser(d.handle), 12_000, null) : null;
-        if (ctx.signal.aborted) return;
         await steps.step({
-          status: user ? 'info' : 'warn',
-          text: user ? `Reading @${user.handle}'s profile` : run.sources.x.configured ? `Couldn't read @${d.handle} on X` : 'X unavailable, the profile could not be read',
+          status: 'info',
+          text: `Target is an X account: @${d.handle ?? 'unknown'} (profiles aren't read; paste a post or the website to check more)`,
           source: 'X',
           url: d.handle ? `https://x.com/${d.handle}` : null,
         });
-        await fromProfile(run, user, steps, ctx);
-        if (user && !run.hasCoin() && !ctx.signal.aborted) {
-          const found = await findCoin(run, user.description ?? '', ctx.signal);
-          if (found) await announceCoin(run, found, 'post', steps, ctx.signal);
-        }
       }
       break;
   }

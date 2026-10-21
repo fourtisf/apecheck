@@ -35,7 +35,7 @@ whose check another run took over, stops without writing, publishing or replying
 
 | Stage | AI | What happens |
 |---|---|---|
-| A resolve | no | `detect()` the input. EVM → `evm.detectChain` (Base, Ethereum, BNB, Arbitrum, Robinhood); X post → `x.getPost` (links, cashtags, contracts; the author's profile as fallback); X profile → `x.getUser`; website → normalised. Gaps: contract → DexScreener token info → website + X handle; website → the page HTML (guarded fetch) for a contract address and an X link; post → linked site / contract. A lookup still running at the stage's timeout writes nothing (its steps are dropped, no `run.*` field changes). After the stage, `runCheck` gives the Target its canonical key (`ca:<chain>:<address>`, …); if another Target already owns it, the check is moved there and `checkCount` fixed. A coin's `coinFacts()` is asked right then, so it runs alongside the browser. |
+| A resolve | no | `detect()` the input. EVM → `evm.detectChain` (Base, Ethereum, BNB, Arbitrum, Robinhood); X post → `x.getPost` (free embed read: links, cashtags, contracts; never the paid X API); X profile → the handle only (accounts are not read); website → normalised. Gaps: contract → DexScreener token info → website + X handle; website → the page HTML (guarded fetch) for a contract address and an X link; post → linked site / contract. A lookup still running at the stage's timeout writes nothing (its steps are dropped, no `run.*` field changes). After the stage, `runCheck` gives the Target its canonical key (`ca:<chain>:<address>`, …); if another Target already owns it, the check is moved there and `checkCount` fixed. A coin's `coinFacts()` is asked right then, so it runs alongside the browser. |
 | B browse | `AI_MODEL_JUDGE` | Fresh context, open the site (network idle, max 20 s), screenshot, hero/footer/links. A bot challenge (Cloudflare `cf-mitigated` / "Just a moment...", DDoS-Guard, Vercel checkpoint, 429) gets up to 8 s to solve itself; if it doesn't, the site is "could not be checked" (`site.infraError`, `degraded: browse:blocked`), never "didn't load". Bounded exploration (`browser/agent.ts`): at most `CHECK_MAX_AGENT_ACTIONS` actions and 60 s, tools `click(text)`, `scroll()`, `open_link(url)`, `done(reason)`, a screenshot step after every action. Once an app screen is reached, an empty amount field gets a small amount (as a tester would) so a main button waiting for input can be tried. A captured transaction is simulated within what is left of the stage. The verdict uses a snapshot of what the explorer saw when the stage ended: an action still in flight can't change it later; a transaction captured but not recorded in time gets its own step ("not simulated in time"). Then the docs: same-site links to depth 2 / 15 pages. |
 | C claims | `AI_MODEL_FAST` | Up to `TUNING.maxClaims` claims from the hero, footer, docs, post and X bio. `ClaimsOutZ` + `normaliseClaims`. |
 | D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin". M4: WhaleFlow's holder clusters (`coinFacts().clusters`) are kept in `Check.evidence.clusters` for the API to show Pro/Max viewers ("deep holder clusters"); they never enter the public step log, the score or a follow-up answer (answers are public: `loadAnswerData` drops every viewer-gated evidence key, `VIEWER_GATED_EVIDENCE`), and nothing is stored when WhaleFlow is unconfigured or sent none. |
@@ -80,9 +80,9 @@ People (Stage D, deterministic first):
   commit when there is no coin, with at least `TUNING.gitBurstMinCommits` commits), thin, stale, forks only, or no repo
   and no open-source claim. `fail`: no repo but the project says it is open source. Unknown → `warn` (GitHub
   unavailable, Stage D cut short); only when there was nothing to look up may the judge lower it to `fail`.
-- **acct** — `ok`: X account ≥ `CONFIG.acctAgeDays.ok` days old (warn instead below `TUNING.acctLowFollowers` followers);
-  `warn`: ≥ `CONFIG.acctAgeDays.warn` days; `fail`: younger. Unknown → `warn` (account linked but unreadable); with no X
-  account at all the judge may lower it to `fail`. An unknown people signal is never `ok`, whatever the model says.
+- **acct** — not checked: checks don't read X accounts (age, followers and bio need the paid X API, which only the bot
+  uses). The signal is stored as null and left out of the score (`scoredSignals`: People is the GitHub signal alone,
+  without touching the scoring weights); the judge's `acct` is ignored. The log names the account (`X account: @x`).
 
 Coin (Stage D) — only the core helpers: `deployerRecord`/`deployerSignal`, `bandSignal(CONFIG.bundlePct)`,
 `holdersSignal`, `lpSignal`, `authoritiesSignal`. An unknown section is `warn` with a log line naming the missing
@@ -110,7 +110,7 @@ The log, the claims and the summary never turn "a source was down" into a findin
   might have linked is "X account unknown (the site couldn't be read)", not "No X account linked to the project".
 - The heuristic stand-in only marks a "mainnet" claim seen when a transaction simulated fine on the chain the claim names
   (an app that opens, or a dialog, doesn't show the chain), never marks an "AI agent" claim seen (a working swap doesn't
-  show one), and cites why an X account is unknown ("@x: account could not be read").
+  show one), and cites why an X account is unknown ("@x: account age and followers not checked": accounts are not read).
 
 ## X bot (`src/bot/*`, HANDOFF §7, §11)
 
@@ -122,7 +122,7 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
 - **One active bot.** A Redis lock (`bot:lock`, `SET NX EX`, TTL max(60 s, 3 polls), refreshed every poll and during a
   long batch). A second `worker-bot` stands by and takes over when the lock expires. Only the holder polls and runs the
   reply worker, so two processes never double-reply.
-- **Polling.** Every `BOT_POLL_SECONDS`: `mentions(since_id)`, oldest first. `since_id` lives in Redis (`bot:since_id`)
+- **Polling.** Every `BOT_POLL_SECONDS` (default 60): `mentions(since_id)`, oldest first. `since_id` lives in Redis (`bot:since_id`)
   and only moves after the whole batch was stored and handled; on a cold start it is the newest handled
   `BotMention.tweetId` (or just below the oldest one still `RECEIVED`, so a mention whose handling was cut off is read
   again).
@@ -270,8 +270,8 @@ worker-prices on queue `rechecks` (`startWatchWorker`).
     Solana coin → sha256(mint authority + freeze authority + token program + the Token-2022 extension settings an
     authority changes — transfer fee, transfer hook, permanent delegate, pause… — `sources.sol.mintInfo`); Tron →
     owner + mint function; a coin whose chain is unknown is not watched;
-  - X post / profile → the profile's name, bio and link (`sources.x.getUser`), only with the X API configured (else
-    those targets are left out of the scan).
+  - X post / profile → not watched for changes (a profile needs the paid X API, which only the bot uses; a post's
+    text doesn't change): those targets are left out of the scan.
 - **Never alert on errors.** A fingerprint is only produced from a read that worked: an HTTP error, an SSRF refusal, a
   timeout, a bot challenge (also a 200 "Just a moment..." page), a page with no text, any RPC error reported through
   `captureErrors`, an account X can't read → not compared, nothing stored, retried in an hour (a day for a target that

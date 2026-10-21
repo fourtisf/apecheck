@@ -1,13 +1,13 @@
 /** Facts → signals: the deterministic rules (people, coin, docs, product). */
 import { describe, expect, it } from 'vitest';
-import { CONFIG, TUNING } from '@apecheck/core';
-import { acctSignal, coinSignals, docsSignal, flowSignal, gitFacts, gitSignal, launchSignal, productSignals, type SiteFacts } from '../src/pipeline/signals';
+import { CONFIG, SIGNAL_VALUE, TUNING, scoreCheck, scoreNarrative, type ClaimStatus } from '@apecheck/core';
+import { coinSignals, docsSignal, flowSignal, gitFacts, gitSignal, launchSignal, productSignals, scoredSignals, type SiteFacts } from '../src/pipeline/signals';
 import { classifySim, simChain } from '../src/pipeline/browse';
 import { productSentence } from '../src/ai/phrases';
 import { simSkipReason } from '../src/browser/agent';
 import { detectBotWall } from '../src/browser/page';
 import type { ExploreResult } from '../src/browser/agent';
-import { emptyCoinFacts, repoFacts, xUser } from './fakes';
+import { emptyCoinFacts, repoFacts } from './fakes';
 
 const DAY = 86_400_000;
 const now = Date.parse('2026-10-19T12:00:00Z');
@@ -63,14 +63,32 @@ describe('git signal', () => {
   });
 });
 
-describe('acct signal', () => {
-  it('uses CONFIG.acctAgeDays and TUNING.acctLowFollowers', () => {
-    expect(acctSignal(xUser({ handle: 'orbit', createdAt: iso(830 * DAY), followers: 41_200 }), null, now)).toEqual({ signal: 'ok', text: '@orbit: 2y 3m old, 41.2k followers' });
-    expect(acctSignal(xUser({ handle: 'orbit', createdAt: iso(830 * DAY), followers: 41_200 }), 0, now)!.text).toBe('@orbit: 2y 3m old, 41.2k followers, never renamed');
-    expect(acctSignal(xUser({ handle: 'o', createdAt: iso((CONFIG.acctAgeDays.ok - 10) * DAY), followers: 9_000 }), null, now)!.signal).toBe('warn');
-    expect(acctSignal(xUser({ handle: 'o', createdAt: iso(12 * DAY), followers: 300 }), null, now)).toEqual({ signal: 'fail', text: '@o: 12 days old, 300 followers' });
-    expect(acctSignal(xUser({ handle: 'o', createdAt: iso(400 * DAY), followers: TUNING.acctLowFollowers - 1 }), null, now)!.signal).toBe('warn');
-    expect(acctSignal(null, null, now)).toBeNull();
+describe('acct (X account) is not checked: left out of the score', () => {
+  const SIG = ['ok', 'warn', 'fail'] as const;
+  const CLAIMS = [[], ['seen_working'], ['not_seen', 'contradicted'], ['checks_out', 'not_seen', 'seen_working']] as ClaimStatus[][];
+
+  it('the People weights add up to 1, so passing git for a missing acct is the score without acct', () => {
+    expect(CONFIG.people.acct + CONFIG.people.git).toBeCloseTo(1, 12);
+  });
+
+  it('score unchanged when only the account signal is absent: People is the GitHub signal alone, no warn penalty', () => {
+    for (const launch of SIG) for (const flow of SIG) for (const docs of SIG) for (const git of SIG) for (const claims of CLAIMS) {
+      const base = { launch, flow, docs, git };
+      const absent = scoreCheck({ ...scoredSignals({ ...base, acct: null }), claims });
+      // the same check scored with People = git only (acct's weight moved to git), via the unchanged core function
+      const peopleGitOnly = scoreNarrative({ ...base, acct: git, claims });
+      expect(absent.narrative).toEqual(peopleGitOnly);
+      expect(absent.narrative.areas.People).toBe(SIGNAL_VALUE[git] * 100);
+      // the old unknown → warn rule only ever lowered a check whose GitHub was ok
+      const oldWarn = scoreNarrative({ ...base, acct: 'warn', claims }).score;
+      if (git === 'warn') expect(absent.narrative.score).toBe(oldWarn);
+      else if (git === 'ok') expect(absent.narrative.score).toBeGreaterThanOrEqual(oldWarn);
+    }
+  });
+
+  it('a checked account still counts as given; the other signals pass through untouched', () => {
+    expect(scoredSignals({ launch: 'ok', flow: 'warn', docs: 'fail', acct: 'fail', git: 'ok' })).toEqual({ launch: 'ok', flow: 'warn', docs: 'fail', acct: 'fail', git: 'ok' });
+    expect(scoredSignals({ launch: 'ok', flow: 'warn', docs: 'fail', acct: null, git: 'ok' })).toEqual({ launch: 'ok', flow: 'warn', docs: 'fail', acct: 'ok', git: 'ok' });
   });
 });
 

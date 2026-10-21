@@ -26,6 +26,7 @@ import { finalJudgement, judgeInput } from './judge';
 import { saveTarget } from './resolve';
 import { buildEvidence } from './record';
 import { pgSafe } from './pgsafe';
+import { scoredSignals } from './signals';
 import { RunSuperseded } from './steps';
 import { completeAutoRechecks } from '../watch/notify';
 import { checkCompletedDeliveries, readJoiners } from '../webhooks/events';
@@ -37,7 +38,8 @@ export interface SavedCheck {
   total: number;
   narBand: string;
   coinBand: string | null;
-  signals: { launch: Signal; flow: Signal; docs: Signal; acct: Signal; git: Signal };
+  /** acct is null: the X account is not checked (left out of the score, see scoredSignals) */
+  signals: { launch: Signal; flow: Signal; docs: Signal; acct: Signal | null; git: Signal };
   claims: { text: string; status: ClaimStatus }[];
 }
 
@@ -66,7 +68,7 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
   const signals = { launch: p.launch.signal, flow: p.flow.signal, docs: p.docs.signal, acct, git };
   const s = run.coin?.signals;
   const scores = scoreCheck(
-    { ...signals, claims: claims.map(c => c.status) },
+    { ...scoredSignals(signals), claims: claims.map(c => c.status) },
     s ? { deployer: s.record, bundle: s.bundle, holders: s.holders, lp: s.lp, authorities: s.authorities } : undefined,
   );
   const evidence = buildEvidence(run);

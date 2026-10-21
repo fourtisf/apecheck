@@ -79,7 +79,7 @@ export function buildProbes(d: DoctorDeps): Probe[] {
     { name: 'TronGrid', timeoutMs: 30_000, remedy: TRON_REMEDY, run: () => probeTron({ env, http, tron: sources.tron }) },
     { name: 'DexScreener', remedy: DEXSCREENER_REMEDY, run: () => probeDexScreener({ env, dex: sources.dex }) },
     { name: 'GitHub', timeoutMs: 30_000, remedy: GITHUB_REMEDY, run: () => probeGitHub({ env, http, github: sources.github }) },
-    { name: 'X reads (Bearer)', timeoutMs: 30_000, remedy: X_READ_REMEDY, run: () => probeXRead({ env, http, x: sources.x }) },
+    { name: 'X posts (free embed)', timeoutMs: 30_000, remedy: X_READ_REMEDY, run: () => probeXRead({ http }) },
     { name: 'X bot (OAuth 1.0a)', remedy: X_BOT_REMEDY, run: () => probeXBot({ env, http }) },
     { name: 'Fourtis', timeoutMs: 30_000, remedy: FOURTIS_REMEDY, run: () => probeFourtis({ env, http, fourtis: sources.fourtis }) },
   );

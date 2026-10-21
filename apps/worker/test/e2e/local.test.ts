@@ -63,7 +63,9 @@ it('a queued check on the local working-app fixture finishes DONE with the expec
   // the RPC is unreachable here: the transaction was reached but not simulated (not the project's fault)
   expect(texts.some(t => /^Main flow reached a transaction; it could not be simulated \(/.test(t))).toBe(true);
   expect(texts).toContain('GitHub unavailable, code not checked');
-  expect(texts).toContain('X unavailable, account age unknown');
+  // the X account is only named: age and followers are never read (no paid X API in checks), and not scored
+  expect(texts).toContain('X account: @orbitswap');
+  expect(c.sigAcct).toBeNull();
   const ev = c.evidence as CheckEvidence;
   expect(ev.stubbed).toEqual(expect.arrayContaining(['x', 'fourtis', 'ai']));
   expect(c.durationMs!).toBeLessThan(180_000);

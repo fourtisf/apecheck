@@ -217,7 +217,7 @@ export function claimedChain(text: string): ChainKey | null {
 
 export function heuristicJudge(input: JudgeInput): Judged {
   const p = input.product;
-  // unknown people signals: the evidence line says why ("@x: account could not be read" when X was unavailable)
+  // unknown people signals: the evidence line says why ("@x: account age and followers not checked": X accounts are not read)
   const acct = input.people.acct ?? { signal: 'warn' as Signal, text: input.evidence.acct || 'No X account to check', stepIdx: null };
   const git = input.people.git ?? { signal: 'warn' as Signal, text: 'GitHub: not checked', stepIdx: null };
   const claims: JudgedClaim[] = input.claims.map((c, i) => {

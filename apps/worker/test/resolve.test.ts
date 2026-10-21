@@ -1,12 +1,12 @@
 /** Stage A: target detection and gap filling with FakeSources, Target re-keying in the test database. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { reportError, type Sources } from '@apecheck/sources';
+import { createX, reportError, type Http, type Sources } from '@apecheck/sources';
 import { memoryLogger } from '../src/log';
 import { CheckRun, type PipelineDeps } from '../src/pipeline/context';
 import { findCoin, finishResolve, projectSite, resolveStage, saveTarget, xHandleFromLinks } from '../src/pipeline/resolve';
 import { StepLogger } from '../src/pipeline/steps';
 import { serveFixture, type FixtureSite } from './fixture-server';
-import { dexInfo, fakeSources, xUser, type FakeData } from './fakes';
+import { dexInfo, fakeSources, xUser, type FakeData, type FakeSources } from './fakes';
 import { createCheck, heuristicAi, memoryStepDeps, prisma, resetDb, testEnv } from './helpers';
 
 let coinSite: FixtureSite;
@@ -62,16 +62,59 @@ describe('Stage A — resolve', () => {
     expect(run.siteUrl).toBe('https://orbit.xyz/');
   });
 
-  it('X post when X is unavailable: says so and keeps the handle from the URL', async () => {
+  it("X post the free embed endpoints can't read: says so and keeps the handle from the URL", async () => {
     const { texts, target } = await resolve('https://x.com/kairolabs/status/1849002', {});
-    expect(texts).toEqual(['warn|X|X unavailable, the post could not be read']);
+    expect(texts).toEqual(["warn|X|Couldn't read the post on X"]);
     expect(target).toMatchObject({ key: 'post:1849002', name: '@kairolabs', handle: 'kairolabs' });
   });
 
-  it('X profile: website from the profile', async () => {
-    const { texts, target } = await resolve('https://x.com/kairolabs', { users: { kairolabs: xUser({ handle: 'kairolabs', url: 'https://kairo.ai' }) } });
-    expect(texts).toEqual(["info|X|Reading @kairolabs's profile", "ok|X|Website from @kairolabs's profile: kairo.ai"]);
-    expect(target).toMatchObject({ key: 'x:kairolabs', domain: 'kairo.ai' });
+  it('X post with every X key set: read through the free syndication endpoint, never the paid X API', async () => {
+    const calls: string[] = [];
+    const syndication = {
+      __typename: 'Tweet',
+      id_str: '1849003',
+      text: 'Orbit v2 is live https://t.co/0rb1t',
+      created_at: '2026-10-18T14:02:11.000Z',
+      entities: { urls: [{ url: 'https://t.co/0rb1t', expanded_url: 'https://orbit.xyz/app', display_url: 'orbit.xyz/app' }], user_mentions: [], symbols: [] },
+      user: { id_str: '7', screen_name: 'orbitxyz', name: 'Orbit' },
+    };
+    const http: Http = {
+      async request(url) {
+        calls.push(url);
+        const host = new URL(url).host;
+        const ok = host === 'cdn.syndication.twimg.com';
+        return { status: ok ? 200 : 599, ok, url, finalUrl: url, headers: {}, text: ok ? JSON.stringify(syndication) : '', truncated: false, ms: 1 };
+      },
+      async json() {
+        throw new Error('not used');
+      },
+    };
+    const keys = testEnv({ X_BEARER_TOKEN: 'paid-bearer', X_API_KEY: 'k', X_API_SECRET: 's', X_ACCESS_TOKEN: 't', X_ACCESS_SECRET: 'u' });
+    const { texts, run } = await resolve('https://x.com/orbitxyz/status/1849003', {}, s => {
+      s.x = createX(keys, http);
+    });
+    expect(texts).toEqual(['info|X|Reading post by @orbitxyz', 'ok||Found link in post: orbit.xyz']);
+    expect(run.post?.urls).toEqual(['https://orbit.xyz/app']);
+    expect(calls.map(u => new URL(u).host)).toEqual(['cdn.syndication.twimg.com']);
+    expect(calls.some(u => new URL(u).host === 'api.x.com')).toBe(false);
+  });
+
+  it('X post without a site: no fallback to the author profile (accounts are never read)', async () => {
+    const post = {
+      id: '1849004', text: 'gm', authorId: '7', authorHandle: 'orbitxyz', authorName: 'Orbit',
+      createdAt: null, conversationId: null, urls: [], mentions: [], cashtags: [], replyToId: null, quotedId: null, author: null,
+    };
+    const { texts, run } = await resolve('https://x.com/orbitxyz/status/1849004', { posts: { '1849004': post }, users: { orbitxyz: xUser({ handle: 'orbitxyz', url: 'https://orbit.xyz' }) } });
+    expect(texts).toEqual(['info|X|Reading post by @orbitxyz']);
+    expect(run.siteUrl).toBeNull();
+    expect((run.sources as FakeSources).calls.filter(c => c.startsWith('x.getUser'))).toEqual([]);
+  });
+
+  it('X profile: only the handle (profiles are not read)', async () => {
+    const { texts, target, run } = await resolve('https://x.com/kairolabs', { users: { kairolabs: xUser({ handle: 'kairolabs', url: 'https://kairo.ai' }) } });
+    expect(texts).toEqual(["info|X|Target is an X account: @kairolabs (profiles aren't read; paste a post or the website to check more)"]);
+    expect(target).toMatchObject({ key: 'x:kairolabs', handle: 'kairolabs', domain: null });
+    expect((run.sources as FakeSources).calls.filter(c => c.startsWith('x.'))).toEqual([]);
   });
 
   it('website: contract and X handle from the page HTML (guarded fetch), ignoring other tokens on the page', async () => {
