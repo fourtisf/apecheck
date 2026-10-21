@@ -46,7 +46,6 @@ button{cursor:pointer}
 
 .n-real{--vc:var(--real)} .n-likely{--vc:var(--likely)} .n-partly{--vc:var(--partly)} .n-llarp{--vc:var(--llarp)} .n-larp{--vc:var(--larp)}
 .k-clean{--vc:var(--real)} .k-ok{--vc:var(--likely)} .k-sketchy{--vc:var(--partly)} .k-rigged{--vc:var(--larp)}
-.r-builder{--vc:var(--real)} .r-mixed{--vc:var(--partly)} .r-serial{--vc:var(--larp)}
 
 /* verdict pill */
 .vb{display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 8px;border-radius:999px;font-size:12.5px;font-weight:650;color:var(--vc);background:color-mix(in srgb,var(--vc) 11%,transparent);white-space:nowrap}
@@ -438,7 +437,7 @@ a.tr.fresh,.gc.fresh{animation:fresh 4s ease-out}
 .h-pg{font-size:clamp(32px,3.6vw,48px);letter-spacing:-.045em;line-height:1.02;margin:0 0 12px;font-weight:800}
 .ph p{margin:0;color:var(--mute);max-width:64ch;font-size:16.5px}
 .ctbl .tr{grid-template-columns:minmax(170px,1.3fr) 126px 74px 66px 60px 132px minmax(130px,1fr) 128px 76px 100px;gap:12px}
-.dtbl .tr{grid-template-columns:30px minmax(170px,1.2fr) 70px 136px 74px 60px 76px 72px 62px minmax(150px,1fr);gap:12px}
+.dtbl .tr{grid-template-columns:30px minmax(170px,1.4fr) 90px 80px 80px 80px;gap:12px}
 .ctbl .th,.dtbl .th{font-size:12.5px}
 .dep-row{width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line)}
 .dep-row:hover{background:var(--hover)}
@@ -449,8 +448,6 @@ a.tr.fresh,.gc.fresh{animation:fresh 4s ease-out}
 .chip-l{display:inline-flex;align-items:center;gap:8px;padding:6px 12px 6px 6px;border:1px solid var(--line2);border-radius:999px;font-size:14px;background:var(--panel)}
 .chip-l:hover{border-color:var(--acc)}
 .dep-focus{animation:fresh 3s ease-out}
-.rep-b{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--vc);font-weight:700}
-.rep-b::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--vc)}
 
 .bot-g{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:56px;align-items:start}
 .bot-stats{display:flex;flex-wrap:wrap;gap:6px 26px;margin:18px 0 0;font-size:15px;color:var(--mute)}
@@ -529,8 +526,8 @@ footer{border-top:1px solid var(--line);padding:30px 0 48px}
   .rv-s{grid-column:1/-1;grid-template-columns:1fr 1fr;gap:24px}
   .ctbl .tr{grid-template-columns:minmax(150px,1.3fr) 118px 70px 62px 120px 120px 72px 90px}
   .ctbl .c-dev,.ctbl .c-mint{display:none}
-  .dtbl .tr{grid-template-columns:30px minmax(150px,1.2fr) 130px 70px 60px 72px 70px}
-  .dtbl .c-ch,.dtbl .c-avg,.dtbl .c-fund{display:none}
+  .dtbl .tr{grid-template-columns:30px minmax(150px,1.2fr) 80px 80px}
+  .dtbl .c-ch,.dtbl .c-avg{display:none}
 }
 @media (max-width:1000px){
   .nav,.hsearch{display:none}
@@ -712,7 +709,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 48px}
   .probe-priv{order:1;margin-left:auto}
 }
 
-/* ---------- M4: API keys and webhooks on /api (Max), wallet clusters on the Coin tab ---------- */
+/* ---------- M4: API keys and webhooks on /api (Max) ---------- */
 
 /* the code card and the line under it share the grid cell; min-width 0 keeps the long <pre> lines scrolling inside the
    card (the card alone was a scroll container, whose automatic minimum width is 0) */
@@ -784,6 +781,3 @@ footer{border-top:1px solid var(--line);padding:30px 0 48px}
   .dlv small{grid-column:1/-1;order:4}
 }
 
-/* Coin tab: Pro/Max wallet clusters under the coin facts */
-.clusters{margin-top:26px}
-.clusters .h4{display:flex;align-items:center;gap:8px}

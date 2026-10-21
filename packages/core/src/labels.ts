@@ -16,8 +16,6 @@ export const coinVerdictEnum = (key: keyof typeof COIN_LABEL) => COIN_LABEL[key]
 
 export const KIND_LABEL: Record<TargetKindS, string> = { coin: 'Coin', post: 'Post', site: 'Site' };
 
-export const REP: Record<DeployerRecord, string> = { builder: 'Builder', mixed: 'Mixed record', serial: 'Serial launcher' };
-
 export const CLAIM_LABEL: Record<ClaimStatus, string> = {
   seen_working: 'Seen working', checks_out: 'Checks out', not_seen: 'Not seen', contradicted: 'Contradicted',
 };
@@ -35,35 +33,91 @@ export const CLAIM_SOURCE_LABEL: Record<ClaimSource, string> = {
 export type ClaimKind = 'live_product' | 'mainnet' | 'ai_agent' | 'open_source' | 'docs' | 'team' | 'fair_launch' | 'audit' | 'partnership' | 'other';
 export const CLAIM_KINDS: ClaimKind[] = ['live_product', 'mainnet', 'ai_agent', 'open_source', 'docs', 'team', 'fair_launch', 'audit', 'partnership', 'other'];
 
-export type StepSource = 'X' | 'GitHub' | 'DexScreener' | 'DevRadar' | 'BundleScan' | 'WhaleFlow' | 'On-chain';
-export const STEP_SOURCES: StepSource[] = ['X', 'GitHub', 'DexScreener', 'DevRadar', 'BundleScan', 'WhaleFlow', 'On-chain'];
+export type StepSource = 'X' | 'GitHub' | 'DexScreener' | 'On-chain' | 'ApeCheck';
+export const STEP_SOURCES: StepSource[] = ['X', 'GitHub', 'DexScreener', 'On-chain', 'ApeCheck'];
 
-/** Third-party coin sources ApeCheck no longer uses: steps stored before then still name them. */
+/*
+ * Data stored before ApeCheck dropped the third-party coin services it was once wired to. The rows stay as they are;
+ * the helpers below map what they hold when it is shown or read. This block is the only place in the source that
+ * names those services (packages/core/test/no-third-party.test.ts allows it between the two markers).
+ */
+// retired-names:begin
+/** source tags of old steps */
 const RETIRED_SOURCES = new Set(['DevRadar', 'BundleScan', 'WhaleFlow']);
+/** the "unavailable" lines those services wrote when they had no answer (a trailing " (…)" is kept) */
 const RETIRED_TEXT: [RegExp, string][] = [
-  [/^DevRadar unavailable, deployer history unknown/, 'Deployer history not checked'],
-  [/^BundleScan unavailable, bundle share unknown/, 'Bundle share not checked'],
-  [/^WhaleFlow unavailable, holder share unknown/, 'Holder share not checked'],
-  [/holder share unknown \(WhaleFlow unavailable\)/, 'holder share not checked'],
+  [/^DevRadar unavailable, deployer history unknown/, 'Deployer history: not checked'],
+  [/^BundleScan unavailable, bundle share unknown/, 'Bundle share: not checked'],
+  [/^WhaleFlow unavailable, holder share unknown/, 'Holder share: not checked'],
+  [/holder share unknown \(WhaleFlow unavailable\)/, 'holder share: not checked'],
 ];
+/** the names in free text written about old checks (AI summaries, claim evidence, answers) */
+const RETIRED_NAMES: [RegExp, string][] = [
+  [/\bDevRadar\b/gi, 'the deployer lookup'],
+  [/\bBundleScan\b/gi, 'the bundle lookup'],
+  [/\bWhaleFlow\b/gi, 'the holder lookup'],
+  [/\bFourtis\b/gi, 'the coin data lookup'],
+];
+/** Check.evidence.stubbed entry old checks hold for the retired adapter */
+const RETIRED_STUBS = new Set(['fourtis']);
+// retired-names:end
 
-/** A stored step as ApeCheck shows it today: no retired third-party source tag, its "unavailable" lines as "not checked". */
+/**
+ * A stored step as ApeCheck shows it today: no retired source tag, and the retired services' "unavailable" lines in
+ * ApeCheck's own "not checked" wording. A result line one of them wrote keeps its text and only loses the tag. Every
+ * other step is returned as it is.
+ */
 export function displayStep<T extends { text: string; source?: string | null }>(s: T): T {
   if (!s.source || !RETIRED_SOURCES.has(s.source)) return s;
   let text = s.text;
   for (const [re, to] of RETIRED_TEXT) text = text.replace(re, to);
-  return { ...s, text, source: null };
+  return { ...s, text: scrubRetired(text), source: null };
 }
 
-/** Deployer history line used in the log, the Coin tab ("Earlier launches") and asks. Same wording as the prototype. */
-export function deployerLine(d: { record: DeployerRecord; launched: number; dead: number; fundedFrom?: string | null }): string {
-  if (d.record === 'builder') {
-    return d.launched <= 1
-      ? `first launch${d.fundedFrom ? `, funded from ${d.fundedFrom}` : ''}`
-      : `${d.launched - 1} earlier launches, all still trading`;
+/**
+ * Free text stored about an old check (a summary, a claim's evidence, a follow-up answer) without the retired service
+ * names: each becomes a neutral phrase ("the deployer lookup"), capitalised at the start of a sentence. Text that
+ * names none of them is returned as it is.
+ */
+export function scrubRetired<T extends string | null | undefined>(text: T): T {
+  if (!text) return text;
+  let out: string = text;
+  for (const [re, to] of RETIRED_NAMES) {
+    out = out.replace(re, (_m, offset: number, all: string) => (/(^|[.!?]\s+)$/.test(all.slice(0, offset)) ? to[0].toUpperCase() + to.slice(1) : to));
   }
+  return out as T;
+}
+
+/** Check.evidence.stubbed without the retired adapter's entry (old checks list it). */
+export const currentStubs = (stubbed: readonly string[] | null | undefined): string[] => (stubbed ?? []).filter(s => !RETIRED_STUBS.has(s));
+
+/** Deployer history line for a known launch record (no source fills one today; kept for when one does). */
+export function deployerLine(d: { record: DeployerRecord; launched: number; dead: number }): string {
+  if (d.record === 'builder') return d.launched <= 1 ? 'first launch' : `${d.launched - 1} earlier launches, all still trading`;
   if (d.record === 'mixed') return `${d.launched} earlier tokens, ${d.dead} dead`;
   return `${d.launched} earlier tokens, ${d.dead} dead within a day`;
+}
+
+/** At most this many coin names in deployerHistoryLine(); the rest read "and N more". */
+export const DEPLOYER_HISTORY_NAMES = 3;
+
+/**
+ * The deployer's history as ApeCheck knows it: the other coins from the same wallet that ApeCheck has checked
+ * (packages/db coinsByDeployer). Used in the log ("Deployer history: …"), the Coin tab, the side card and answers.
+ *   0 → "no earlier launches seen by ApeCheck"
+ *   2 → "2 other coins from this wallet checked by ApeCheck, $FOO and $BAR"
+ *   5 → "5 other coins from this wallet checked by ApeCheck, $A, $B, $C and 2 more"
+ */
+export function deployerHistoryLine(h: { total: number; coins: { ticker: string | null; name: string }[] }): string {
+  const total = Math.max(0, Math.round(h.total));
+  if (!total) return 'no earlier launches seen by ApeCheck';
+  const names = h.coins.slice(0, Math.min(DEPLOYER_HISTORY_NAMES, total)).map(c => (c.ticker ? `$${c.ticker}` : c.name));
+  const more = total - names.length;
+  let list = '';
+  if (names.length && more > 0) list = `${names.join(', ')} and ${more} more`;
+  else if (names.length > 1) list = `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  else if (names.length) list = names[0];
+  return `${total} other ${total === 1 ? 'coin' : 'coins'} from this wallet checked by ApeCheck${list ? `, ${list}` : ''}`;
 }
 
 /** LP status column value → label ("burned" | "locked:<days>" | "unlocked" → "Burned" | "Locked 30 days" | "Unlocked") */

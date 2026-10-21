@@ -101,7 +101,6 @@ export function Tiers({ me, onFree, onWallet }: TiersProps) {
         <p className="req">{req(me?.proMinHold)}</p>
         <ul>
           <li>{proLine}</li>
-          <li>Deep holder analysis and wallet clusters</li>
           <li>Ask follow-ups on the site and via the bot</li>
           <li>Re-check alerts when a site or contract changes</li>
         </ul>

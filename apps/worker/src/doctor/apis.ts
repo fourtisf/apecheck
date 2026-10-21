@@ -1,12 +1,11 @@
 /**
- * API probes: DexScreener, GitHub, X (the Bearer reads every check makes, and the bot's OAuth 1.0a keys) and Fourtis,
- * through the adapters createSources(env) builds. Where an adapter keeps only "HTTP <status>" (it turns errors into
+ * API probes: DexScreener, GitHub and X (the Bearer reads every check makes, and the bot's OAuth 1.0a keys), through
+ * the adapters createSources(env) builds. Where an adapter keeps only "HTTP <status>" (it turns errors into
  * null), one raw request with the same headers shows the provider's own reason. Nothing here posts or writes.
  */
 import type { Env } from '@apecheck/core';
 import {
-  FOURTIS_PATHS, captureErrors, signRequest,
-  type DexScreenerSource, type FourtisSource, type GitHubSource, type Http, type HttpResponse, type XSource,
+  captureErrors, signRequest, type DexScreenerSource, type GitHubSource, type Http, type HttpResponse, type XSource,
 } from '@apecheck/sources';
 import { hostOf } from './redact';
 import { errorText, fail, networkRemedy, outcome, pass, warn, type ProbeOutcome } from './result';
@@ -241,44 +240,4 @@ export async function probeXBot(deps: { env: Env; http: Http }): Promise<ProbeOu
   }
   const detail = `api.x.com: keys sign in as @${username} (id ${id}); write permission cannot be checked without posting${notes.length ? `; ${notes.join('; ')}` : ''}`;
   return outcome({ ok: true, configured: true, importance: 'optional', degraded: notes.length > 0 }, detail, fixes.join('; '));
-}
-
-/* ---------------- Fourtis ---------------- */
-
-export const FOURTIS_REMEDY =
-  'internal Fourtis service: the URL and key come from the Fourtis team; leave FOURTIS_API_URL and FOURTIS_API_KEY empty until the real API exists';
-
-/** DevRadar on PEPE: the raw status first (the adapter reads a 404 as "no data"), then the adapter's own parse. */
-export async function probeFourtis(deps: { env: Env; http: Http; fourtis: Pick<FourtisSource, 'devRadar'> }): Promise<ProbeOutcome> {
-  const { FOURTIS_API_URL: base, FOURTIS_API_KEY: key } = deps.env;
-  if (!base && !key) {
-    return outcome(
-      { ok: null, configured: false, importance: 'optional' },
-      'not configured (placeholder service): deployer history, bundle %, LP status and EVM/Tron holders stay "unknown" in coin checks',
-      FOURTIS_REMEDY,
-    );
-  }
-  if (!base || !key) return warn(`only ${base ? 'FOURTIS_API_URL' : 'FOURTIS_API_KEY'} is set: the adapter treats Fourtis as not configured`, 'set both FOURTIS_API_URL and FOURTIS_API_KEY, or neither');
-  const host = hostOf(base);
-  let res: HttpResponse;
-  try {
-    res = await deps.http.request(`${base.replace(/\/+$/, '')}${FOURTIS_PATHS.devRadar('eth', PEPE_ETH)}`, {
-      headers: { authorization: `Bearer ${key}`, accept: 'application/json' },
-      timeoutMs: 8_000,
-    });
-  } catch (e) {
-    const msg = errorText(e);
-    return fail(`${host}: ${msg}`, networkRemedy(msg, host) ?? FOURTIS_REMEDY);
-  }
-  if (res.status === 404) {
-    return warn(
-      `${host}: DevRadar answered 404 for PEPE: the placeholder paths are not on this host (the adapter reads 404 as "no data", silently)`,
-      'update FOURTIS_PATHS in packages/sources/src/adapters/fourtis.ts when the real API lands, or empty both FOURTIS_* variables',
-    );
-  }
-  if (res.status === 401 || res.status === 403) return fail(`${host}: DevRadar answered HTTP ${res.status}: FOURTIS_API_KEY refused`, 'ask the Fourtis team for a valid key');
-  if (!res.ok) return fail(`${host}: DevRadar answered HTTP ${res.status}`, FOURTIS_REMEDY);
-  const { value, errors } = await captureErrors(() => deps.fourtis.devRadar('eth', PEPE_ETH));
-  if (!value) return fail(`${host}: ${errors[0] ?? 'DevRadar returned nothing'}`, 'the answer does not match the shape fourtis.ts expects (DevRadarZ)');
-  return pass(`${host}: DevRadar answered for PEPE (deployer launched ${value.launched}, dead ${value.dead})`);
 }

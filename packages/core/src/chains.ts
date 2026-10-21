@@ -43,6 +43,12 @@ export const chainToDb = (c: ChainKey | null | undefined): ChainDb | null =>
   c ? CHAINS[c].db : null;
 export const isChainKey = (v: unknown): v is ChainKey => typeof v === 'string' && v in CHAINS;
 
+/**
+ * A deployer wallet as ApeCheck stores and compares it (CoinFacts.deployerAddress): EVM lowercased, Solana and Tron
+ * (case-sensitive base58) as they are.
+ */
+export const deployerKey = (chain: ChainKey, address: string): string => (CHAINS[chain]?.family === 'evm' ? address.toLowerCase() : address);
+
 /** DexScreener chainId → ChainKey */
 export function chainFromDex(dexChainId: string): ChainKey | null {
   const hit = (Object.values(CHAINS) as ChainInfo[]).find(c => c.dex === dexChainId);

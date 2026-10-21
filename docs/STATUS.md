@@ -38,9 +38,10 @@ through the real queue), deploy checks. `pnpm -r typecheck` and `next build` are
   First thing on the VPS: `pnpm diagnose` (the doctor) as `apecheck` (DEPLOY.md §6 "Doctor"). It writes nothing, probes every
   dependency with the code a check runs, and prints one row per dependency with what to fix. Then run
   `E2E=1 E2E_TARGET=<a real project site> pnpm e2e`.
-- **Fourtis (DevRadar, BundleScan, WhaleFlow)**: endpoint paths are placeholders (`packages/sources/src/adapters/fourtis.ts`,
-  `FOURTIS_PATHS`) until Michael defines them. Without them, bundle %, LP status, holder split and deployer history are
-  "unknown" (scored `warn`, said so in the log). Pro "deep holder clusters" appear only when WhaleFlow returns clusters.
+- **Coin facts without an ApeCheck source**: bundle share, LP status, holder count and EVM/Tron holder share are "not
+  checked" (scored `warn`, said so in the log). Deployer history counts only coins ApeCheck has checked from the same
+  wallet (EVM: Etherscan creator, Tron: contract origin address; Solana deployers are not looked up) and never lifts the
+  deployer signal above `warn`.
 - **X handle-rename history**: needs a third-party source; always "unknown".
 - **Token**: `TOKEN_ADDRESS` is empty, so everyone is Free and the site says "Pro and Max open at token launch". Team wallets can
   be given a tier with `TIER_OVERRIDES` for testing.
@@ -49,9 +50,23 @@ through the real queue), deploy checks. `pnpm -r typecheck` and `next build` are
 
 `ANTHROPIC_API_KEY` · `X_API_KEY` `X_API_SECRET` `X_ACCESS_TOKEN` `X_ACCESS_SECRET` `X_BEARER_TOKEN` `X_BOT_USER_ID` ·
 `X_OAUTH2_CLIENT_ID` `X_OAUTH2_CLIENT_SECRET` (X account linking) · `HELIUS_API_KEY` `ALCHEMY_API_KEY` (Ethereum, Base and Arbitrum in one key) `ETHERSCAN_API_KEY` `TRONGRID_API_KEY` ·
-`RPC_ROBINHOOD` (other RPCs fall back to public endpoints) · `FOURTIS_API_URL` `FOURTIS_API_KEY` · `GITHUB_TOKEN` (works
-unauthenticated at 60 requests/hour) · `TOKEN_ADDRESS` · production `SESSION_SECRET`, database password, `BACKUP_REMOTE`;
+`RPC_ROBINHOOD` (other RPCs fall back to public endpoints) · `GITHUB_TOKEN` (works unauthenticated at 60 requests/hour;
+old `FOURTIS_*` lines in `.env` are ignored, delete them) · `TOKEN_ADDRESS` · production `SESSION_SECRET`, database password, `BACKUP_REMOTE`;
 `BROWSER_WS_ENDPOINT` is filled in by `deploy/browser/install.sh`.
+
+## Coin data from ApeCheck's own sources only
+
+ApeCheck no longer calls any third-party coin service. Deploying this release:
+
+- `prisma migrate deploy` adds one index (`CoinFacts_deployerAddress_idx`); nothing is dropped or rewritten.
+- Rows stored before keep loading: old step source tags and their "unavailable" lines are shown as "not checked"
+  (`displayStep` in `packages/core/src/labels.ts`), old holder clusters in `Check.evidence` are never served, and stored
+  bundle / LP / holder-count values still show, untagged.
+- The `Deployer` table, `CoinFacts.deployerId` and the `DeployerRecord` enum are no longer read or written. They stay
+  this release so a rollback still finds them; drop them in a later release (after a backup, `deploy/backup.sh`).
+- worker-prices removes the old daily `deployers-refresh` job schedule from Redis when it starts.
+- Read-only check of what older rows hold: `SELECT count(*) FROM "Deployer";`,
+  `SELECT source, count(*) FROM "CheckStep" WHERE source NOT IN ('X','GitHub','DexScreener','On-chain','ApeCheck') GROUP BY 1;`.
 
 ## Decisions for ALFA
 

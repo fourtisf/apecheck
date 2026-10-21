@@ -24,7 +24,7 @@ import { MCP_WAITS_PER_USER, mcpWaitsKey, progressCounter } from '../src/mcp';
 import { keyLimitKey } from '../src/plugins/apiKeys';
 import { RATE } from '../src/plugins/rateLimit';
 import { TEST_REDIS_URL } from './global-setup';
-import { Client, EvmWallet, SolWallet, makeHarness, parseSse, resetState, seedCheck, seedCoinFacts, seedDeployer, seedTarget, signedIn, type Harness } from './helpers';
+import { Client, EvmWallet, SolWallet, makeHarness, parseSse, resetState, seedCheck, seedCoinFacts, seedTarget, signedIn, type Harness } from './helpers';
 
 const maxW = new EvmWallet();
 const max2W = new SolWallet();
@@ -365,36 +365,29 @@ describe('MCP server', () => {
     expect(notReady).toMatchObject({ isError: true, structuredContent: { code: 'not_ready' } });
   });
 
-  it("deployer_history returns the wallet's record and its checked coins, never another user's private checks", async () => {
-    const dep = await seedDeployer(h.prisma, { chain: 'SOL', record: 'MIXED', launched: 6, dead: 2, fundedFrom: 'Binance hot wallet' });
+  it("deployer_history returns the coins from the wallet that ApeCheck has checked, never another user's private checks", async () => {
+    const wallet = 'DepWa11et111111111111111111111111111111111111'.slice(0, 44);
     const coinT = await seedTarget(h.prisma, { kind: 'COIN', chain: 'SOL', ca: 'MintOne1111111111111111111111111111111111111', ticker: 'ONE', name: '$ONE', domain: null, key: 'ca:sol:one' });
     const pub = await seedCheck(h.prisma, { targetId: coinT.id, coinScore: 44, coinBand: 'sketchy', narScore: 30, narBand: 'llarp', totalScore: 37 });
-    await seedCoinFacts(h.prisma, pub.id, { deployerId: dep.id, deployerAddress: dep.address });
+    await seedCoinFacts(h.prisma, pub.id, { deployerAddress: wallet });
     // someone else's private check of another coin by the same wallet stays hidden
     const hiddenT = await seedTarget(h.prisma, { kind: 'COIN', chain: 'SOL', ca: 'MintTwo2222222222222222222222222222222222222', ticker: 'TWO', name: '$TWO', domain: null, key: 'ca:sol:two' });
     const stranger = await h.prisma.user.create({ data: {} });
     const hidden = await seedCheck(h.prisma, { targetId: hiddenT.id, isPrivate: true, isLatest: false, requesterId: stranger.id, coinScore: 10, coinBand: 'rigged' });
-    await seedCoinFacts(h.prisma, hidden.id, { deployerId: dep.id, deployerAddress: dep.address });
+    await seedCoinFacts(h.prisma, hidden.id, { deployerAddress: wallet });
+    // the key owner's own private check is theirs to see
+    const ownT = await seedTarget(h.prisma, { kind: 'COIN', chain: 'SOL', ca: 'MintThree33333333333333333333333333333333333', ticker: 'THREE', name: '$THREE', domain: null, key: 'ca:sol:three' });
+    const own = await seedCheck(h.prisma, {
+      targetId: ownT.id, isPrivate: true, isLatest: false, requesterId: userId, coinScore: 60, coinBand: 'ok', finishedAt: new Date(Date.now() - 3 * 3600_000),
+    });
+    await seedCoinFacts(h.prisma, own.id, { deployerAddress: wallet });
 
     const c = await mcp();
-    const res = await call(c, 'deployer_history', { wallet: dep.address });
+    const res = await call(c, 'deployer_history', { wallet });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent).toEqual({
-      wallet: dep.address,
+      wallet,
       known: true,
-      deployers: [
-        {
-          id: dep.id,
-          chain: 'sol',
-          address: dep.address,
-          record: 'mixed',
-          launched: 6,
-          dead: 2,
-          fundedFrom: 'Binance hot wallet',
-          firstSeen: null,
-          recordText: '6 earlier tokens, 2 dead',
-        },
-      ],
       coins: [
         {
           id: pub.shortId,
@@ -410,17 +403,25 @@ describe('MCP server', () => {
           checkedAt: expect.any(String),
           report_url: `http://app.test/c/${pub.shortId}`,
         },
+        expect.objectContaining({ id: own.shortId, ticker: 'THREE', coinVerdict: 'OK' }),
       ],
     });
+    expect(JSON.stringify(res.structuredContent)).not.toContain('TWO');
 
     // an EVM wallet matches whatever its case; an unknown one is simply not known
-    const evmDep = await seedDeployer(h.prisma, { chain: 'BASE', address: '0xabcdef0123456789abcdef0123456789abcdef01', record: 'BUILDER', launched: 1 });
+    const evmT = await seedTarget(h.prisma, { kind: 'COIN', chain: 'BASE', ca: '0x' + '9'.repeat(40), ticker: 'EVMC', name: '$EVMC', domain: null, key: 'ca:base:evmc' });
+    const evmCheck = await seedCheck(h.prisma, { targetId: evmT.id, coinScore: 50, coinBand: 'sketchy' });
+    await seedCoinFacts(h.prisma, evmCheck.id, { deployerAddress: '0xabcdef0123456789abcdef0123456789abcdef01' });
     const evm = await call(c, 'deployer_history', { wallet: '0xABCDEF0123456789ABCDEF0123456789ABCDEF01' });
-    expect(evm.structuredContent).toMatchObject({ known: true, deployers: [{ id: evmDep.id, chain: 'base', recordText: 'first launch' }], coins: [] });
+    expect(evm.structuredContent).toMatchObject({ known: true, coins: [{ id: evmCheck.shortId, chain: 'base', ticker: 'EVMC' }] });
     const unknown = await call(c, 'deployer_history', { wallet: '0x1111111111111111111111111111111111111111' });
-    expect(unknown.structuredContent).toEqual({ wallet: '0x1111111111111111111111111111111111111111', known: false, deployers: [], coins: [] });
+    expect(unknown.structuredContent).toEqual({ wallet: '0x1111111111111111111111111111111111111111', known: false, coins: [] });
     const bad = await call(c, 'deployer_history', { wallet: 'not-a-wallet-address-at-all!!!' });
     expect(bad).toMatchObject({ isError: true, content: [{ text: "That doesn't look like a wallet address." }] });
+    // the tool says what it counts, in ApeCheck's own words
+    const { tools } = await c.listTools();
+    expect(tools.find(t => t.name === 'deployer_history')!.description).toBe('The coins from a wallet that ApeCheck has checked, with their scores. Only coins checked by ApeCheck are counted.');
+    expect(JSON.stringify(tools) + c.getInstructions()).not.toMatch(/fourtis|devradar|bundlescan|whaleflow/i);
   });
 
   it('auth: no key 401 key_required, bad or revoked key 401 invalid_key, non-Max 403; the client cannot connect', async () => {

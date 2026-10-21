@@ -15,8 +15,7 @@ import { PrismaClient } from '@apecheck/db';
 import { createHttp, createSources, type Http } from '@apecheck/sources';
 import { AI_KEY_REMEDY, aiModeText, doctorAi, probeAi } from './ai';
 import {
-  DEXSCREENER_REMEDY, FOURTIS_REMEDY, GITHUB_REMEDY, X_BOT_REMEDY, X_READ_REMEDY,
-  probeDexScreener, probeFourtis, probeGitHub, probeXBot, probeXRead,
+  DEXSCREENER_REMEDY, GITHUB_REMEDY, X_BOT_REMEDY, X_READ_REMEDY, probeDexScreener, probeGitHub, probeXBot, probeXRead,
 } from './apis';
 import {
   ETHERSCAN_REMEDY, EVM_PROBE_CHAINS, EVM_REMEDY, SOLANA_REMEDY, TRON_REMEDY,
@@ -34,7 +33,7 @@ import { errorText, exitCode, runProbes, type Probe, type ProbeResult } from './
 export { Redactor } from './redact';
 export { exitCode, runProbe, runProbes, classify } from './result';
 
-type DoctorSources = Pick<ReturnType<typeof createSources>, 'evm' | 'sol' | 'tron' | 'dex' | 'github' | 'x' | 'fourtis'>;
+type DoctorSources = Pick<ReturnType<typeof createSources>, 'evm' | 'sol' | 'tron' | 'dex' | 'github' | 'x'>;
 
 export interface DoctorDeps {
   env: Env;
@@ -81,7 +80,6 @@ export function buildProbes(d: DoctorDeps): Probe[] {
     { name: 'GitHub', timeoutMs: 30_000, remedy: GITHUB_REMEDY, run: () => probeGitHub({ env, http, github: sources.github }) },
     { name: 'X reads (Bearer)', timeoutMs: 30_000, remedy: X_READ_REMEDY, run: () => probeXRead({ env, http, x: sources.x }) },
     { name: 'X bot (OAuth 1.0a)', remedy: X_BOT_REMEDY, run: () => probeXBot({ env, http }) },
-    { name: 'Fourtis', timeoutMs: 30_000, remedy: FOURTIS_REMEDY, run: () => probeFourtis({ env, http, fourtis: sources.fourtis }) },
   );
   return probes;
 }

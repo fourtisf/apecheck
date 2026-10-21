@@ -156,7 +156,7 @@ describe('report copy', () => {
 
 describe('signed-in watchlist', () => {
   const rows = [
-    summary({ id: 'a', kind: 'coin', name: '$ORBT', ticker: 'ORBT', chain: 'sol', narBand: 'partly', coinBand: 'sketchy', domain: null, ca: 'OrbtMint111', deployer: { address: 'DepWallet9', chain: 'sol', record: 'mixed' } }),
+    summary({ id: 'a', kind: 'coin', name: '$ORBT', ticker: 'ORBT', chain: 'sol', narBand: 'partly', coinBand: 'sketchy', domain: null, ca: 'OrbtMint111', deployer: { address: 'DepWallet9', chain: 'sol' } }),
     summary({ id: 'b', kind: 'site', name: 'nebula.fi', domain: 'nebula.fi', narBand: 'real' }),
     summary({ id: 'c', kind: 'post', name: '@kairolabs', handle: 'kairolabs', domain: null, narBand: 'llarp' }),
   ];

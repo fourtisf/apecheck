@@ -105,7 +105,7 @@ const MCP: Tok[] = [
   '\nask_followup(id, question)  ',
   ['c', "→ an answer from the check's record"],
   '\ndeployer_history(wallet)    ',
-  ['c', '→ launch record and checked coins'],
+  ['c', '→ coins from it that ApeCheck checked'],
 ];
 
 /** A webhook delivery: the WebhookPayload body, signed in the ApeCheck-Signature header (core WEBHOOK_SIGNATURE_HEADER). */

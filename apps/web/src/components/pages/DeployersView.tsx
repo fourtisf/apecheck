@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { CHAINS, REP, cap, fmtAge, short, type ChainKey, type DeployerRowDTO, type DeployersResponse } from '@apecheck/core';
+import { CHAINS, agoLong, short, type ChainKey, type DeployerRowDTO, type DeployersResponse } from '@apecheck/core';
 import { deployers } from '@/lib/api';
 import { reportPath } from '@/lib/env';
 import { Avatar } from '../Avatar';
@@ -10,17 +10,20 @@ import { ChainTag } from '../ChainTag';
 import { DEPLOYERS_LIMIT, deployerQuery, parseDeployerFilters, sameAddress, sameDeployerList, type DeployerFilters, type DeployerSort } from './params';
 import { useApiQuery, useSyncUrl, useUrlSearchParams } from './useApiQuery';
 
+/** chains whose deployer wallet ApeCheck looks up (EVM: the Etherscan contract creator; Tron: the origin address) */
 const CHAIN_SEG: [ChainKey | 'all', string][] = [
   ['all', 'All chains'],
-  ['sol', 'Solana'],
-  ['rh', 'Robinhood'],
+  ['eth', 'Ethereum'],
   ['base', 'Base'],
   ['bnb', 'BNB'],
+  ['arb', 'Arbitrum'],
+  ['rh', 'Robinhood'],
+  ['trx', 'Tron'],
 ];
 const SORTS: [DeployerSort, string][] = [
   ['real', 'Most real first'],
-  ['dead', 'Most dead tokens first'],
-  ['launched', 'Most launches first'],
+  ['checked', 'Most checked coins first'],
+  ['recent', 'Recently checked first'],
 ];
 /** .dep-focus plays a 3 s highlight */
 const FOCUS_MS = 3000;
@@ -37,7 +40,6 @@ const focusRow = (data: DeployersResponse | null, address: string | null) =>
   address ? data?.items.find(d => sameAddress(d.address, address)) : undefined;
 
 function DeployerRow({ d, i, open, focus, onToggle }: { d: DeployerRowDTO; i: number; open: boolean; focus: boolean; onToggle: () => void }) {
-  const age = fmtAge(d.firstSeen);
   const moreId = `${rowId(d)}-more`;
   return (
     <div className={`dep${focus ? ' dep-focus' : ''}`} id={rowId(d)}>
@@ -52,36 +54,23 @@ function DeployerRow({ d, i, open, focus, onToggle }: { d: DeployerRowDTO; i: nu
                 {short(d.address)}
               </b>
             </span>
-            <span className="nm2">First seen {age ? `${age} ago` : '—'}</span>
+            <span className="nm2">Last checked {d.lastChecked ? agoLong(d.lastChecked) : '—'}</span>
           </span>
         </span>
         <span className="td c-ch">
           <ChainTag chain={d.chain} />
         </span>
-        <span className="td c-sc">
-          <span className={`rep-b r-${d.record}`}>{REP[d.record]}</span>
-        </span>
-        <span className="td num">{d.launched}</span>
-        <span className={`td num${d.dead ? ' dn' : ''}`}>{d.dead}</span>
         <span className="td num">{d.checked}</span>
-        <span className="td num">{d.checked ? `${d.real}/${d.checked}` : <span className="nil">—</span>}</span>
+        <span className="td num c-sc">{d.checked ? `${d.real}/${d.checked}` : <span className="nil">—</span>}</span>
         <span className="td num c-avg">{d.avgTotal != null ? d.avgTotal : <span className="nil">—</span>}</span>
-        <span className="td c-fund" style={{ fontSize: '13.5px', color: 'var(--mute)' }}>
-          {d.fundedFrom ? cap(d.fundedFrom) : <span className="nil">—</span>}
-        </span>
         <span className="c-mob">
-          <span>{d.launched} launched</span>
-          <span className={d.dead ? 'dn' : ''}>{d.dead} dead</span>
-          <span>{d.checked} checked</span>
+          <span>{plural(d.checked, 'coin')} checked</span>
+          <span>{d.real} real</span>
           <span>{CHAINS[d.chain]?.name}</span>
         </span>
       </button>
       <div className="dep-more" id={moreId} hidden={!open}>
-        <p>
-          {d.fundedFrom ? `Funded from ${d.fundedFrom}. ` : ''}
-          {plural(d.launched, 'token')} launched, {d.dead} dead.{' '}
-          {d.coins.length ? 'Checked coins from this wallet:' : 'None of their coins have been checked yet.'}
-        </p>
+        <p>{d.coins.length ? 'Coins from this wallet checked by ApeCheck:' : 'No coins from this wallet checked by ApeCheck yet.'}</p>
         {d.coins.length ? (
           <div className="chips">
             {d.coins.map(c => (
@@ -99,7 +88,8 @@ function DeployerRow({ d, i, open, focus, onToggle }: { d: DeployerRowDTO; i: nu
 }
 
 /**
- * viewDeployers() + renderDepRows(): every wallet that launched a checked coin. Chain and sort live in the URL;
+ * viewDeployers() + renderDepRows(): every wallet that deployed a coin ApeCheck has checked, with those coins (only
+ * coins checked on ApeCheck are counted). Chain and sort live in the URL;
  * ?focus=<address> opens that row, scrolls to it and flashes it (links from "Builders worth watching").
  */
 export function DeployersView({ initial, initialFilters }: { initial: DeployersResponse | null; initialFilters: DeployerFilters }) {
@@ -166,7 +156,7 @@ export function DeployersView({ initial, initialFilters }: { initial: DeployersR
         <div className="tbl-empty" style={{ borderTop: 0 }}>
           {chain !== 'all' && CHAINS[chain]
             ? `No deployers on ${CHAINS[chain].name} yet.`
-            : 'No deployers yet. Every wallet that launches a checked coin shows up here.'}
+            : 'No deployers yet. Every wallet that deployed a coin ApeCheck has checked shows up here.'}
         </div>
       </div>
     );
@@ -177,13 +167,9 @@ export function DeployersView({ initial, initialFilters }: { initial: DeployersR
           <span>#</span>
           <span>Wallet</span>
           <span className="c-ch">Chain</span>
-          <span>Record</span>
-          <span className="num">Launched</span>
-          <span className="num">Dead</span>
           <span className="num">Checked</span>
-          <span className="num">Real</span>
+          <span className="num c-sc">Real</span>
           <span className="num c-avg">Avg total</span>
-          <span className="c-fund">Funded from</span>
         </div>
         {items.map((d, i) => {
           const k = rowKey(d);
@@ -199,8 +185,7 @@ export function DeployersView({ initial, initialFilters }: { initial: DeployersR
         <div>
           <h1 className="h-pg">Deployers</h1>
           <p>
-            Every wallet that launched a checked coin, with every coin from it that ApeCheck has checked. Builders ship more than once; serial launchers leave a
-            trail of dead tokens.
+            Every wallet that deployed a coin ApeCheck has checked, and how its checked coins scored. Only coins checked on ApeCheck are counted.
           </p>
         </div>
       </div>

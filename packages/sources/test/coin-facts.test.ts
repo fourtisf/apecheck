@@ -3,11 +3,8 @@ import {
   COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, coinFacts, contractAuthorityText, contractMintRenounced, solanaAuthorityText, type CoinFactsDeps,
 } from '../src/coin-facts';
 import { ZEPPELINOS_IMPL_SLOT } from '../src/abi';
-import { createFourtis } from '../src/adapters/fourtis';
 import { createSources } from '../src/index';
-import type {
-  DexScreenerSource, DexTokenInfo, EvmSource, FourtisSource, SolanaSource, TronSource,
-} from '../src/types';
+import type { DexScreenerSource, DexTokenInfo, EvmSource, SolanaSource, TronSource } from '../src/types';
 import { encAddress, encString, encUint, fakeHttp, fixture, rpcHandler, testEnv } from './helpers';
 
 const MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
@@ -26,7 +23,6 @@ const never = <T>() => new Promise<T>(() => {});
 const after = <T>(ms: number, value: T) => new Promise<T>(res => setTimeout(() => res(value), ms));
 
 function fakes(over: {
-  fourtis?: Partial<FourtisSource>;
   dex?: Partial<DexScreenerSource>;
   evm?: Partial<EvmSource>;
   sol?: Partial<SolanaSource>;
@@ -35,7 +31,6 @@ function fakes(over: {
   timeoutMs?: number;
 } = {}): CoinFactsDeps {
   return {
-    fourtis: { configured: false, devRadar: async () => null, bundleScan: async () => null, whaleFlow: async () => null, ...over.fourtis },
     dex: { configured: true, token: async () => market, tokens: async () => new Map(), search: async () => [], ...over.dex },
     evm: {
       chains: () => ['base'], detectChain: async () => null, getCode: async () => null, tokenBasics: async () => null,
@@ -75,98 +70,50 @@ describe('authority wording', () => {
 });
 
 describe('coinFacts: precedence', () => {
-  it('Fourtis values win over the on-chain fallbacks, each section names its source', async () => {
-    const largestHolders = vi.fn(async () => [{ owner: 'x', account: 'y', amount: '1', pct: 90 }]);
+  it("every section comes from ApeCheck's own reads; bundle and LP have no source and stay null", async () => {
     const deps = fakes({
-      fourtis: {
-        configured: true,
-        devRadar: async () => ({ deployer: DEPLOYER, fundedFrom: 'Binance', launched: 9, dead: 7, firstSeen: '2025-01-01T00:00:00Z' }),
-        bundleScan: async () => ({ bundlePct: 18.5, wallets: 11 }),
-        whaleFlow: async () => ({ top10Pct: 33, devHoldPct: 2.5, holders: 4100, lp: { status: 'burned' } }),
+      sol: {
+        largestHolders: async () => [{ owner: 'whale', account: 'a', amount: '1', pct: 33 }],
+        mintInfo: async () => ({ exists: true, decimals: 6, supply: '42', mintAuthority: null, freezeAuthority: 'F1', token2022: false }),
       },
-      sol: { largestHolders, mintInfo: async () => ({ exists: true, decimals: 6, supply: '42', mintAuthority: null, freezeAuthority: 'F1', token2022: false }) },
     });
     const f = await coinFacts(deps, 'sol', MINT);
     expect(f).toEqual({
       chain: 'sol',
       address: MINT,
       token: { name: 'Kairo', symbol: 'KAIRO', decimals: 6, supply: '42' },
-      deployer: { address: DEPLOYER, fundedFrom: 'Binance', launched: 9, dead: 7, firstSeen: '2025-01-01T00:00:00Z', source: 'DevRadar' },
-      bundle: { pct: 18.5, wallets: 11, source: 'BundleScan' },
-      holders: { top10Pct: 33, devHoldPct: 2.5, count: 4100, source: 'WhaleFlow' },
-      lp: { status: 'burned', lockedDays: null, source: 'WhaleFlow' },
+      // Solana deployers are not looked up
+      deployer: null,
+      bundle: null,
+      holders: { top10Pct: 33, devHoldPct: null, count: null, source: 'On-chain' },
+      lp: null,
       authorities: { mintRenounced: true, freezeActive: true, owner: 'F1', text: 'Mint renounced, freeze active', source: 'On-chain' },
       market,
       stubbed: [],
       errors: [],
     });
+    expect('clusters' in f).toBe(false);
   });
 
-  it('M4: WhaleFlow holder clusters are carried as they came; none from WhaleFlow (or no Fourtis) → no clusters at all', async () => {
-    const clusters = [
-      { label: 'Cluster A', wallets: 12, pct: 18.2, fundedFrom: 'Binance hot wallet' },
-      { label: 'Cluster B', wallets: 4, pct: 6.5, fundedFrom: null },
-    ];
-    const withClusters = await coinFacts(
-      fakes({ fourtis: { configured: true, whaleFlow: async () => ({ top10Pct: 33, devHoldPct: 2.5, holders: 4100, clusters }) } }),
-      'sol',
-      MINT,
-    );
-    expect(withClusters.clusters).toEqual(clusters);
-    expect(withClusters.holders?.source).toBe('WhaleFlow');
-
-    // WhaleFlow answered without clusters, or with an empty list
-    for (const none of [undefined, null, []]) {
-      const f = await coinFacts(fakes({ fourtis: { configured: true, whaleFlow: async () => ({ top10Pct: 33, devHoldPct: 2.5, holders: 4100, clusters: none }) } }), 'sol', MINT);
-      expect('clusters' in f).toBe(false);
-    }
-    // Fourtis not configured: the public fallbacks never produce clusters
-    const holders = Array.from({ length: 12 }, (_, i) => ({ owner: `holder${i}`, account: `acc${i}`, amount: '0', pct: 5 }));
-    const fallback = await coinFacts(fakes({ sol: { largestHolders: async () => holders } }), 'sol', MINT);
-    expect(fallback.holders?.source).toBe('On-chain');
-    expect('clusters' in fallback).toBe(false);
-    // WhaleFlow down
-    const down = await coinFacts(fakes({ fourtis: { configured: true, whaleFlow: async () => null } }), 'sol', MINT);
-    expect('clusters' in down).toBe(false);
-  });
-
-  it('M4: clusters through the real Fourtis adapter (placeholder /whaleflow shape)', async () => {
-    const http = fakeHttp(url =>
-      url.pathname.startsWith('/whaleflow/')
-        ? { json: { data: { top10Pct: 30, devHoldPct: 1, holders: 800, clusters: [{ label: 'Cluster A', wallets: 5, pct: 12, fundedFrom: 'FunderWallet111' }] } } }
-        : { status: 404, text: 'no data' },
-    );
-    const fourtis = createFourtis(testEnv({ FOURTIS_API_URL: 'https://ft.example', FOURTIS_API_KEY: 'k' }), http);
-    const f = await coinFacts({ ...fakes(), fourtis }, 'sol', MINT);
-    expect(f.clusters).toEqual([{ label: 'Cluster A', wallets: 5, pct: 12, fundedFrom: 'FunderWallet111' }]);
-    expect(f.errors).toEqual([]);
-  });
-
-  it('Solana fallback: top-10 from largest accounts, excluding the pair and AMM authorities; dev share when the deployer is known', async () => {
+  it('Solana: top-10 from largest accounts, excluding the pair and AMM authorities; no deployer, so no dev share', async () => {
     const holders = [
       { owner: RAYDIUM_V4, account: 'acc0', amount: '0', pct: 40 },
       { owner: PAIR, account: 'acc1', amount: '0', pct: 10 },
       ...Array.from({ length: 12 }, (_, i) => ({ owner: i === 2 ? DEPLOYER : `holder${i}`, account: `acc${i + 2}`, amount: '0', pct: 3 - i * 0.1 })),
     ];
-    const f = await coinFacts(
-      fakes({
-        fourtis: { configured: true, devRadar: async () => ({ deployer: DEPLOYER, fundedFrom: null, launched: 1, dead: 0, firstSeen: null }), whaleFlow: async () => null },
-        sol: { largestHolders: async () => holders },
-      }),
-      'sol',
-      MINT,
-    );
-    // ten holders after exclusion: 3 + 2.9 + … + 2.1
-    expect(f.holders).toEqual({ top10Pct: 25.5, devHoldPct: 2.8, count: null, source: 'On-chain' });
+    const f = await coinFacts(fakes({ sol: { largestHolders: async () => holders } }), 'sol', MINT);
+    // ten holders after exclusion: 3 + 2.9 + … + 2.1 (the deployer's wallet among them, but nothing says it is the deployer)
+    expect(f.holders).toEqual({ top10Pct: 25.5, devHoldPct: null, count: null, source: 'On-chain' });
+    expect(f.deployer).toBeNull();
     expect(f.authorities).toMatchObject({ mintRenounced: true, freezeActive: false, text: 'Renounced', source: 'On-chain' });
     expect(f.bundle).toBeNull();
     expect(f.lp).toBeNull();
   });
 
-  it('without Fourtis: stubbed lists it, deployer unknown on Solana, active mint authority', async () => {
+  it('Solana: stubbed keeps only stubs that matter to this chain; deployer not looked up; active mint authority', async () => {
     const f = await coinFacts(
       fakes({
-        stubbed: ['x', 'fourtis', 'etherscan', 'rpc-rh'],
+        stubbed: ['x', 'etherscan', 'rpc-rh'],
         sol: {
           mintInfo: async () => ({ exists: true, decimals: 9, supply: '5', mintAuthority: 'MintAuth1', freezeAuthority: null, token2022: true }),
           largestHolders: async () => [{ owner: 'whale', account: 'a', amount: '1', pct: 60 }],
@@ -175,16 +122,16 @@ describe('coinFacts: precedence', () => {
       'sol',
       MINT,
     );
-    expect(f.stubbed).toEqual(['fourtis']);
+    expect(f.stubbed).toEqual([]);
     expect(f.deployer).toBeNull();
     expect(f.holders).toMatchObject({ top10Pct: 60, devHoldPct: null, source: 'On-chain' });
     expect(f.authorities).toEqual({ mintRenounced: false, freezeActive: false, owner: 'MintAuth1', text: 'Mint still active', source: 'On-chain' });
   });
 
-  it('EVM fallback: tokenBasics → authorities, creator → deployer with unknown launch history', async () => {
+  it('EVM: tokenBasics → authorities, the Etherscan creator → the deployer wallet (no launch record); no holders', async () => {
     const f = await coinFacts(
       fakes({
-        stubbed: ['fourtis', 'rpc-rh'],
+        stubbed: ['x', 'rpc-rh'],
         dex: { token: async () => ({ ...market, chain: 'base', address: EVM_TOKEN }) },
         evm: {
           tokenBasics: async () => ({ name: 'Thing', symbol: 'THING', decimals: 18, totalSupply: '1000', owner: '0xowner', ownerRenounced: false, hasMintFunction: true }),
@@ -195,15 +142,17 @@ describe('coinFacts: precedence', () => {
       EVM_TOKEN,
     );
     expect(f.token).toEqual({ name: 'Thing', symbol: 'THING', decimals: 18, supply: '1000' });
-    expect(f.deployer).toEqual({ address: '0xcreator', fundedFrom: null, launched: null, dead: null, firstSeen: null, source: 'On-chain' });
+    expect(f.deployer).toEqual({ address: '0xcreator', launched: null, dead: null, source: 'On-chain' });
     expect(f.authorities).toEqual({ mintRenounced: false, freezeActive: null, owner: '0xowner', text: 'Mint still active', source: 'On-chain' });
     expect(f.holders).toBeNull();
-    expect(f.stubbed).toEqual(['fourtis']);
+    expect(f.bundle).toBeNull();
+    expect(f.lp).toBeNull();
+    expect(f.stubbed).toEqual([]);
   });
 
   it('EVM without Etherscan: etherscan is listed as stubbed and deployer stays null', async () => {
-    const f = await coinFacts(fakes({ stubbed: ['fourtis', 'etherscan'], dex: { token: async () => null } }), 'eth', EVM_TOKEN);
-    expect(f.stubbed).toEqual(['fourtis', 'etherscan']);
+    const f = await coinFacts(fakes({ stubbed: ['x', 'etherscan'], dex: { token: async () => null } }), 'eth', EVM_TOKEN);
+    expect(f.stubbed).toEqual(['etherscan']);
     expect(f.deployer).toBeNull();
     expect(f.token).toBeNull();
     expect(f.market).toBeNull();
@@ -220,7 +169,8 @@ describe('coinFacts: precedence', () => {
       'trx',
       'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
     );
-    expect(f.deployer).toMatchObject({ address: 'TCreator', launched: null, source: 'On-chain' });
+    expect(f.deployer).toEqual({ address: 'TCreator', launched: null, dead: null, source: 'On-chain' });
+    expect(f.holders).toBeNull();
     expect(f.authorities).toEqual({ mintRenounced: true, freezeActive: null, owner: 'TOwner', text: 'No mint function, owner active', source: 'On-chain' });
     expect(f.token).toEqual({ name: 'T', symbol: 'TT', decimals: 6, supply: '9' });
   });
@@ -238,18 +188,17 @@ describe('coinFacts: precedence', () => {
 
 describe('coinFacts: failures never throw', () => {
   it('slow calls time out per call and are listed; the rest still arrives', async () => {
-    const f = await coinFacts(
-      fakes({
-        timeoutMs: 50,
-        fourtis: { configured: true, devRadar: never, bundleScan: never, whaleFlow: async () => ({ top10Pct: 20, devHoldPct: 1, holders: null }) },
-        sol: { largestHolders: never },
-      }),
-      'sol',
-      MINT,
-    );
-    expect(f.errors).toEqual(['fourtis.devRadar: timeout', 'fourtis.bundleScan: timeout', 'solana.largestHolders: timeout']);
-    expect(f.holders?.source).toBe('WhaleFlow');
-    expect(f.market).toEqual(market);
+    const sol = await coinFacts(fakes({ timeoutMs: 50, sol: { largestHolders: never } }), 'sol', MINT);
+    expect(sol.errors).toEqual(['solana.largestHolders: timeout']);
+    expect(sol.holders).toBeNull();
+    expect(sol.authorities).toMatchObject({ mintRenounced: true, source: 'On-chain' });
+    expect(sol.market).toEqual(market);
+
+    const basics = { name: 'Thing', symbol: 'THING', decimals: 18, totalSupply: '1', owner: null, ownerRenounced: true, hasMintFunction: false };
+    const evm = await coinFacts(fakes({ timeoutMs: 50, evm: { creator: never, tokenBasics: async () => basics } }), 'base', EVM_TOKEN);
+    expect(evm.errors).toEqual(['evm.creator: timeout']);
+    expect(evm.deployer).toBeNull();
+    expect(evm.authorities).toMatchObject({ mintRenounced: true, text: 'Renounced' });
   });
 
   it('a call that makes several requests in a row gets one timeout per round, not one for all of them', async () => {
@@ -319,27 +268,25 @@ describe('coinFacts: failures never throw', () => {
 
   it('errors that adapters swallow (lastError) are collected per call', async () => {
     const http = fakeHttp(() => ({ status: 500, text: 'down' }));
-    const fourtis = createFourtis(testEnv({ FOURTIS_API_URL: 'https://ft.example', FOURTIS_API_KEY: 'k' }), http);
-    const f = await coinFacts({ ...fakes(), fourtis }, 'sol', MINT);
-    expect(f.errors).toEqual([
-      'fourtis.devRadar: HTTP 500 from ft.example',
-      'fourtis.bundleScan: HTTP 500 from ft.example',
-      'fourtis.whaleFlow: HTTP 500 from ft.example',
-    ]);
+    const f = await createSources(testEnv(), { http }).coinFacts('trx', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t');
+    expect(f.errors.length).toBeGreaterThan(0);
+    expect(f.errors.every(e => /^(dexscreener|tron)\.\w+: /.test(e))).toBe(true);
+    expect(f.errors.some(e => e.startsWith('dexscreener.token: ') && e.includes('500'))).toBe(true);
     expect(f.deployer).toBeNull();
+    expect(f.market).toBeNull();
   });
 });
 
 describe('createSources', () => {
   it('wires every adapter; stubbed() names the missing keys', () => {
     const s = createSources(testEnv(), { http: fakeHttp() });
-    expect(s.stubbed()).toEqual(['x', 'fourtis', 'etherscan', 'rpc-rh']);
+    expect(s.stubbed()).toEqual(['x', 'etherscan', 'rpc-rh']);
     expect(s.x.configured).toBe(false);
-    expect(s.fourtis.configured).toBe(false);
+    expect('fourtis' in s).toBe(false);
     expect(s.dex.configured).toBe(true);
     expect(s.evm.chains()).toEqual(['base', 'eth', 'bnb', 'arb']);
     const full = createSources(
-      testEnv({ X_BEARER_TOKEN: 'b', FOURTIS_API_URL: 'https://f', FOURTIS_API_KEY: 'k', ETHERSCAN_API_KEY: 'e', RPC_ROBINHOOD: 'https://rh' }),
+      testEnv({ X_BEARER_TOKEN: 'b', ETHERSCAN_API_KEY: 'e', RPC_ROBINHOOD: 'https://rh' }),
       { http: fakeHttp() },
     );
     expect(full.stubbed()).toEqual([]);
@@ -351,7 +298,7 @@ describe('createSources', () => {
     expect(typeof s.http.json).toBe('function');
   });
 
-  it('coinFacts end to end over fake HTTP (DexScreener + Solana RPC, no Fourtis)', async () => {
+  it('coinFacts end to end over fake HTTP (DexScreener + Solana RPC)', async () => {
     const http = fakeHttp(
       url => (url.host === 'api.dexscreener.com' ? { json: fixture('dexscreener-tokens-solana.json') } : undefined),
       rpcHandler('api.mainnet-beta.solana.com', {
@@ -365,7 +312,7 @@ describe('createSources', () => {
     );
     const f = await createSources(testEnv(), { http }).coinFacts('sol', MINT);
     expect(f.errors).toEqual([]);
-    expect(f.stubbed).toEqual(['fourtis']);
+    expect(f.stubbed).toEqual([]);
     expect(f.market?.pairAddress).toBe(PAIR);
     expect(f.holders).toEqual({ top10Pct: 10, devHoldPct: null, count: null, source: 'On-chain' });
     expect(f.authorities).toMatchObject({ mintRenounced: true, freezeActive: true, text: 'Mint renounced, freeze active' });
@@ -391,7 +338,7 @@ describe('createSources', () => {
     expect(f.token).toMatchObject({ name: 'Thing', decimals: 18 });
     expect(f.authorities).toMatchObject({ mintRenounced: true, text: 'Renounced', owner: '0x0000000000000000000000000000000000000000' });
     expect(f.deployer).toBeNull();
-    expect(f.stubbed).toEqual(['fourtis', 'etherscan']);
+    expect(f.stubbed).toEqual(['etherscan']);
     expect(f.errors).toEqual([]);
   });
 

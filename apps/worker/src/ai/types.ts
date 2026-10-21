@@ -121,7 +121,6 @@ export interface CoinJudgeFacts {
   historyKnown: boolean;
   launched: number | null;
   dead: number | null;
-  fundedFrom: string | null;
   bundlePct: number | null;
   bundleWallets: number | null;
   top10Pct: number | null;
@@ -167,8 +166,11 @@ export interface AnswerData {
   evidence: CheckEvidence;
   claims: { text: string; status: string; evidence: string }[];
   coin: {
+    /**
+     * "Deployer history: 2 other coins from this wallet checked by ApeCheck, $FOO and $BAR (0xAbC…Ef02)";
+     * null = the deployer was not checked
+     */
     deployerLine: string | null;
-    fundedFrom: string | null;
     bundlePct: number | null;
     bundleWallets: number | null;
     top10Pct: number | null;

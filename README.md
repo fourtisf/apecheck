@@ -17,7 +17,7 @@ apps/
 packages/
   core/     scoring.ts + config.ts (every weight/threshold), DTOs, target detection, shared copy, env schema
   db/       Prisma schema + client (PostgreSQL)
-  sources/  data adapters (DexScreener, EVM/Solana/Tron RPC, Etherscan, GitHub, X, Fourtis) + SSRF guard
+  sources/  data adapters (DexScreener, EVM/Solana/Tron RPC, Etherscan, GitHub, X) + SSRF guard
 reference/  scoring.ts as handed off (the port in packages/core is tested against it)
 deploy/     Nginx config, backup script, browser/ (the isolated Chromium host: systemd unit, firewall, AppArmor, installer)
 ecosystem.config.cjs   PM2 processes

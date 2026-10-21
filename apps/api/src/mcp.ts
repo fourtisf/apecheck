@@ -19,33 +19,24 @@
  *    for progress (`_meta.progressToken`); the progress value rises with every notification, as MCP requires.
  *  - get_check(id): the full report JSON (GET /v1/checks/:id as the key's owner).
  *  - ask_followup(id, question): a follow-up answered from the check's record (POST /v1/checks/:id/asks rules).
- *  - deployer_history(wallet): what is known about the wallet as a deployer (DevRadar record) and the coins of it
- *    that were checked.
+ *  - deployer_history(wallet): the coins from that wallet that ApeCheck has checked (public checks, and the key
+ *    owner's own private ones).
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import {
-  FOOTER_DISCLAIMER,
-  checkChannel,
-  chainFromDb,
-  deployerLine,
-  recordFromDb,
-  type CheckReportDTO,
-  type DeployerDTO,
-} from '@apecheck/core';
-import type { Prisma } from '@apecheck/db';
+import { FOOTER_DISCLAIMER, checkChannel, type CheckReportDTO } from '@apecheck/core';
+import { deployerCoins, type Prisma } from '@apecheck/db';
 import { creditSubject } from './accounts';
 import { createCheck, loadReport } from './checks';
 import type { AppDeps } from './context';
 import { ApiError, MSG } from './errors';
 import { SHORT_ID_RE } from './ids';
 import { slidingLimit, userBurst } from './limits';
-import { coinVerdictOf, narrativeOf, toCheckResult, toDeployerDTO, type CheckResult, type Viewer } from './mappers';
+import { coinVerdictOf, narrativeOf, toCheckResult, type CheckResult, type Viewer } from './mappers';
 import { askOnCheck } from './routes/community';
-import { publicDeployerWhere } from './routes/insights';
 import { viewerOf } from './routes/util';
 
 /** how long run_check waits for the check to finish */
@@ -65,10 +56,11 @@ export const MCP_TOOLS = ['run_check', 'get_check', 'ask_followup', 'deployer_hi
 
 const INSTRUCTIONS = [
   'ApeCheck checks whether a crypto project is real: an agent opens the site, tests what it claims, reads the X account,',
-  'the contract, the holders and the deployer history, and scores the narrative and the coin (0-100).',
-  'run_check starts a check (one of your daily checks; a recent check of the same project is returned free) and waits up',
-  'to 150 seconds. If it is still running, call get_check with its id a minute later. ask_followup answers questions',
-  'about a finished check from its record. deployer_history shows what a wallet launched before.',
+  'the contract, the holders and the other coins ApeCheck has checked from the same deployer, and scores the narrative',
+  'and the coin (0-100). run_check starts a check (one of your daily checks; a recent check of the same project is',
+  'returned free) and waits up to 150 seconds. If it is still running, call get_check with its id a minute later.',
+  'ask_followup answers questions about a finished check from its record. deployer_history lists the coins from a wallet',
+  'that ApeCheck has checked.',
   FOOTER_DISCLAIMER,
 ].join(' ');
 
@@ -253,17 +245,17 @@ async function runCheck(deps: AppDeps, request: FastifyRequest, target: string, 
 
 /* ---------------- deployer_history ---------------- */
 
-const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 /** EVM, Solana (base58) and Tron addresses are all plain alphanumeric strings of this length */
 const WALLET_RE = /^[A-Za-z0-9]{20,64}$/;
 
 export interface DeployerHistory {
   wallet: string;
-  /** anything is known about the wallet */
+  /** ApeCheck has checked at least one coin from the wallet */
   known: boolean;
-  /** the DevRadar record per chain (an EVM wallet can deploy on several) */
-  deployers: (DeployerDTO & { recordText: string })[];
-  /** the checked coins it deployed: each coin's latest check the viewer can see, newest first */
+  /**
+   * The coins from the wallet that ApeCheck has checked, on any chain: each coin's newest check naming the wallet that
+   * the viewer may see (public, or the viewer's own private check), newest first. Only coins checked by ApeCheck count.
+   */
   coins: {
     id: string;
     name: string;
@@ -280,73 +272,28 @@ export interface DeployerHistory {
   }[];
 }
 
-/**
- * A wallet's deployer record and its checked coins, as far as the viewer may see them: deployers listed on
- * /deployers (publicDeployerWhere) or named by the viewer's own private checks; coins from public verdicts or the
- * viewer's own private checks.
- */
+/** The coins from a wallet that ApeCheck has checked (an EVM address matches whatever its case). */
 export async function deployerHistory(deps: Pick<AppDeps, 'prisma' | 'env'>, wallet: string, viewer: Viewer): Promise<DeployerHistory> {
   const { prisma, env } = deps;
-  const address: Prisma.StringFilter = EVM_RE.test(wallet) ? { equals: wallet, mode: 'insensitive' } : { equals: wallet };
-  const own: Prisma.CheckWhereInput | null = viewer.userId ? { isPrivate: true, requesterId: viewer.userId } : null;
-  const visible: Prisma.CheckWhereInput = own ? { OR: [{ isPrivate: false }, own] } : { isPrivate: false };
-
-  const deployers = await prisma.deployer.findMany({
-    where: { AND: [{ address }, own ? { OR: [publicDeployerWhere, { coins: { some: { check: { status: 'DONE', ...own } } } }] } : publicDeployerWhere] },
-    orderBy: [{ launched: 'desc' }, { id: 'asc' }],
-  });
-  const checks = await prisma.check.findMany({
-    where: {
-      AND: [
-        { status: 'DONE' },
-        visible,
-        { coinFacts: { is: { OR: [{ deployerAddress: address }, ...(deployers.length ? [{ deployerId: { in: deployers.map(d => d.id) } }] : [])] } } },
-      ],
-    },
-    orderBy: [{ finishedAt: 'desc' }, { id: 'desc' }],
-    take: 500,
-    select: {
-      shortId: true,
-      targetId: true,
-      narScore: true,
-      narBand: true,
-      coinScore: true,
-      coinBand: true,
-      totalScore: true,
-      finishedAt: true,
-      target: { select: { name: true, ticker: true, chain: true, ca: true } },
-    },
-  });
-  const seen = new Set<string>();
-  const coins: DeployerHistory['coins'] = [];
+  const { coins } = await deployerCoins(prisma, { address: wallet, viewerId: viewer.userId ?? null, take: COINS_MAX });
   const appUrl = env.APP_URL.replace(/\/+$/, '');
-  for (const c of checks) {
-    if (seen.has(c.targetId)) continue;
-    seen.add(c.targetId);
-    coins.push({
+  return {
+    wallet,
+    known: coins.length > 0,
+    coins: coins.map(c => ({
       id: c.shortId,
-      name: c.target.name,
-      ticker: c.target.ticker,
-      chain: chainFromDb(c.target.chain),
-      ca: c.target.ca,
+      name: c.name,
+      ticker: c.ticker,
+      chain: c.chain,
+      ca: c.ca,
       coinScore: c.coinScore,
       coinVerdict: coinVerdictOf(c.coinScore, c.coinBand),
       narrative: c.narScore,
       verdict: narrativeOf(c.narScore, c.narBand)?.verdict ?? null,
       total: c.totalScore,
-      checkedAt: c.finishedAt ? c.finishedAt.toISOString() : null,
+      checkedAt: c.finishedAt.toISOString(),
       report_url: `${appUrl}/c/${c.shortId}`,
-    });
-    if (coins.length >= COINS_MAX) break;
-  }
-  return {
-    wallet,
-    known: deployers.length > 0 || coins.length > 0,
-    deployers: deployers.map(d => ({
-      ...toDeployerDTO(d),
-      recordText: deployerLine({ record: recordFromDb(d.record), launched: d.launched, dead: d.dead, fundedFrom: d.fundedFrom }),
     })),
-    coins,
   };
 }
 
@@ -406,7 +353,7 @@ export function buildMcpServer(deps: AppDeps, request: FastifyRequest, signal: A
     'ask_followup',
     {
       title: 'Ask a follow-up',
-      description: 'Ask a question about a finished check, answered from what the check recorded (e.g. "who funded the deployer?"). 3 to 280 characters.',
+      description: 'Ask a question about a finished check, answered from what the check recorded (e.g. "is the mint renounced?"). 3 to 280 characters.',
       inputSchema: {
         id: z.string().trim().min(1).max(64).describe('Check id'),
         question: z.string().max(1000).describe('The question, 3 to 280 characters'),
@@ -424,7 +371,7 @@ export function buildMcpServer(deps: AppDeps, request: FastifyRequest, signal: A
     'deployer_history',
     {
       title: 'Deployer history',
-      description: "What a wallet launched before: its deployer record (builder, mixed record or serial launcher) and the coins of it that were checked, with their scores.",
+      description: 'The coins from a wallet that ApeCheck has checked, with their scores. Only coins checked by ApeCheck are counted.',
       inputSchema: { wallet: z.string().trim().min(20).max(64).describe('Deployer wallet address (EVM 0x…, Solana or Tron)') },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

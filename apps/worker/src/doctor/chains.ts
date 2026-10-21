@@ -172,7 +172,7 @@ export async function probeEtherscan(deps: { env: Env; evm: Pick<EvmSource, 'cre
   if (!deps.env.ETHERSCAN_API_KEY) {
     return outcome(
       { ok: null, configured: false, importance: 'optional' },
-      'not configured: EVM deployer addresses are skipped (the deployer signal stays "unknown" without Fourtis either way)',
+      'not configured: EVM deployer wallets are not looked up (no deployer address and no deployer history for EVM coins)',
       ETHERSCAN_REMEDY,
     );
   }

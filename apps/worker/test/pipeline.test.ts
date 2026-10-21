@@ -90,7 +90,7 @@ beforeEach(async () => {
 async function stored(checkId: string) {
   return prisma.check.findUniqueOrThrow({
     where: { id: checkId },
-    include: { steps: { orderBy: { idx: 'asc' } }, claims: { orderBy: { idx: 'asc' } }, coinFacts: { include: { deployer: true } }, target: true },
+    include: { steps: { orderBy: { idx: 'asc' } }, claims: { orderBy: { idx: 'asc' } }, coinFacts: true, target: true },
   });
 }
 
@@ -98,7 +98,8 @@ function recomputed(c: Awaited<ReturnType<typeof stored>>) {
   const s = (v: string | null) => sigFromDb(v) as Signal;
   const coin = c.coinFacts
     ? {
-        deployer: (c.coinFacts.deployer?.record.toLowerCase() as 'builder' | 'mixed' | 'serial') ?? 'mixed',
+        // no source gives a launch record: the deployer is always scored as unknown ('mixed')
+        deployer: 'mixed' as const,
         bundle: s(c.coinFacts.sigBundle),
         holders: s(c.coinFacts.sigHolders),
         lp: s(c.coinFacts.sigLp),
@@ -227,7 +228,7 @@ describe('pipeline run(checkId)', () => {
     expect(await prisma.check.count({ where: { targetId: pub.targetId, isLatest: true } })).toBe(1);
   });
 
-  it('EVM coin: chain detected, site from token info, coin facts, Deployer upsert, PricePoint, re-keyed Target', async () => {
+  it("EVM coin: chain detected, site from token info, coin facts from ApeCheck's own reads, PricePoint, re-keyed Target", async () => {
     const url = sites.get('working-app')!.url;
     // an earlier check already owns the canonical key: the new check is re-pointed to it
     const existing = await prisma.target.create({ data: { key: `ca:base:${COIN}`, kind: 'COIN', chain: 'BASE', ca: COIN, name: '$ORBIT', checkCount: 1 } });
@@ -241,10 +242,9 @@ describe('pipeline run(checkId)', () => {
       coinFacts: {
         [COIN]: {
           chain: 'base', address: COIN, token: { name: 'Orbit', symbol: 'ORBIT', decimals: 18, supply: '1000000000' },
-          deployer: { address: '0xAbCd00000000000000000000000000000000Ef01', fundedFrom: 'Coinbase', launched: 3, dead: 2, firstSeen: '2025-01-02T00:00:00Z', source: 'DevRadar' },
-          bundle: { pct: 12.4, wallets: 7, source: 'BundleScan' },
-          holders: { top10Pct: 31, devHoldPct: 2, count: 1840, source: 'WhaleFlow' },
-          lp: { status: 'burned', lockedDays: null, source: 'On-chain' },
+          // what coinFacts gives an EVM coin: the Etherscan creator, authorities; no bundle, holders or LP source
+          deployer: { address: '0xAbCd00000000000000000000000000000000Ef01', launched: null, dead: null, source: 'On-chain' },
+          bundle: null, holders: null, lp: null,
           authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Renounced', source: 'On-chain' },
           market: null, stubbed: [], errors: [],
         },
@@ -263,23 +263,26 @@ describe('pipeline run(checkId)', () => {
     const texts = c.steps.map(s => s.text);
     expect(texts[0]).toBe('Contract on Base: 0x111…1111');
     expect(texts[1]).toBe('Website from token metadata: working-app.test');
-    expect(texts).toContain('Deployer: 3 earlier tokens, 2 dead');
-    expect(texts).toContain('Launch: 12.4% of supply bought by 7 bundled wallets');
-    expect(texts).toContain('Top 10 holders own 31%, dev wallet 2%, liquidity burned');
+    const step = (t: string) => c.steps.find(s => s.text === t);
+    expect(step('Deployer history: no earlier launches seen by ApeCheck (0xAbC…Ef01)')).toMatchObject({ status: 'WARN', source: 'ApeCheck' });
+    expect(step('Bundle share: not checked')).toMatchObject({ status: 'WARN', source: null });
+    expect(step('Holder share: not checked')).toMatchObject({ status: 'WARN', source: null });
+    expect(step('Authorities: Renounced')).toMatchObject({ status: 'OK', source: 'On-chain' });
     expect(texts[texts.length - 1]).toMatch(/^Scoring \d+ claims and the coin$/);
-    expect(c.steps.find(s => s.text.startsWith('Launch:'))?.source).toBe('BundleScan');
 
     const f = c.coinFacts!;
-    expect([f.sigDeployer, f.sigBundle, f.sigHolders, f.sigLp, f.sigAuthorities]).toEqual(['WARN', 'WARN', 'WARN', 'OK', 'OK']);
-    expect(f.lpStatus).toBe('burned');
-    expect(f.deployer).toMatchObject({ chain: 'BASE', address: '0xabcd00000000000000000000000000000000ef01', record: 'MIXED', launched: 3, dead: 2, fundedFrom: 'Coinbase' });
+    expect([f.sigDeployer, f.sigBundle, f.sigHolders, f.sigLp, f.sigAuthorities]).toEqual(['WARN', 'WARN', 'WARN', 'WARN', 'OK']);
+    expect([f.bundlePct, f.top10Pct, f.lpStatus, f.holders]).toEqual([null, null, null, null]);
+    expect(f.deployerId).toBeNull();
     expect(f.deployerAddress).toBe('0xabcd00000000000000000000000000000000ef01');
-    expect(c.coinScore).toBe(scoreCoin({ deployer: 'mixed', bundle: 'warn', holders: 'warn', lp: 'ok', authorities: 'ok' }).score);
+    expect(await prisma.deployer.count()).toBe(0);
+    // the deployer history is shown, never scored: the deployer counts as unknown
+    expect(c.coinScore).toBe(scoreCoin({ deployer: 'mixed', bundle: 'warn', holders: 'warn', lp: 'warn', authorities: 'ok' }).score);
     const r = recomputed(c);
     expect(c.narScore).toBe(r.narrative.score);
     expect(c.totalScore).toBe(r.total);
     expect(c.coinBand).toBe(r.coin!.band.key);
-    expect(c.coinSummary).toBeTruthy();
+    expect(c.coinSummary).toBe('Some of the coin data was not checked.');
 
     expect(Number(c.priceAtCheck)).toBeCloseTo(0.0123, 6);
     expect(Number(c.mcAtCheck)).toBe(1_230_000);
@@ -290,66 +293,128 @@ describe('pipeline run(checkId)', () => {
     expect(c.target.priceUpdatedAt).not.toBeNull();
     expect(c.target.lastCh24).toBe(6.1);
 
-    // follow-up answers (M3 asks / bot) read only the stored check
+    // follow-up answers (M3 asks / bot) read only the stored check, and the deployer history from ApeCheck's checks
     const answerData = await loadAnswerData(prisma, check.id);
-    expect(await heuristicAi().answer('who funded the deployer?', answerData!)).toBe('The deployer was funded from Coinbase. Track record: 3 earlier tokens, 2 dead.');
+    const ai = heuristicAi();
+    expect(await ai.answer('who funded the deployer?', answerData!)).toBe('Deployer history: no earlier launches seen by ApeCheck (0xabc…ef01).');
+    expect(await ai.answer('was it bundled?', answerData!)).toBe('Bundle share was not checked for this coin.');
+    expect(await ai.answer('who are the top 10 holders?', answerData!)).toBe('Holder share was not checked for this coin.');
+    expect(await ai.answer('is the liquidity locked?', answerData!)).toBe('LP status was not checked for this coin.');
   });
 
-  it('a deployer wallet without launch history is kept as an address only: no Deployer row, no counts', async () => {
-    const check = await createCheck(COIN);
-    const data: FakeData = {
-      evmChains: { [COIN]: 'base' },
-      coinFacts: {
-        [COIN]: {
-          chain: 'base', address: COIN, token: { name: 'Orbit', symbol: 'ORBIT', decimals: 18, supply: '1000000000' },
-          deployer: { address: '0xAbCd00000000000000000000000000000000Ef02', fundedFrom: null, launched: null, dead: null, firstSeen: null, source: 'On-chain' },
-          bundle: null, holders: null, lp: null,
-          authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Mint renounced', source: 'On-chain' },
-          market: null, stubbed: ['fourtis'], errors: [],
-        },
+  /** a finished check of another coin on Base whose deployer wallet is `wallet` (as an earlier ApeCheck check stored it) */
+  let coinSeq = 0;
+  async function checkedCoin(ticker: string, wallet: string, opts: { isPrivate?: boolean } = {}) {
+    const ca = `0x${(++coinSeq).toString(16).padStart(40, 'a')}`;
+    const target = await prisma.target.create({ data: { key: `ca:base:${ca}`, kind: 'COIN', chain: 'BASE', ca, ticker, name: `$${ticker}`, checkCount: 1 } });
+    const c = await prisma.check.create({
+      data: {
+        shortId: `dh${ticker.toLowerCase()}`.slice(0, 7).padEnd(7, '0'), targetId: target.id, targetRaw: ca, status: 'DONE', isPrivate: opts.isPrivate ?? false,
+        isLatest: !opts.isPrivate, coinScore: 40, coinBand: 'sketchy', finishedAt: new Date(Date.now() - 3600_000),
       },
-    };
-    expect((await runCheck(check.id, deps(data))).status).toBe('done');
-    const c = await stored(check.id);
-    expect(c.coinFacts?.deployerId).toBeNull();
-    expect(c.coinFacts?.deployerAddress).toBe('0xabcd00000000000000000000000000000000ef02');
-    expect(c.coinFacts?.sigDeployer).toBe('WARN');
-    expect(await prisma.deployer.count()).toBe(0);
-    expect(c.steps.some(s => s.text === 'Deployer history not checked (0xAbC…Ef02)')).toBe(true);
+    });
+    await prisma.coinFacts.create({
+      data: { checkId: c.id, deployerAddress: wallet.toLowerCase(), sigDeployer: 'WARN', sigBundle: 'WARN', sigHolders: 'WARN', sigLp: 'WARN', sigAuthorities: 'OK' },
+    });
+    return c;
+  }
+
+  const evmCoinFacts = (wallet: string): FakeData['coinFacts'] => ({
+    [COIN]: {
+      chain: 'base', address: COIN, token: { name: 'Orbit', symbol: 'ORBIT', decimals: 18, supply: '1000000000' },
+      deployer: { address: wallet, launched: null, dead: null, source: 'On-chain' },
+      bundle: null, holders: null, lp: null,
+      authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Mint renounced', source: 'On-chain' },
+      market: null, stubbed: [], errors: [],
+    },
   });
 
-  it("a Max user's private coin check never creates or refreshes a Deployer row; it links one the public already knows", async () => {
+  it("deployer history from ApeCheck's own checks: other public coins of the wallet, never a private one; shown, not scored", async () => {
+    const wallet = '0xAbCd00000000000000000000000000000000Ef02';
+    await checkedCoin('XCOIN', wallet);
+    await checkedCoin('ZPRIV', wallet, { isPrivate: true });
+    await checkedCoin('OTHER', '0x2222000000000000000000000000000000002222');
+    const check = await createCheck(COIN);
+    expect((await runCheck(check.id, deps({ evmChains: { [COIN]: 'base' }, coinFacts: evmCoinFacts(wallet) }))).status).toBe('done');
+    const c = await stored(check.id);
+    const step = c.steps.find(s => s.text.startsWith('Deployer history:'))!;
+    expect(step).toMatchObject({ text: 'Deployer history: 1 other coin from this wallet checked by ApeCheck, $XCOIN (0xAbC…Ef02)', status: 'WARN', source: 'ApeCheck' });
+    expect(JSON.stringify(c.steps)).not.toContain('ZPRIV');
+    expect(c.coinFacts).toMatchObject({ deployerId: null, deployerAddress: wallet.toLowerCase(), sigDeployer: 'WARN' });
+    expect(c.coinScore).toBe(scoreCoin({ deployer: 'mixed', bundle: 'warn', holders: 'warn', lp: 'warn', authorities: 'ok' }).score);
+    expect(c.coinScore).toBe(recomputed(c).coin!.score);
+    expect(await prisma.deployer.count()).toBe(0);
+  });
+
+  it("a Max user's private coin check reads the public history, and never shows up in anyone else's", async () => {
     const user = await prisma.user.create({ data: { evmAddress: '0x' + '8'.repeat(40), tier: 'MAX' } });
     const wallet = '0xabcd00000000000000000000000000000000ef03';
-    const data: FakeData = {
-      evmChains: { [COIN]: 'base' },
-      coinFacts: {
-        [COIN]: {
-          chain: 'base', address: COIN, token: { name: 'Orbit', symbol: 'ORBIT', decimals: 18, supply: '1000000000' },
-          deployer: { address: wallet, fundedFrom: 'Binance', launched: 7, dead: 6, firstSeen: '2025-01-02T00:00:00Z', source: 'DevRadar' },
-          bundle: null, holders: null, lp: null,
-          authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Mint renounced', source: 'On-chain' },
-          market: null, stubbed: [], errors: [],
-        },
-      },
-    };
-    const privately = async () => {
-      const c = await createCheck(COIN);
-      await prisma.check.update({ where: { id: c.id }, data: { isPrivate: true, requesterId: user.id } });
-      expect((await runCheck(c.id, deps(data))).status).toBe('done');
-      return stored(c.id);
-    };
-    // nobody has seen this wallet in public: no Deployer row (the deployers page would list it), the report keeps it
-    const first = await privately();
+    await checkedCoin('PUBC', wallet);
+    const c = await createCheck(COIN);
+    await prisma.check.update({ where: { id: c.id }, data: { isPrivate: true, requesterId: user.id } });
+    expect((await runCheck(c.id, deps({ evmChains: { [COIN]: 'base' }, coinFacts: evmCoinFacts(wallet) }))).status).toBe('done');
+    const priv = await stored(c.id);
+    expect(priv.steps.map(s => s.text)).toContain('Deployer history: 1 other coin from this wallet checked by ApeCheck, $PUBC (0xabc…ef03)');
+    // its wallet is stored for its own report, but another coin of the wallet does not count it
+    expect(priv.coinFacts?.deployerAddress).toBe(wallet);
+    const another = '0x3333333333333333333333333333333333333333';
+    const next = await createCheck(another);
+    const facts = evmCoinFacts(wallet)![COIN];
+    expect((await runCheck(next.id, deps({ evmChains: { [another]: 'base' }, coinFacts: { [another]: { ...facts, address: another } } }))).status).toBe('done');
+    const n = await stored(next.id);
+    expect(n.steps.map(s => s.text)).toContain('Deployer history: 1 other coin from this wallet checked by ApeCheck, $PUBC (0xabc…ef03)');
     expect(await prisma.deployer.count()).toBe(0);
-    expect(first.coinFacts).toMatchObject({ deployerId: null, deployerAddress: wallet });
-    expect(first.steps.map(s => s.text)).toContain('Deployer: 7 earlier tokens, 6 dead');
-    // the public knows the wallet: a private check links that row and leaves its counts alone
-    const known = await prisma.deployer.create({ data: { chain: 'BASE', address: wallet, record: 'BUILDER', launched: 1, dead: 0, fundedFrom: 'Coinbase' } });
-    const second = await privately();
-    expect(second.coinFacts?.deployerId).toBe(known.id);
-    expect(await prisma.deployer.findUniqueOrThrow({ where: { id: known.id } })).toMatchObject({ record: 'BUILDER', launched: 1, dead: 0, fundedFrom: 'Coinbase' });
-    expect(await prisma.deployer.count()).toBe(1);
+  });
+
+  it("no third-party name in any agent-run step: Solana, EVM and Tron coins with nothing but ApeCheck's own facts", async () => {
+    const MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+    const TRC = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+    const EVM = '0x4444444444444444444444444444444444444444';
+    const empty = (chain: 'sol' | 'base' | 'trx', address: string, errors: string[] = []) => ({
+      chain, address, token: null, deployer: null, bundle: null, holders: null, lp: null, authorities: null, market: null, stubbed: [], errors,
+    });
+    const cases = [
+      // Solana: holders from the chain, the deployer is not looked up; the Solana RPC failed for the authorities
+      {
+        target: MINT,
+        data: {
+          coinFacts: {
+            [MINT.toLowerCase()]: {
+              ...empty('sol', MINT, ['solana.mintInfo: timeout']),
+              holders: { top10Pct: 31, devHoldPct: null, count: null, source: 'On-chain' as const },
+            },
+          },
+        } as FakeData,
+        expected: ['Deployer: not checked', 'Bundle share: not checked', 'Top 10 holders own 31%, LP status not checked', 'Mint and freeze authorities unknown (Solana RPC unavailable)'],
+      },
+      // EVM: the Etherscan creator lookup failed
+      {
+        target: EVM,
+        data: { evmChains: { [EVM]: 'base' }, coinFacts: { [EVM]: empty('base', EVM, ['evm.creator: HTTP 500 from api.etherscan.io']) } } as FakeData,
+        expected: ['Deployer: not checked (Etherscan unavailable)', 'Bundle share: not checked', 'Holder share: not checked', 'Mint and freeze authorities unknown'],
+      },
+      // Tron: the contract's origin address, nothing else
+      {
+        target: TRC,
+        data: { coinFacts: { [TRC.toLowerCase()]: { ...empty('trx', TRC), deployer: { address: 'TBckp5W67rgZ8kE5CArzqWgCpBHPqarGht', launched: null, dead: null, source: 'On-chain' as const } } } } as FakeData,
+        expected: ['Deployer history: no earlier launches seen by ApeCheck (TBckp…rGht)', 'Bundle share: not checked', 'Holder share: not checked', 'Mint and freeze authorities unknown'],
+      },
+    ];
+    for (const k of cases) {
+      const check = await createCheck(k.target);
+      expect((await runCheck(check.id, deps(k.data))).status).toBe('done');
+      const c = await stored(check.id);
+      const texts = c.steps.map(s => s.text);
+      for (const line of k.expected) expect([k.target, texts]).toEqual([k.target, expect.arrayContaining([line])]);
+      const all = JSON.stringify({ steps: c.steps, summary: c.summary, coinSummary: c.coinSummary, evidence: c.evidence, claims: c.claims });
+      expect(all).not.toMatch(/fourtis|devradar|bundlescan|whaleflow/i);
+      for (const s of c.steps) expect([s.text, s.source]).not.toEqual([s.text, expect.stringMatching(/DevRadar|BundleScan|WhaleFlow/)]);
+      // "unavailable" only for a source that really failed (an RPC, Etherscan, a market source not configured here)
+      const unavailable = texts.filter(t => /unavailable/.test(t) && !/\((Solana RPC|Etherscan) unavailable\)$/.test(t) && !/^(DexScreener|X) unavailable/.test(t));
+      expect([k.target, unavailable]).toEqual([k.target, []]);
+      expect(c.coinFacts?.sigBundle).toBe('WARN');
+      expect(c.coinFacts?.sigLp).toBe('WARN');
+    }
   });
 
   it('M1 acceptance: waitlist and dead-button sites cannot score above Partly real, a wallet connect button included', async () => {
@@ -407,7 +472,7 @@ describe('pipeline run(checkId)', () => {
       coinFacts: {
         [COIN]: {
           chain: 'base', address: COIN, token: { name: 'Zero\u0000', symbol: 'ZERO', decimals: 18, supply: '1' },
-          deployer: { address: '0xAbCd00000000000000000000000000000000Ef03', fundedFrom: 'Bin\u0000ance', launched: 1, dead: 0, firstSeen: null, source: 'DevRadar' },
+          deployer: { address: '0xAbCd00000000000000000000000000000000Ef03', launched: null, dead: null, source: 'On-chain' },
           bundle: null, holders: null, lp: null,
           authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Renounced\u0000', source: 'On-chain' },
           market: null, stubbed: [], errors: [],
@@ -429,7 +494,7 @@ describe('pipeline run(checkId)', () => {
     expect(ev.site?.title).toMatch(/^Zero +protocol/);
     expect(c.target.name).toBe('$ZERO');
     expect(c.coinFacts?.authorities).toBe('Renounced');
-    expect(c.coinFacts?.deployer?.fundedFrom).toBe('Binance');
+    expect(c.coinFacts?.deployerAddress).toBe('0xabcd00000000000000000000000000000000ef03');
     expect(c.claims.some(x => x.text.startsWith('Live on Base mainnet'))).toBe(true);
   });
 

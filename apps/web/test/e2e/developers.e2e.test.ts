@@ -5,7 +5,7 @@
  *   ping, see it delivered and check its ApeCheck-Signature;
  * - /api for everyone else: the Max line under the code (with Connect wallet when signed out), no key or webhook lists;
  * - the code tabs' real shapes (REST report fields, the signature header, the MCP server and its tools);
- * - the Coin tab's wallet clusters for Pro, not for a signed-out reader;
+ * - holder clusters an older check stored are shown to nobody, Pro included (the Coin tab names ApeCheck's sources only);
  * - the page at 1440 and 390 px, light and dark (screenshots in the log folder, no sideways scroll).
  */
 import { createHmac } from 'node:crypto';
@@ -444,12 +444,12 @@ describe('/api for a Max wallet', () => {
   });
 });
 
-describe('Coin tab: wallet clusters', () => {
+describe('Coin tab: holder clusters an older check stored', () => {
   beforeAll(async () => {
     await db.check.update({ where: { shortId: 'coin001' }, data: { evidence: { clusters: CLUSTERS } } });
   });
 
-  it('Pro sees the clusters in the facts style; a signed-out reader does not', async () => {
+  it('are shown to nobody, Pro included; the facts name only ApeCheck\'s own sources', async () => {
     const out = await newPage();
     await go(out, '/c/coin001');
     await out.click('.rtabs button:has-text("Coin")');
@@ -460,16 +460,16 @@ describe('Coin tab: wallet clusters', () => {
     await go(page, '/c/coin001');
     await signIn(page);
     await page.click('.rtabs button:has-text("Coin")');
-    await page.waitForSelector('.clusters');
-    expect(await page.textContent('.clusters .h4')).toBe('Wallet clusters Pro');
-    const rows = await page.$$eval('.clusters .facts dt', els => els.map(e => e.textContent));
-    expect(rows).toEqual(['Launch snipers', 'Team wallets']);
-    const values = await page.$$eval('.clusters .facts dd:not(.src)', els => els.map(e => e.textContent));
-    expect(values).toEqual(['12.4% of supply14 wallets, funded from 0x9a1…c0de', '6.3% of supply3 wallets, funded from Binance hot wallet']);
-    expect(await page.$$eval('.clusters .facts dd.src', els => els.map(e => e.textContent))).toEqual(['On-chain', 'On-chain']);
+    await page.waitForSelector('#tp .facts');
+    expect(await page.$('.clusters')).toBeNull();
+    const tab = (await page.textContent('#tp')) ?? '';
+    expect(tab).not.toMatch(/wallet clusters|launch snipers|fourtis|devradar|bundlescan|whaleflow/i);
+    const sources = await page.$$eval('#tp .facts dd.src', els => els.map(e => e.textContent ?? ''));
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every(s => ['', 'On-chain', 'ApeCheck', 'DexScreener'].includes(s))).toBe(true);
     const dir = path.join(inject('e2eLogDir'), 'm4-shots');
     fs.mkdirSync(dir, { recursive: true });
-    await page.locator('#tp').screenshot({ path: path.join(dir, 'coin-clusters-1440-light.png') });
+    await page.locator('#tp').screenshot({ path: path.join(dir, 'coin-facts-1440-light.png') });
   });
 });
 

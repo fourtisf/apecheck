@@ -1,11 +1,11 @@
 /**
  * M4 UI without a browser: who gets the API keys and webhooks on /api and who reads the Max line, the status pills of
- * webhooks and deliveries, the webhook URL check before any request, the code tabs' real shapes, and the Coin tab's
- * wallet clusters (Pro/Max only, in the facts style).
+ * webhooks and deliveries, the webhook URL check before any request, the code tabs' real shapes, and the Coin tab and
+ * side card with ApeCheck's own sources only.
  */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { MeDTO } from '@apecheck/core';
+import type { CheckReportDTO, MeDTO } from '@apecheck/core';
 import { MeProvider } from '@/components/Me';
 import { CodeTabs } from '@/components/pages/CodeTabs';
 import {
@@ -25,6 +25,7 @@ import {
 } from '@/components/pages/Developers';
 import { ApiRequestError } from '@/lib/api';
 import { CoinTab } from '@/components/report/CoinTab';
+import { Side } from '@/components/report/Side';
 import { report } from './fixtures';
 
 function me(o: Partial<MeDTO> = {}): MeDTO {
@@ -169,51 +170,104 @@ describe('/api code tabs', () => {
   });
 });
 
-describe('Coin tab: wallet clusters', () => {
-  const coin = (clusters: { label: string; wallets: number; pct: number; fundedFrom: string | null }[] | null) =>
+describe("Coin tab: ApeCheck's own sources only", () => {
+  const coin = (o: Partial<NonNullable<CheckReportDTO['coin']>> = {}, chain: CheckReportDTO['chain'] = 'sol') =>
     report({
       kind: 'coin',
+      chain,
       hasCoin: true,
       coinScore: 44,
       coinBand: 'sketchy',
       coin: {
         verdict: 'SKETCHY',
         score: 44,
-        sig: { deployer: 'warn', bundle: 'ok', holders: 'warn', lp: 'ok', authorities: 'ok' },
+        sig: { deployer: 'warn', bundle: 'warn', holders: 'warn', lp: 'warn', authorities: 'ok' },
         bundlePct: null,
         bundleWallets: null,
-        top10Pct: 31,
+        top10Pct: null,
         devHoldPct: null,
-        holders: 812,
+        holders: null,
         lpStatus: null,
         lpLabel: 'Unknown',
-        authorities: null,
+        authorities: 'Renounced',
         liquidityUsd: null,
         pairCreatedAt: null,
-        deployer: null,
+        deployerAddress: null,
+        deployerHistory: null,
         deployerText: null,
-        clusters,
+        ...o,
       },
     });
+  /** [label, value text, source] of every fact row */
+  const rows = (html: string) =>
+    [...html.matchAll(/<dt>([^<]*)<\/dt><dd>(.*?)<\/dd><dd class="src">([^<]*)<\/dd>/g)].map(m => [m[1], m[2].replace(/<[^>]+>/g, ''), m[3]]);
 
-  it('listed in the facts style: label, share of supply, wallets, funded from (a wallet in mono)', () => {
-    const out = renderToStaticMarkup(
-      <CoinTab
-        report={coin([
-          { label: 'Launch snipers', wallets: 14, pct: 12.4, fundedFrom: '0x9a1f00000000000000000000000000000000c0de' },
-          { label: 'Team wallets', wallets: 1, pct: 6.25, fundedFrom: 'Binance hot wallet' },
-          { label: 'Unknown funder', wallets: 3, pct: 2, fundedFrom: null },
-        ])}
-      />,
-    );
-    const block = out.slice(out.indexOf('<div class="clusters">'));
-    expect(block).toContain('<h4 class="h4">Wallet clusters <span class="lock">Pro</span></h4>');
-    expect(block).toContain('<dt>Launch snipers</dt><dd>12.4% of supply<small>14 wallets, funded from <span class="mono" title="0x9a1f00000000000000000000000000000000c0de">0x9a1…c0de</span></small></dd><dd class="src">On-chain</dd>');
-    expect(block).toContain('<dt>Team wallets</dt><dd>6.3% of supply<small>1 wallet, funded from Binance hot wallet</small></dd>');
-    expect(block).toContain('<dt>Unknown funder</dt><dd>2% of supply<small>3 wallets</small></dd>');
+  it('a Solana coin: holders from the chain; what ApeCheck has no source for reads "Not checked", untagged', () => {
+    const out = renderToStaticMarkup(<CoinTab report={coin({ top10Pct: 31 })} />);
+    expect(rows(out)).toEqual([
+      ['Deployer', 'Not checked', ''],
+      ['Deployer history', 'Not checked', ''],
+      ['Bundled at launch', 'Not checked', ''],
+      ['Top 10 holders', '31%Excludes the liquidity pool', 'On-chain'],
+      ['Liquidity', 'Not checked', ''],
+      ['Authorities', 'Renounced', 'On-chain'],
+      ['Holders', 'Not checked', ''],
+      ['Market cap', 'Unknown', 'DexScreener'],
+    ]);
+    expect(out).toContain('The full holder split was not checked for this coin.');
+    expect(out).not.toMatch(/fourtis|devradar|bundlescan|whaleflow|wallet clusters|unavailable/i);
   });
 
-  it('nothing when the API sent none (other viewers, or no clusters)', () => {
-    for (const c of [null, []]) expect(renderToStaticMarkup(<CoinTab report={coin(c)} />)).not.toContain('Wallet clusters');
+  it("an EVM coin: the deployer wallet on-chain, its history from ApeCheck's checks; old stored values stay, untagged", () => {
+    const W = '0xabcd00000000000000000000000000000000ef02';
+    const out = renderToStaticMarkup(
+      <CoinTab
+        report={coin(
+          {
+            deployerAddress: W,
+            deployerHistory: { total: 2, coins: [] },
+            deployerText: '2 other coins from this wallet checked by ApeCheck, $FOO and $BAR',
+            // a check stored when a third-party service still filled these
+            bundlePct: 12.4,
+            bundleWallets: 7,
+            top10Pct: 31,
+            holders: 812,
+          },
+          'base',
+        )}
+      />,
+    );
+    expect(rows(out)).toEqual([
+      ['Deployer', '0xabc…ef02', 'On-chain'],
+      ['Deployer history', '2 other coins from this wallet checked by ApeCheck, $FOO and $BAR', 'ApeCheck'],
+      ['Bundled at launch', '12.4% in 7 wallets', ''],
+      ['Top 10 holders', '31%Excludes the liquidity pool', ''],
+      ['Liquidity', 'Not checked', ''],
+      ['Authorities', 'Renounced', 'On-chain'],
+      ['Holders', '812', ''],
+      ['Market cap', 'Unknown', 'DexScreener'],
+    ]);
+    expect(rows(renderToStaticMarkup(<CoinTab report={coin({ deployerAddress: W, deployerHistory: { total: 0, coins: [] }, deployerText: 'no earlier launches seen by ApeCheck' }, 'base')} />))[1]).toEqual([
+      'Deployer history',
+      'No earlier launches seen by ApeCheck',
+      'ApeCheck',
+    ]);
+  });
+
+  it('the side card: the wallet and its ApeCheck history, "All their coins" only when there are some', () => {
+    const W = '0xabcd00000000000000000000000000000000ef02';
+    const card = (o: Partial<NonNullable<CheckReportDTO['coin']>>) => {
+      const html = renderToStaticMarkup(<Side report={coin({ deployerAddress: W, ...o }, 'base')} />);
+      return html.slice(html.indexOf('<h3>Deployer'), html.indexOf('</div>', html.indexOf('<h3>Deployer')));
+    };
+    const some = card({ deployerHistory: { total: 1, coins: [] }, deployerText: '1 other coin from this wallet checked by ApeCheck, $FOO' });
+    expect(some).toContain('All their coins');
+    expect(some).toContain('0xabc…ef02');
+    expect(some).toContain('1 other coin from this wallet checked by ApeCheck, $FOO.');
+    const none = card({ deployerHistory: { total: 0, coins: [] }, deployerText: 'no earlier launches seen by ApeCheck' });
+    expect(none).not.toContain('All their coins');
+    expect(none).toContain('No earlier launches seen by ApeCheck.');
+    expect(card({ deployerHistory: null })).toContain('Deployer history not checked.');
+    expect(renderToStaticMarkup(<Side report={coin({}, 'sol')} />)).not.toContain('<h3>Deployer');
   });
 });

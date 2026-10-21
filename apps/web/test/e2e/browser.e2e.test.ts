@@ -10,7 +10,7 @@
  */
 import type { Browser, Page } from 'playwright';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
-import { COINS, DEPLOYERS, POST_CHECK, BOT_CHECK, FAILED_CHECK, SITES, clearBotReply, seedBotReply } from './seed';
+import { COINS, DEP_1, DEP_2, POST_CHECK, BOT_CHECK, FAILED_CHECK, SITES, clearBotReply, seedBotReply } from './seed';
 import { WEB_URL, flushRedis, openDb, playwright } from './env';
 
 let browser: Browser;
@@ -139,31 +139,31 @@ describe('URL filters on Back', () => {
   });
 
   it('/deployers keeps ?chain=&sort= and the filtered rows', async () => {
-    const baseByDead = DEPLOYERS.filter(d => d.chain === 'BASE')
-      .sort((a, b) => b.dead - a.dead)
-      .map(d => `dep-base-${d.address}`);
+    // most checked coins first: 0x1111… (2) before 0x2222… (1), the reverse of "Most real first" (1 of 2 vs 1 of 1)
+    const baseByChecked = [`dep-base-${DEP_1}`, `dep-base-${DEP_2}`];
     const state = (page: Page) =>
       page.evaluate(() => ({
         chain: document.querySelector('#dChain button[aria-pressed="true"]')?.textContent,
         sort: (document.querySelector('#dSort') as HTMLSelectElement | null)?.value,
         rows: [...document.querySelectorAll('#dRows .dep')].map(d => d.id),
       }));
-    const want = { chain: 'Base', sort: 'dead', rows: baseByDead };
+    const want = { chain: 'Base', sort: 'checked', rows: baseByChecked };
 
     const page = await open('/deployers');
     await ready(page, '#dChain button');
     await page.click('#dChain button:has-text("Base")');
-    await page.selectOption('#dSort', 'dead');
-    await page.waitForURL(`${WEB_URL}/deployers?chain=base&sort=dead`);
+    await until(page, () => state(page), s => JSON.stringify(s.rows) === JSON.stringify([...baseByChecked].reverse()), 'most real first');
+    await page.selectOption('#dSort', 'checked');
+    await page.waitForURL(`${WEB_URL}/deployers?chain=base&sort=checked`);
     await until(page, () => state(page), s => JSON.stringify(s) === JSON.stringify(want), 'filtered deployers');
 
     await page.click('.nav a:has-text("X bot")');
     await page.waitForURL(`${WEB_URL}/bot`);
     await page.goBack();
-    await page.waitForURL(`${WEB_URL}/deployers?chain=base&sort=dead`);
+    await page.waitForURL(`${WEB_URL}/deployers?chain=base&sort=checked`);
     await until(page, () => state(page), s => JSON.stringify(s) === JSON.stringify(want), 'deployers after Back');
     await page.waitForTimeout(600);
-    expect(pathOf(page)).toBe('/deployers?chain=base&sort=dead');
+    expect(pathOf(page)).toBe('/deployers?chain=base&sort=checked');
     await page.close();
   });
 });

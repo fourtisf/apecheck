@@ -53,7 +53,6 @@ function searchWhere(term: string, fields: ('name' | 'ticker' | 'domain' | 'hand
   return {
     OR: [
       ...fields.map(f => ({ target: { [f]: like } }) as Prisma.CheckWhereInput),
-      { coinFacts: { is: { deployer: { is: { address: like } } } } },
       { coinFacts: { is: { deployerAddress: like } } },
     ],
   };
@@ -179,7 +178,7 @@ export function registerFeedRoutes(app: FastifyInstance, deps: AppDeps) {
         evidence: true,
         target: { select: { kind: true, name: true, ticker: true, chain: true, key: true } },
         _count: { select: { steps: true } },
-        steps: { orderBy: { idx: 'desc' }, take: 1, select: { text: true } },
+        steps: { orderBy: { idx: 'desc' }, take: 1, select: { text: true, source: true } },
       },
     });
     const progress = await readProgress(deps, rows.filter(r => r.status === 'RUNNING').map(r => r.id));

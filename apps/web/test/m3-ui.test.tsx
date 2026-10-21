@@ -1,11 +1,12 @@
 /**
  * M3 UI fixes without a browser: out-of-checks copy by tier, the access modal's lines, the private report's marker
  * and share card, wallet addresses in mono (no "0×") with a neutral avatar, the note counter's announcements, the
- * read-only (not disabled) ask box, the sign-in attempt that is dropped once the wallet modal closes.
+ * read-only (not disabled) ask box, the sign-in attempt that is dropped once the wallet modal closes, and the
+ * deployers page built from ApeCheck's own checks.
  */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { AuthNonceResponse, MeDTO } from '@apecheck/core';
+import type { AuthNonceResponse, DeployerRowDTO, MeDTO } from '@apecheck/core';
 import { accessSubtitle, accessTitle } from '@/components/AccessModal';
 import { CreditLine, outOfChecksText } from '@/components/feed/CreditLine';
 import { MeProvider } from '@/components/Me';
@@ -14,6 +15,8 @@ import { NotesTab, byLabel } from '@/components/report/NotesTab';
 import { ReportHeader } from '@/components/report/ReportHeader';
 import { ShareModal } from '@/components/ShareModal';
 import { Tiers } from '@/components/Tiers';
+import { DeployersView } from '@/components/pages/DeployersView';
+import { parseDeployerFilters } from '@/components/pages/params';
 import { WalletFlowError, walletSignIn, type SignInApi, type WalletOption } from '@/lib/wallet';
 import { report } from './fixtures';
 
@@ -68,6 +71,53 @@ describe('out of checks', () => {
     const out = renderToStaticMarkup(<Tiers me={me({ credits: 0, max: 0 })} onWallet={() => {}} />);
     expect(out).toContain('Free checks every day on the site');
     expect(out).not.toContain('>0 checks a day');
+  });
+
+  it('the Pro card lists only what ApeCheck itself does (no wallet clusters)', () => {
+    const out = renderToStaticMarkup(<Tiers me={me()} onWallet={() => {}} />);
+    expect(out).toContain('Ask follow-ups on the site and via the bot');
+    expect(out).not.toMatch(/cluster|deep holder/i);
+  });
+});
+
+describe('deployers page', () => {
+  const row = (o: Partial<DeployerRowDTO> = {}): DeployerRowDTO => ({
+    chain: 'base',
+    address: '0x2222222222222222222222222222222222222222',
+    checked: 2,
+    real: 1,
+    avgTotal: 54,
+    lastChecked: new Date(Date.now() - 3 * 3600_000).toISOString(),
+    coins: [{ id: 'cccc001', ticker: 'HELIX', name: '$HELIX', hue: 120, coinScore: 61, coinBand: 'ok' }],
+    ...o,
+  });
+  const view = (items: DeployerRowDTO[]) =>
+    renderToStaticMarkup(<DeployersView initial={{ items }} initialFilters={{ chain: 'all', sort: 'real', focus: null }} />);
+
+  it("columns from ApeCheck's own checks: wallet, chain, checked, real, avg total; no launch record", () => {
+    const out = view([row()]);
+    const head = out.slice(out.indexOf('<div class="tr th">'), out.indexOf('</div>', out.indexOf('<div class="tr th">')));
+    expect([...head.matchAll(/<span[^>]*>([^<]*)<\/span>/g)].map(m => m[1])).toEqual(['#', 'Wallet', 'Chain', 'Checked', 'Real', 'Avg total']);
+    expect(out).toContain('Last checked 3h ago');
+    expect(out).toContain('<span class="td num c-sc">1/2</span>');
+    expect(out).toContain('Coins from this wallet checked by ApeCheck:');
+    expect(out).toContain('Every wallet that deployed a coin ApeCheck has checked, and how its checked coins scored. Only coins checked on ApeCheck are counted.');
+    expect(out).not.toMatch(/launched|dead|funded|serial|builder|mixed record|devradar/i);
+  });
+
+  it('sorts by what ApeCheck knows; chains are the ones whose deployer it looks up; old sort links still open', () => {
+    const out = view([row()]);
+    const options = [...out.matchAll(/<option value="([^"]+)"[^>]*>([^<]*)<\/option>/g)].map(m => [m[1], m[2]]);
+    expect(options).toEqual([
+      ['real', 'Most real first'],
+      ['checked', 'Most checked coins first'],
+      ['recent', 'Recently checked first'],
+    ]);
+    const chains = [...out.slice(out.indexOf('id="dChain"')).matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map(m => m[1]).slice(0, 7);
+    expect(chains).toEqual(['All chains', 'Ethereum', 'Base', 'BNB', 'Arbitrum', 'Robinhood', 'Tron']);
+    for (const sort of ['dead', 'launched']) expect(parseDeployerFilters(new URLSearchParams(`sort=${sort}`)).sort).toBe('checked');
+    expect(parseDeployerFilters(new URLSearchParams('sort=recent')).sort).toBe('recent');
+    expect(parseDeployerFilters(new URLSearchParams('sort=nope')).sort).toBe('real');
   });
 });
 

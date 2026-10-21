@@ -1,8 +1,7 @@
 import Link from 'next/link';
-import { Fragment } from 'react';
-import { REP, cap, coinBand, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
+import { cap, coinBand, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { cssVars } from '../css';
-import { Dot, Facts, Unknown, noVerdict, type FactRow } from './util';
+import { Dot, Facts, NotChecked, Unknown, noVerdict, type FactRow } from './util';
 
 /** scoreBlock(): the coin score with its band and the 5-step meter. */
 function ScoreBlock({ n }: { n: number }) {
@@ -76,7 +75,7 @@ function Supply({ f }: { f: CoinFactsDTO }) {
         </div>
       ) : (
         <p className="muted" style={{ margin: '0 0 14px', fontSize: 13.5 }}>
-          The full holder split wasn&apos;t available for this coin.
+          The full holder split was not checked for this coin.
         </p>
       )}
       <ul className="legend">
@@ -84,7 +83,7 @@ function Supply({ f }: { f: CoinFactsDTO }) {
           <li key={s[0]}>
             <i className="sw" style={{ background: s[2] }} />
             {s[0]}
-            <b>{s[1] != null ? `${r1(s[1])}%` : <Unknown />}</b>
+            <b>{s[1] != null ? `${r1(s[1])}%` : <NotChecked />}</b>
           </li>
         ))}
       </ul>
@@ -92,8 +91,14 @@ function Supply({ f }: { f: CoinFactsDTO }) {
   );
 }
 
+/**
+ * The coin facts with their sources: ApeCheck's own reads only. "On-chain" for what the chain says (the deployer wallet,
+ * Solana's largest holders, authorities), "ApeCheck" for the other coins from the deployer that ApeCheck has checked.
+ * A fact with no source, or none this time, reads "Not checked" with no source tag; a value older checks stored stays
+ * shown, untagged.
+ */
 function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
-  const d = f.deployer;
+  const addr = f.deployerAddress ?? null;
   const bundled =
     f.bundlePct != null ? (
       <>
@@ -101,36 +106,22 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
         {r1(f.bundlePct)}%{f.bundleWallets != null ? ` in ${f.bundleWallets} wallet${f.bundleWallets === 1 ? '' : 's'}` : ''}
       </>
     ) : (
-      <Unknown />
+      <NotChecked />
     );
-  const addr = d?.address ?? f.deployerAddress ?? null;
   return [
     [
       'Deployer',
-      d ? (
-        <>
-          <Dot s={f.sig.deployer} />
-          <span className="mono">{short(d.address)}</span>
-          <small>
-            {REP[d.record]}
-            {d.fundedFrom ? `, funded from ${d.fundedFrom}` : ''}
-          </small>
-        </>
-      ) : addr ? (
-        // the wallet is known (e.g. the contract creator) but not its earlier launches: no record is made up
-        <>
-          <span className="mono" title={addr}>
-            {short(addr)}
-          </span>
-          <small>Launch history not checked</small>
-        </>
+      addr ? (
+        <span className="mono" title={addr}>
+          {short(addr)}
+        </span>
       ) : (
-        <Unknown />
+        <NotChecked />
       ),
-      d || addr ? 'On-chain' : '',
+      addr ? 'On-chain' : '',
     ],
-    ['Earlier launches', f.deployerText ? cap(f.deployerText) : <Unknown />, f.deployerText ? 'On-chain' : ''],
-    ['Bundled at launch', bundled, f.bundlePct != null ? 'On-chain' : ''],
+    ['Deployer history', f.deployerText ? cap(f.deployerText) : <NotChecked />, f.deployerText ? 'ApeCheck' : ''],
+    ['Bundled at launch', bundled, ''],
     [
       'Top 10 holders',
       f.top10Pct != null ? (
@@ -139,9 +130,10 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
           {r1(f.top10Pct)}%<small>Excludes the liquidity pool</small>
         </>
       ) : (
-        <Unknown />
+        <NotChecked />
       ),
-      f.top10Pct != null ? 'On-chain' : '',
+      // Solana's largest token accounts, read over RPC (no other chain has a holder source)
+      f.top10Pct != null && r.chain === 'sol' ? 'On-chain' : '',
     ],
     [
       'Liquidity',
@@ -151,9 +143,9 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
           {f.lpLabel}
         </>
       ) : (
-        <Unknown />
+        <NotChecked />
       ),
-      'On-chain',
+      '',
     ],
     [
       'Authorities',
@@ -167,59 +159,9 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
       ),
       'On-chain',
     ],
-    ['Holders', f.holders != null ? f.holders.toLocaleString('en-US') : <Unknown />, 'On-chain'],
+    ['Holders', f.holders != null ? f.holders.toLocaleString('en-US') : <NotChecked />, ''],
     ['Market cap', r.mc != null ? fmtUsd(r.mc) : <Unknown />, 'DexScreener'],
   ];
-}
-
-export type HolderCluster = NonNullable<CoinFactsDTO['clusters']>[number];
-
-/** A cluster's common funder: a wallet address in mono (shortened), a name ("Binance hot wallet") as written. */
-function Funder({ from }: { from: string }) {
-  const address = !/\s/.test(from) && from.length > 20;
-  return address ? (
-    <span className="mono" title={from}>
-      {short(from)}
-    </span>
-  ) : (
-    <>{from}</>
-  );
-}
-
-/**
- * M4, Pro/Max: "deep holder clusters" from WhaleFlow, in the facts style: the cluster, the share of supply it holds,
- * how many wallets and where they were funded from. The API sends them to Pro/Max viewers only.
- */
-export function Clusters({ items }: { items: HolderCluster[] }) {
-  return (
-    <div className="clusters">
-      <h4 className="h4">
-        Wallet clusters <span className="lock">Pro</span>
-      </h4>
-      <p className="muted" style={{ margin: '-6px 0 4px', fontSize: 13.5 }}>
-        Wallets funded from the same source, counted together.
-      </p>
-      <dl className="facts">
-        {items.map((c, i) => (
-          <Fragment key={i}>
-            <dt>{c.label}</dt>
-            <dd>
-              {r1(c.pct)}% of supply
-              <small>
-                {c.wallets} wallet{c.wallets === 1 ? '' : 's'}
-                {c.fundedFrom ? (
-                  <>
-                    , funded from <Funder from={c.fundedFrom} />
-                  </>
-                ) : null}
-              </small>
-            </dd>
-            <dd className="src">On-chain</dd>
-          </Fragment>
-        ))}
-      </dl>
-    </div>
-  );
 }
 
 /** tabCoin(): coin score, who holds the supply, and the on-chain facts with their sources. */
@@ -261,10 +203,9 @@ export function CoinTab({ report: r }: { report: CheckReportDTO }) {
         <Facts rows={factRows(r, f)} />
       ) : (
         <p className="muted" style={{ margin: 0 }}>
-          The coin facts weren&apos;t available for this check.
+          The coin facts were not checked for this coin.
         </p>
       )}
-      {f?.clusters?.length ? <Clusters items={f.clusters} /> : null}
     </>
   );
 }

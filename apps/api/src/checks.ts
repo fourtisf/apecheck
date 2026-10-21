@@ -9,6 +9,7 @@ import {
   CHECK_JOINERS_TTL_S,
   PRIORITY,
   QUEUES,
+  chainFromDb,
   checkJoinersKey,
   detect,
   progressKey,
@@ -16,12 +17,15 @@ import {
   type CheckReportDTO,
   type CreateCheckResponse,
 } from '@apecheck/core';
-import { createCheck as createCheckRow, createLockKey, failUnqueuedCheck, findReusableCheck, withCreateLock } from '@apecheck/db';
+import { coinsByDeployer, createCheck as createCheckRow, createLockKey, failUnqueuedCheck, findReusableCheck, withCreateLock } from '@apecheck/db';
 import type { FastifyBaseLogger } from 'fastify';
 import type { AppDeps } from './context';
 import { consumeCredit, getCredits, refundCredit, type CreditSubject } from './credits';
 import { ApiError, MSG, maxRequiredMessage } from './errors';
 import { loadSeries, reportInclude, toReport, type Viewer } from './mappers';
+
+/** coins of the deployer's history a report carries (CoinFactsDTO.deployerHistory.coins; `total` counts them all) */
+export const DEPLOYER_HISTORY_COINS = 10;
 
 /* ---------------- "same target", running, cached (shared with the X bot: @apecheck/db checks.ts) ---------------- */
 
@@ -147,14 +151,21 @@ export async function loadReport(deps: AppDeps, where: { id: string } | { shortI
   if (!row || !canView(row, viewer)) return null;
   const running = row.status === 'RUNNING' || row.status === 'QUEUED';
   const userId = viewer.userId;
-  const [series, progress, watch, votes] = await Promise.all([
+  const chain = chainFromDb(row.target.chain);
+  const wallet = row.coinFacts?.deployerAddress ?? null;
+  const [series, progress, watch, votes, deployerHistory] = await Promise.all([
     loadSeries(deps.prisma, [row]),
     running ? readProgress(deps, [row.id]) : undefined,
     userId ? deps.prisma.watch.findUnique({ where: { userId_targetId: { userId, targetId: row.targetId } }, select: { userId: true } }) : null,
     userId && row.notes.length
       ? deps.prisma.noteVote.findMany({ where: { userId, noteId: { in: row.notes.map(n => n.id) } }, select: { noteId: true } })
       : [],
+    // the deployer history: the other coins from the wallet that ApeCheck has checked (public checks); a failed lookup
+    // shows "not checked", never a broken report
+    wallet && chain
+      ? coinsByDeployer(deps.prisma, { chain, address: wallet, excludeCa: row.target.ca, take: DEPLOYER_HISTORY_COINS }).catch(() => null)
+      : null,
   ]);
-  const report = toReport(row, { env: deps.env, viewer, series, progress, votes: new Set(votes.map(v => v.noteId)) });
+  const report = toReport(row, { env: deps.env, viewer, series, progress, votes: new Set(votes.map(v => v.noteId)), deployerHistory });
   return userId ? { ...report, watching: !!watch } : report;
 }

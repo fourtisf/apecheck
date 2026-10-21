@@ -11,7 +11,6 @@ import { createSolana } from './adapters/solana';
 import { createTron } from './adapters/tron';
 import { createGitHub } from './adapters/github';
 import { createX } from './adapters/x';
-import { createFourtis } from './adapters/fourtis';
 import { coinFacts } from './coin-facts';
 
 export * from './types';
@@ -39,7 +38,6 @@ export { createTron, TronAdapter, TRONGRID_BASE } from './adapters/tron';
 export { createGitHub, GitHubAdapter, parseGitHubRef } from './adapters/github';
 export { createX, XAdapter, X_REPLY_EXCLUDE_MAX, type XOptions } from './adapters/x';
 export { signRequest, oauth1Header, percentEncode, type OAuth1Credentials, type OAuth1Request } from './oauth1';
-export { createFourtis, FourtisAdapter, FOURTIS_PATHS } from './adapters/fourtis';
 
 /**
  * Build every adapter from the parsed env. `http` can be injected (tests); by default one shared client
@@ -54,12 +52,10 @@ export function createSources(env: Env, opts: { http?: Http } = {}): Sources & {
   const tron = createTron(env, http);
   const github = createGitHub(env, http);
   const x = createX(env, http);
-  const fourtis = createFourtis(env, http);
 
   const stubbed = (): string[] => {
     const out: string[] = [];
     if (!x.configured) out.push('x');
-    if (!fourtis.configured) out.push('fourtis');
     out.push(...evm.stubs());
     return out;
   };
@@ -73,9 +69,8 @@ export function createSources(env: Env, opts: { http?: Http } = {}): Sources & {
     tron,
     github,
     x,
-    fourtis,
     stubbed,
-    coinFacts: (chain, address) => coinFacts({ fourtis, dex, evm, sol, tron, stubbed }, chain, address),
+    coinFacts: (chain, address) => coinFacts({ dex, evm, sol, tron, stubbed }, chain, address),
   };
 }
 

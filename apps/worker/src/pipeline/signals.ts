@@ -308,7 +308,7 @@ export interface CoinSignals {
   holders: Signal;
   lp: Signal;
   authorities: Signal;
-  /** sections that were unknown, with the log line saying which source was unavailable */
+  /** sections ApeCheck could not check, with the log line saying so ("Bundle share: not checked") */
   unknown: { section: 'deployer' | 'bundle' | 'holders' | 'lp' | 'authorities'; line: string }[];
   /** "burned" | "locked:<days>" | "unlocked" | null (CoinFacts.lpStatus) */
   lpStatus: string | null;
@@ -320,17 +320,17 @@ export function coinSignals(f: CoinRawFacts): CoinSignals {
   const d = f.deployer;
   const historyKnown = !!d && d.launched != null && d.dead != null;
   const record: DeployerRecord = historyKnown ? deployerRecord(d!.launched!, d!.dead!) : 'mixed';
-  if (!historyKnown) unknown.push({ section: 'deployer', line: 'Deployer history not checked' });
+  if (!historyKnown) unknown.push({ section: 'deployer', line: 'Deployer history: not checked' });
 
   let bundle: Signal = 'warn';
   if (f.bundle && Number.isFinite(f.bundle.pct)) bundle = bandSignal(f.bundle.pct, CONFIG.bundlePct);
-  else unknown.push({ section: 'bundle', line: 'Bundle share not checked' });
+  else unknown.push({ section: 'bundle', line: 'Bundle share: not checked' });
 
   let holders: Signal = 'warn';
   const h = f.holders;
   if (h && h.top10Pct != null && h.devHoldPct != null) holders = holdersSignal(h.top10Pct, h.devHoldPct);
   else if (h && h.top10Pct != null) holders = bandSignal(h.top10Pct, CONFIG.top10Pct);
-  else unknown.push({ section: 'holders', line: 'Holder share not checked' });
+  else unknown.push({ section: 'holders', line: 'Holder share: not checked' });
 
   let lp: Signal = 'warn';
   let lpStatus: string | null = null;
@@ -339,7 +339,7 @@ export function coinSignals(f: CoinRawFacts): CoinSignals {
     lp = lpSignal(f.lp.status, f.lp.lockedDays ?? 0);
     lpStatus = f.lp.status === 'locked' ? (f.lp.lockedDays != null ? `locked:${Math.round(f.lp.lockedDays)}` : 'locked') : f.lp.status;
     lpText = f.lp.status === 'locked' ? (f.lp.lockedDays != null ? `locked ${Math.round(f.lp.lockedDays)} days` : 'locked') : f.lp.status;
-  } else unknown.push({ section: 'lp', line: 'LP status unknown, liquidity lock not checked' });
+  } else unknown.push({ section: 'lp', line: 'LP status: not checked' });
 
   let authorities: Signal = 'warn';
   const a = f.authorities;

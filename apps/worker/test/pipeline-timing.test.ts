@@ -123,7 +123,7 @@ describe('a coin whose Stage D ran short', () => {
       ...coinData(),
       coinFacts: {
         [COIN]: {
-          chain: 'base', address: COIN, token: null, deployer: null, bundle: { pct: 3.2, wallets: 2, source: 'BundleScan' }, holders: null,
+          chain: 'base', address: COIN, token: null, deployer: null, bundle: { pct: 3.2, wallets: 2, source: 'On-chain' }, holders: null,
           lp: { status: 'burned', lockedDays: null, source: 'On-chain' }, authorities: null, market: null, stubbed: [], errors: [],
         },
       },

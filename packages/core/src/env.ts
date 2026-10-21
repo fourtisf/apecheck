@@ -81,9 +81,6 @@ export const EnvZ = z.object({
   RPC_ROBINHOOD: optStr(),
   DEXSCREENER_BASE: str('https://api.dexscreener.com'),
 
-  FOURTIS_API_URL: optStr(),
-  FOURTIS_API_KEY: optStr(),
-
   GITHUB_TOKEN: optStr(),
 
   FREE_CHECKS_PER_DAY: int(5),

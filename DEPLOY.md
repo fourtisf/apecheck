@@ -10,7 +10,7 @@ Processes (PM2, `ecosystem.config.cjs`):
 | `api` | Fastify REST + SSE (`apps/api`) | 4000 (localhost only) |
 | `worker-checks` | check pipeline; drives the browser agent | — |
 | `worker-bot` | @ApeCheckBot mentions + replies (§14); answers the site's follow-up questions (M3, queue `asks`), so it must run even before the bot has X keys | — |
-| `worker-prices` | price tracking, screenshot cleanup; M3: re-check alerts for watchlists (queue `rechecks`), daily deployer refresh, hourly tier refresh; M4: webhook deliveries (queue `webhooks`, outbound HTTPS to developers' URLs through the SSRF guard) | — |
+| `worker-prices` | price tracking, screenshot cleanup; M3: re-check alerts for watchlists (queue `rechecks`), hourly tier refresh; M4: webhook deliveries (queue `webhooks`, outbound HTTPS to developers' URLs through the SSRF guard) | — |
 
 Plus one systemd unit, `apecheck-browser.service` (`deploy/browser`): Chromium itself, as a separate user with no access
 to the app's secrets (§6). Its Playwright endpoint is `127.0.0.1:9223` (localhost only); worker-checks' SSRF guard proxy is `127.0.0.1:9224`.
@@ -216,7 +216,7 @@ runs:
   under one cent;
 - each EVM RPC (chain id, latest block, and one known token decoded by the same adapter), Robinhood Chain when
   configured, Etherscan, Solana, TronGrid, DexScreener and GitHub (with its remaining rate limit);
-- X reads (the Bearer token), the X bot's OAuth 1.0a keys (a signed `GET /2/users/me`; it never posts) and Fourtis.
+- X reads (the Bearer token) and the X bot's OAuth 1.0a keys (a signed `GET /2/users/me`; it never posts).
 
 | Status | Meaning |
 |---|---|

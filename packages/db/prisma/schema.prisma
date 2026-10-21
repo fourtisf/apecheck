@@ -190,7 +190,7 @@ model CheckStep {
   tMs        Int        // ms since check start
   status     StepStatus
   text       String
-  source     String?    // X | GitHub | DexScreener | DevRadar | BundleScan | WhaleFlow | On-chain
+  source     String?    // X | GitHub | DexScreener | On-chain | ApeCheck (older rows may hold retired tags; mapped when displayed)
   url        String?
   caption    String?    // caption pill on the screenshot
   screenshot String?    // path under SCREENSHOT_DIR
@@ -216,9 +216,9 @@ model Claim {
 model CoinFacts {
   checkId        String   @id
   check          Check    @relation(fields: [checkId], references: [id], onDelete: Cascade)
-  deployerId     String?
+  deployerId     String?  // retired: no longer read or written (see model Deployer)
   deployer       Deployer? @relation(fields: [deployerId], references: [id])
-  deployerAddress String? // added: the deployer wallet whenever it is known, even without launch history (no Deployer row then)
+  deployerAddress String? // the deployer wallet when it is known (EVM: Etherscan creator, lowercased; Tron: origin address)
   sigDeployer    Signal
   sigBundle      Signal
   sigHolders     Signal
@@ -233,8 +233,14 @@ model CoinFacts {
   holders        Int?
   liquidityUsd   Decimal? @db.Decimal(24, 2)
   pairCreatedAt  DateTime?
+
+  // deployer history: the other coins from the same wallet that ApeCheck has checked (packages/db src/deployers.ts)
+  @@index([deployerAddress])
 }
 
+// Retired: launch records from a third-party deployer service ApeCheck no longer uses. Nothing reads or writes this
+// table any more (deployer history comes from ApeCheck's own checks: CoinFacts.deployerAddress). It stays for one
+// release so `migrate deploy` has no destructive step and a rollback still finds it; a later release drops it.
 model Deployer {
   id         String         @id @default(cuid())
   chain      Chain

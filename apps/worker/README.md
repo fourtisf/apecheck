@@ -5,7 +5,7 @@ Node workers for ApeCheck (HANDOFF §4, §7, §8, §10, §11):
 | Entry (tsx) | PM2 app | What it does |
 |---|---|---|
 | `src/checks.ts` | `worker-checks` | BullMQ worker on queue `checks`: the check pipeline and the browser agent. Concurrency `MAX_CONCURRENT_BROWSERS`, one Chromium per process. |
-| `src/prices.ts` | `worker-prices` | The light periodic work, no browser. Queue `prices`: "since check" price points from DexScreener every 5 minutes, the daily screenshot cleanup (03:20 UTC). Queue `rechecks` (M3): re-check alerts for watched targets, every 15 minutes. Queue `maintenance` (M3): the daily deployer refresh from DevRadar (04:40 UTC) and the hourly tier refresh (:07). Queue `webhooks` (M4): signed webhook deliveries with retries (below). |
+| `src/prices.ts` | `worker-prices` | The light periodic work, no browser. Queue `prices`: "since check" price points from DexScreener every 5 minutes, the daily screenshot cleanup (03:20 UTC). Queue `rechecks` (M3): re-check alerts for watched targets, every 15 minutes. Queue `maintenance` (M3): the hourly tier refresh (:07). Queue `webhooks` (M4): signed webhook deliveries with retries (below). |
 | `src/bot.ts` | `worker-bot` | The X bot @ApeCheckBot (`src/bot/*`, below): polls the bot's mentions, starts or reuses checks, posts the replies queued on `bot-replies`. Without the X keys it logs one warning and idles, so PM2 keeps it `online`. It also answers the site's follow-up questions (queue `asks`, M3), with or without the X keys. |
 | `src/dev.ts` | — | `pnpm dev`: checks, prices, re-check alerts, maintenance, asks and webhook deliveries in one process; the bot too only with `X_BOT_DEV=1` (use a test bot account: the one-bot lock only covers processes on the same Redis). |
 
@@ -38,7 +38,7 @@ whose check another run took over, stops without writing, publishing or replying
 | A resolve | no | `detect()` the input. EVM → `evm.detectChain` (Base, Ethereum, BNB, Arbitrum, Robinhood); X post → `x.getPost` (links, cashtags, contracts; the author's profile as fallback); X profile → `x.getUser`; website → normalised. Gaps: contract → DexScreener token info → website + X handle; website → the page HTML (guarded fetch) for a contract address and an X link; post → linked site / contract. A lookup still running at the stage's timeout writes nothing (its steps are dropped, no `run.*` field changes). After the stage, `runCheck` gives the Target its canonical key (`ca:<chain>:<address>`, …); if another Target already owns it, the check is moved there and `checkCount` fixed. A coin's `coinFacts()` is asked right then, so it runs alongside the browser. |
 | B browse | `AI_MODEL_JUDGE` | Fresh context, open the site (network idle, max 20 s), screenshot, hero/footer/links. A bot challenge (Cloudflare `cf-mitigated` / "Just a moment...", DDoS-Guard, Vercel checkpoint, 429) gets up to 8 s to solve itself; if it doesn't, the site is "could not be checked" (`site.infraError`, `degraded: browse:blocked`), never "didn't load". Bounded exploration (`browser/agent.ts`): at most `CHECK_MAX_AGENT_ACTIONS` actions and 60 s, tools `click(text)`, `scroll()`, `open_link(url)`, `done(reason)`, a screenshot step after every action. Once an app screen is reached, an empty amount field gets a small amount (as a tester would) so a main button waiting for input can be tried. A captured transaction is simulated within what is left of the stage. The verdict uses a snapshot of what the explorer saw when the stage ended: an action still in flight can't change it later; a transaction captured but not recorded in time gets its own step ("not simulated in time"). Then the docs: same-site links to depth 2 / 15 pages. |
 | C claims | `AI_MODEL_FAST` | Up to `TUNING.maxClaims` claims from the hero, footer, docs, post and X bio. `ClaimsOutZ` + `normaliseClaims`. |
-| D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin". M4: WhaleFlow's holder clusters (`coinFacts().clusters`) are kept in `Check.evidence.clusters` for the API to show Pro/Max viewers ("deep holder clusters"); they never enter the public step log, the score or a follow-up answer (answers are public: `loadAnswerData` drops every viewer-gated evidence key, `VIEWER_GATED_EVIDENCE`), and nothing is stored when WhaleFlow is unconfigured or sent none. |
+| D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin". With a deployer wallet, the step "Deployer history: …" lists the other coins from it that ApeCheck has checked (below). |
 | E judge | `AI_MODEL_JUDGE` | Claim statuses with one-sentence evidence citing a step, `acct`/`git` (used only where Stage D could not decide, and never above `warn`), summary ≤ 180 chars, coin summary. `JudgeOutZ` + `normaliseJudge`. The model never sees or picks a score. A judge that times out, or a model that fails and is replaced by the stand-in (claims or judge), leaves a `warn` step ("Claim review timed out; used the simple rules"). |
 | F save | no | `scoreCheck()` from core. One transaction: signals, `CheckEvidence`, scores, bands, areas, claims (in extraction order, `Claim.idx` 0..n-1), `CoinFacts` (with `deployerAddress` whenever the wallet is known), Deployer upsert (never from a private check: the deployers page lists every row, so a private check only links a row the public already knows), `priceAtCheck`/`mcAtCheck`, first `PricePoint`, `Target.last*`, `isLatest` moved to this check (a private check never takes or clears `isLatest` and leaves `Target.lastCheckedAt` / `checkCount` alone: the public verdict stays the public one). Then the share card (`GET WEB_INTERNAL_URL/card/<shortId>.png`, 5 s, skipped with a log line when the web app is down) → `SCREENSHOT_DIR/cards/<shortId>.png`, `done` on `check:{id}`, `end` on `live`, a `bot-replies` job for every X mention still waiting on the check (`BotMention` `QUEUED`, done or failed), the `rechecked` notifications of the watchers whose automatic re-check this is (see Re-check alerts; also after a failure), and its `check.completed` webhooks (requester, Max joiners, re-check watchers: see Webhooks; also after a failure). |
 
@@ -85,11 +85,15 @@ People (Stage D, deterministic first):
   account at all the judge may lower it to `fail`. An unknown people signal is never `ok`, whatever the model says.
 
 Coin (Stage D) — only the core helpers: `deployerRecord`/`deployerSignal`, `bandSignal(CONFIG.bundlePct)`,
-`holdersSignal`, `lpSignal`, `authoritiesSignal`. An unknown section is `warn` with a log line naming the missing
-source ("BundleScan unavailable, bundle share unknown"; "(Solana RPC unavailable)" is added when the public on-chain
-fallback failed too); unknown deployer history is recorded as `mixed`. A Deployer row is only written when the history is
-known (no made-up counts); the wallet itself (e.g. the Etherscan creator) is still kept in `CoinFacts.deployerAddress`, and the
-site shows it with "Launch history unavailable".
+`holdersSignal`, `lpSignal`, `authoritiesSignal`. A section ApeCheck has no source for, or did not get this time, is
+`warn` with a log line saying so, untagged: "Bundle share: not checked", "Holder share: not checked" (+ " (Solana RPC
+unavailable)" when that RPC failed), "LP status not checked" inside the holders line, "Deployer: not checked" (+ "
+(Etherscan unavailable)" when the EVM creator lookup failed). "Unavailable" only ever names a source that failed. The
+deployer wallet (EVM: Etherscan creator; Tron: the contract's origin address) is kept in `CoinFacts.deployerAddress`
+(`deployerKey`: EVM lowercased). Its history is read from ApeCheck's own checks and never scored: the step "Deployer
+history: no earlier launches seen by ApeCheck (0xAbC…Ef02)" or "Deployer history: 2 other coins from this wallet checked
+by ApeCheck, $FOO and $BAR (0xAbC…Ef02)", status `warn`, source `ApeCheck`; the deployer signal stays unknown (`mixed`,
+`warn`), because ApeCheck only sees coins someone checked.
 
 ### Saying only what was seen
 
@@ -427,16 +431,17 @@ finds checks finished between 6 h and 5 minutes ago that a receiving webhook (of
 joiner from `CHECK_JOINED_INDEX`) has no row for, and `checkCompletedDeliveries` writes and queues them (idempotent). A
 webhook re-enabled within those 6 h can therefore get the events of checks that finished while it was off.
 
-## Deployer records (`src/maintenance/deployers.ts`, M3)
+## Deployer history (ApeCheck's own checks)
 
-Daily (`deployers-refresh`, 04:40 UTC, queue `maintenance`): for the latest finished **public** check that assessed a
-coin (has `CoinFacts`) of every target with a chain and contract checked in the last 30 days — a coin checked by its
-contract, or one a website or X post check found (`saveTarget` puts its chain and contract on that target too) (private Max checks are never read, so a coin only they checked gets no row), `sources.fourtis.devRadar(chain, ca)` (4 at a time); each answer upserts `Deployer(chain, address)`
-(EVM lowercase) with `launched`, `dead`, `fundedFrom`, `firstSeen` and the record from core `deployerRecord(launched,
-dead)`, once per deployer per run. A coin whose latest report had no Deployer linked (its launch history was unknown at
-check time) is linked to the row when DevRadar names the wallet the check found (or the check found none), so it appears
-under its deployer on /deployers. Scores already given are never changed; no answer changes nothing. Without Fourtis
-(`FOURTIS_API_URL` + `FOURTIS_API_KEY`) the job logs one line and does nothing. Stage D still upserts on every check.
+A coin's deployer history is the other coins from the same wallet that ApeCheck has checked: `@apecheck/db`
+`coinsByDeployer(prisma, { chain, address, excludeCa })` over `CoinFacts.deployerAddress` (indexed). One row per coin
+(its contract on that chain, so a website or X post check that found a coin and a check of the coin itself count once):
+the coin's newest finished **public** check naming the wallet, newest first. Private (Max) checks are never counted, so a
+wallet only a private check named is never listed and a privately vetted coin never shows up in someone else's history.
+Stage D reads it once per check for the log line (5 s cap; a failed lookup logs "Deployer history: not checked"); the API
+reads it live for the report, the deployers page and MCP, and follow-up answers read it too. Nothing is stored, so
+nothing needs refreshing: the old daily `deployers-refresh` job is gone, `startMaintenanceWorker` removes its schedule
+from Redis at start, and a leftover job of that name finishes as a no-op.
 
 ## Tier refresh (`src/maintenance/tiers.ts`, M3, HANDOFF §8)
 
@@ -534,7 +539,7 @@ of the latest public coin verdicts of the last 30 days. `test/e2e/since-check.te
 All from the repo-root `.env` (see `.env.example`). M4 webhooks need no new variable: `APP_URL` (the payload's
 `report_url`), `NODE_ENV` (https only in production), `OUTBOUND_PROXY`, `SSRF_ALLOW_HOSTS` (tests only). M3: `WATCH_RECHECK_HOURS` (fingerprint cadence, default 6),
 `MAX_AUTO_RECHECKS_PER_DAY` (default 20), `TOKEN_CHAIN`, `TOKEN_ADDRESS`, `PRO_MIN_HOLD`, `MAX_MIN_HOLD`, `TIER_OVERRIDES`
-(tier refresh), `FOURTIS_API_URL` + `FOURTIS_API_KEY` (deployer refresh). worker-bot: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
+(tier refresh). worker-bot: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
 `X_ACCESS_SECRET`, `X_BEARER_TOKEN` (optional), `X_BOT_USER_ID`, `X_BOT_HANDLE`, `BOT_POLL_SECONDS`, `BOT_USER_HOURLY`,
 `BOT_PRO_USER_HOURLY`, `BOT_HOURLY_CAP`, `BOT_INCLUDE_LINK`, `APP_URL`, `CACHE_HOURS`. Used here: `DATABASE_URL`, `REDIS_URL`, `ANTHROPIC_API_KEY`,
 `AI_BASE_URL`, `AI_MODEL_JUDGE`, `AI_MODEL_FAST`, `CHECK_BUDGET_SECONDS`, `CHECK_MAX_AGENT_ACTIONS`,
@@ -565,7 +570,8 @@ npx tsc -p tsconfig.json
 
 `test/pipeline.test.ts` covers whole checks (the M1 acceptance fixtures include waitlist / 'Coming soon' / dead-launch sites
 with a working Connect wallet button, a main button that only opens a dialog, U+0000 in page and third-party strings, a
-Cloudflare challenge, error text); `test/pipeline-timing.test.ts` covers late and repeated work (an abandoned Stage A, a
+Cloudflare challenge, error text; coins with ApeCheck's own facts only: the deployer history from earlier public checks of
+the wallet, never a private one, and Solana / EVM / Tron coins whose every step says "not checked" in ApeCheck's words); `test/pipeline-timing.test.ts` covers late and repeated work (an abandoned Stage A, a
 coin whose Stage D ran short, model fallbacks in the log, re-runs, a run that lost its check, stuck-check recovery, the
 browser pool relaunch).
 
@@ -590,7 +596,8 @@ with an unknown outcome on the FakeX and on the real X adapter (one POST, the lo
 emulator, and links in model-written text (reply and stored Ask).
 
 M3: `test/asks.test.ts` (answers from the stored check with asker and `asksCount`, shortId, once per job, failure
-codes, planted links / mentions made safe, model failure → stand-in, and the queue the way the API waits on it),
+codes, planted links / mentions made safe, model failure → stand-in, and the queue the way the API waits on it; a check
+stored before ApeCheck dropped its third-party coin sources: no holder clusters or retired names reach the answerer),
 `test/watch.test.ts` (normalising; a fixture site fingerprinted, its text changed → `changed` for Pro and Max but not
 Free; a timestamp / price-only change, HTTP errors, bot challenges, a refused connection, a page that differs on every
 load → no alert; automatic re-check limits — per day, 12 h per watch, private-only targets, joining a running check, a
@@ -600,8 +607,8 @@ adapter — a 429 / -32005 `owner()` or proxy slot never alerts, a proxy upgrade
 throttled `owner()`; Solana and Token-2022 extensions; the scan's selection),
 `test/watch-flow.test.ts` (acceptance through the real `checks` and `rechecks` queues and the pipeline: a Max user's
 watched site changes → one automatic re-check with `PRIORITY.recheck` → the `rechecked` notification with the new
-verdict next to the old one), `test/maintenance.test.ts` (deployer refresh from a fake DevRadar, coins found by a
-website or X post check included; tier refresh: who is
+verdict next to the old one), `test/maintenance.test.ts` (the retired deployer refresh: its schedule removed at start,
+a leftover job a no-op; tier refresh: who is
 due, holdings, overrides while the token isn't live, failed reads), `test/prices.test.ts` (+ the price-at-check backfill;
 a private check never moves a public coin's schedule)
 and `test/e2e/since-check.test.ts` (two coin checks through the queue and pipeline, 31 simulated days of price ticks on
@@ -620,8 +627,7 @@ storm — exactly 6 attempts, one `failCount`, nothing after; redirects not foll
 webhook, after which no events are made and a waiting delivery fails without a request; loopback, private, metadata and
 `localhost` URLs refused without a request and not retried; a name that now resolves to a private address; https only
 in production; a refused connection retried; pings; the sweep; `watch.changed` from `processRecheck` for Max watchers
-only; Stage F and the failure path queueing `check.completed`), `test/clusters.test.ts` (WhaleFlow clusters into
-`Check.evidence.clusters`, never into the step log; none stored without them).
+only; Stage F and the failure path queueing `check.completed`).
 
 Tests use the database `apecheck_test_worker` (created and migrated by `test/global-setup.ts`) and Redis db 2, never
 the dev data. External data sources are replaced by `test/fakes.ts` (`FakeSources`, same `Sources` contract); fixture

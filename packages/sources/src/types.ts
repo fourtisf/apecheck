@@ -356,65 +356,32 @@ export interface XReplyOptions {
  */
 export type XBotSource = XSource & Required<Pick<XSource, 'mentions' | 'reply'>>;
 
-/* ---------------- Fourtis internal (DevRadar, BundleScan, WhaleFlow) ---------------- */
-
-export interface DevRadarFacts {
-  deployer: string;
-  fundedFrom: string | null;
-  launched: number;
-  dead: number;
-  firstSeen: string | null;
-  launches?: { address: string; chain: ChainKey | null; createdAt: string | null; dead: boolean }[];
-}
-export interface BundleScanFacts { bundlePct: number; wallets: number; launchBlock?: string | null }
-export interface WhaleFlowFacts {
-  /** % of supply in the top 10 holders, excluding LP */
-  top10Pct: number;
-  devHoldPct: number;
-  holders: number | null;
-  lp?: { status: 'burned' | 'locked' | 'unlocked'; lockedDays?: number | null } | null;
-  /** M4: wallet clusters (groups funded from one source), when WhaleFlow provides them */
-  clusters?: HolderCluster[] | null;
-}
-/**
- * M4 (Pro/Max "deep holder clusters"): one group of holder wallets WhaleFlow ties together (funded from the same
- * source). `pct` = % of supply the group holds, `wallets` = how many wallets. Placeholder shape until the real
- * WhaleFlow feed lands (adapters/fourtis.ts WhaleClusterZ).
- */
-export interface HolderCluster { label: string; wallets: number; pct: number; fundedFrom: string | null }
-export interface FourtisSource {
-  configured: boolean;
-  /** last non-fatal error (also reported to the current captureErrors() scope) */
-  readonly lastError?: string | null;
-  devRadar(chain: ChainKey, address: string): Promise<DevRadarFacts | null>;
-  bundleScan(chain: ChainKey, address: string): Promise<BundleScanFacts | null>;
-  whaleFlow(chain: ChainKey, address: string): Promise<WhaleFlowFacts | null>;
-}
-
 /* ---------------- Assembled coin facts (Stage D, coins only) ---------------- */
 
-export type FactSource = 'DevRadar' | 'BundleScan' | 'WhaleFlow' | 'On-chain' | 'DexScreener';
+export type FactSource = 'On-chain' | 'DexScreener';
 
 /**
- * Raw facts for one coin, Fourtis first, public fallbacks second. Signals are NOT computed here:
- * the worker maps these to ok/warn/fail with the thresholds in @apecheck/core (config.ts / scoring.ts).
- * A null section means "unknown" (the worker scores it as warn and logs why).
+ * Raw facts for one coin, from ApeCheck's own reads: the chain's RPC, Etherscan, TronGrid and DexScreener. Signals
+ * are NOT computed here: the worker maps these to ok/warn/fail with the thresholds in @apecheck/core (config.ts /
+ * scoring.ts). A null section means "not checked" (the worker scores it as warn and logs it).
  */
 export interface CoinRawFacts {
   chain: ChainKey;
   address: string;
   token: { name: string | null; symbol: string | null; decimals: number | null; supply: string | null } | null;
+  /** EVM: the Etherscan contract creator; Tron: the contract's origin address; Solana: not looked up (null) */
   deployer: {
     address: string;
-    fundedFrom: string | null;
-    /** null = unknown launch history (no DevRadar) */
+    /** launch record: no ApeCheck source, so always null (the worker reads the history from ApeCheck's own checks) */
     launched: number | null;
     dead: number | null;
-    firstSeen: string | null;
     source: FactSource;
   } | null;
+  /** launch bundle share: no ApeCheck source, always null ("not checked") */
   bundle: { pct: number; wallets: number | null; source: FactSource } | null;
+  /** Solana: the largest token accounts over RPC; EVM and Tron: not checked (null) */
   holders: { top10Pct: number | null; devHoldPct: number | null; count: number | null; source: FactSource } | null;
+  /** LP lock: no ApeCheck source, always null ("not checked") */
   lp: { status: 'burned' | 'locked' | 'unlocked'; lockedDays: number | null; source: FactSource } | null;
   authorities: {
     /** Solana: mint authority null; EVM: no mint function or owner renounced */
@@ -427,14 +394,9 @@ export interface CoinRawFacts {
     source: FactSource;
   } | null;
   market: DexTokenInfo | null;
-  /**
-   * M4: WhaleFlow's holder clusters, largest first. Only present when WhaleFlow answered with at least one valid
-   * cluster: never filled from a fallback, never empty (nothing to store), never invented.
-   */
-  clusters?: HolderCluster[];
-  /** adapters that ran as stubs for this coin, e.g. ["fourtis", "helius"] */
+  /** adapters that ran as stubs for this coin, e.g. ["etherscan"] or ["rpc-rh"] */
   stubbed: string[];
-  /** non-fatal errors, e.g. ["bundleScan: timeout"] */
+  /** non-fatal errors, e.g. ["solana.largestHolders: timeout"] */
   errors: string[];
 }
 
@@ -449,9 +411,8 @@ export interface Sources {
   tron: TronSource;
   github: GitHubSource;
   x: XSource;
-  fourtis: FourtisSource;
-  /** Stage D for coins: Fourtis first, then on-chain/DexScreener fallbacks. Never throws. */
+  /** Stage D for coins: on-chain reads and DexScreener. Never throws. */
   coinFacts(chain: ChainKey, address: string): Promise<CoinRawFacts>;
-  /** names of adapters currently running as stubs (missing keys), e.g. ["x", "fourtis", "etherscan"] */
+  /** names of adapters currently running as stubs (missing keys), e.g. ["x", "etherscan", "rpc-rh"] */
   stubbed(): string[];
 }

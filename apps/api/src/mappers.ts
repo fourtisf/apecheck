@@ -18,7 +18,7 @@ import {
   clamp,
   coinBand as coinBandOf,
   coinVerdictEnum,
-  deployerLine,
+  deployerHistoryLine,
   fmtAge,
   fmtAmount,
   fmtCount,
@@ -27,7 +27,7 @@ import {
   lpLabel,
   narBand as narBandOf,
   narVerdictEnum,
-  recordFromDb,
+  scrubRetired,
   sigFromDb,
   sincePct,
   short,
@@ -44,7 +44,7 @@ import {
   type CoinKey,
   type CoinRowDTO,
   type CoinVerdictS,
-  type DeployerDTO,
+  type DeployerCoinDTO,
   type Env,
   type LiveCheckDTO,
   type MarketDTO,
@@ -56,25 +56,24 @@ import {
   type StepDTO,
   type TargetKindS,
   type ApiKeyDTO,
-  type TierS,
   type WebhookDTO,
   type WebhookDeliveryDTO,
   type WebhookEvent,
   type CheckResult,
   checkResultOf,
 } from '@apecheck/core';
-import { num, type ApiKey, type Prisma, type PrismaClient, type Webhook, type WebhookDelivery } from '@apecheck/db';
+import { num, type ApiKey, type DeployerCoinRow, type Prisma, type PrismaClient, type Webhook, type WebhookDelivery } from '@apecheck/db';
 
 /* ---------------- include shapes ---------------- */
 
 export const summaryInclude = {
   target: true,
-  coinFacts: { include: { deployer: true } },
+  coinFacts: true,
 } satisfies Prisma.CheckInclude;
 
 export const reportInclude = {
   target: true,
-  coinFacts: { include: { deployer: true } },
+  coinFacts: true,
   steps: { orderBy: { idx: 'asc' } },
   // Claim.idx is the position the worker wrote (0..n-1); id breaks ties for rows from before the column existed
   claims: { orderBy: [{ idx: 'asc' }, { id: 'asc' }] },
@@ -96,18 +95,12 @@ export const reportInclude = {
 export type CheckSummaryRow = Prisma.CheckGetPayload<{ include: typeof summaryInclude }>;
 export type CheckReportRow = Prisma.CheckGetPayload<{ include: typeof reportInclude }>;
 type TargetRow = CheckSummaryRow['target'];
-type DeployerRow = NonNullable<NonNullable<CheckSummaryRow['coinFacts']>['deployer']>;
 
 export interface Viewer {
   sid: string | null;
   /** M3: the signed-in user (or, M4, the owner of the API key the request used) */
   userId?: string | null;
-  /** M4: that user's tier (Pro/Max viewers get the deep holder clusters) */
-  tier?: TierS | null;
 }
-
-/** M4: the viewer gets Pro/Max extras (CoinFactsDTO.clusters) */
-export const isProViewer = (viewer: Viewer) => viewer.tier === 'pro' || viewer.tier === 'max';
 
 /** the viewer started this check: same signed-in user, or the same browser (anonymous cookie) */
 export const isMine = (c: { requesterSid: string | null; requesterId?: string | null }, viewer: Viewer) =>
@@ -127,6 +120,8 @@ export interface MapCtx {
   progress?: Map<string, number | null>;
   /** M3: ids of the notes the signed-in viewer marked helpful */
   votes?: Set<string>;
+  /** the report's deployer history: the other coins from its deployer wallet that ApeCheck has checked (coinsByDeployer) */
+  deployerHistory?: { total: number; coins: DeployerCoinRow[] } | null;
 }
 
 /* ---------------- small helpers ---------------- */
@@ -269,17 +264,9 @@ export function buildSeries(
 
 /* ---------------- DTOs ---------------- */
 
-export function toDeployerDTO(d: DeployerRow): DeployerDTO {
-  return {
-    id: d.id,
-    chain: chainFromDb(d.chain)!,
-    address: d.address,
-    record: recordFromDb(d.record),
-    launched: d.launched,
-    dead: d.dead,
-    fundedFrom: d.fundedFrom,
-    firstSeen: iso(d.firstSeen),
-  };
+/** One coin of a deployer wallet that ApeCheck has checked (packages/db deployerCoins row). */
+export function toDeployerCoinDTO(c: Pick<DeployerCoinRow, 'shortId' | 'ticker' | 'name' | 'key' | 'coinScore' | 'coinBand'>): DeployerCoinDTO {
+  return { id: c.shortId, ticker: c.ticker, name: c.name, hue: hueOf(c.key), coinScore: c.coinScore, coinBand: coinKeyOf(c.coinBand) };
 }
 
 export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
@@ -288,7 +275,6 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
   const hasCoin = c.coinScore != null || c.coinFacts != null;
   const priceAtCheck = num(c.priceAtCheck);
   const series = ctx.series?.get(c.id) ?? null;
-  const dep = c.coinFacts?.deployer ?? null;
   const depAddress = c.coinFacts?.deployerAddress ?? null;
   const depChain = chainFromDb(t.chain);
   return {
@@ -310,7 +296,8 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
     narBand: narKey(c.narBand),
     coinBand: coinKeyOf(c.coinBand),
     hasCoin,
-    summary: c.summary,
+    // checks stored before ApeCheck dropped its third-party coin sources may name them: never shown
+    summary: scrubRetired(c.summary),
     mc: num(t.lastMc) ?? num(c.mcAtCheck),
     vol5m: num(t.lastVol5m),
     since: roundOrNull(sincePct(priceAtCheck, num(t.lastPrice))),
@@ -322,40 +309,15 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
     mine: isMine(c, ctx.viewer),
     createdAt: c.createdAt.toISOString(),
     checkedAt: iso(c.finishedAt),
-    deployer: dep
-      ? { address: dep.address, chain: chainFromDb(dep.chain)!, record: recordFromDb(dep.record) }
-      : depAddress && depChain
-        ? { address: depAddress, chain: depChain, record: null }
-        : null,
+    deployer: depAddress && depChain ? { address: depAddress, chain: depChain } : null,
   };
 }
 
-type Cluster = NonNullable<CoinFactsDTO['clusters']>[number];
-/** at most this many clusters are served */
-const CLUSTERS_MAX = 20;
-
 /**
- * M4: CoinFactsDTO.clusters from CheckEvidence.clusters (WhaleFlow) — well-formed entries only, at most
- * CLUSTERS_MAX; null when there are none.
+ * The coin facts as stored, plus the deployer history when the caller read it (the report: `history` from
+ * coinsByDeployer; lists leave it out). Stored bundle, LP and holder-count values of older checks still show.
  */
-export function clustersOf(ev: CheckEvidence): Cluster[] | null {
-  const raw = ev.clusters;
-  if (!Array.isArray(raw)) return null;
-  const out: Cluster[] = [];
-  for (const c of raw) {
-    if (!c || typeof c !== 'object') continue;
-    const { label, wallets, pct, fundedFrom } = c as Partial<Cluster>;
-    if (typeof label !== 'string' || !label.trim()) continue;
-    if (typeof wallets !== 'number' || !Number.isFinite(wallets) || wallets < 0) continue;
-    if (typeof pct !== 'number' || !Number.isFinite(pct)) continue;
-    out.push({ label: label.trim().slice(0, 80), wallets: Math.round(wallets), pct: round2(pct), fundedFrom: typeof fundedFrom === 'string' && fundedFrom ? fundedFrom.slice(0, 120) : null });
-    if (out.length >= CLUSTERS_MAX) break;
-  }
-  return out.length ? out : null;
-}
-
-function toCoinFacts(f: NonNullable<CheckSummaryRow['coinFacts']>): CoinFactsDTO {
-  const dep = f.deployer;
+function toCoinFacts(f: NonNullable<CheckSummaryRow['coinFacts']>, history?: MapCtx['deployerHistory']): CoinFactsDTO {
   return {
     sig: {
       deployer: sigFromDb(f.sigDeployer)!,
@@ -374,16 +336,14 @@ function toCoinFacts(f: NonNullable<CheckSummaryRow['coinFacts']>): CoinFactsDTO
     holders: f.holders,
     liquidityUsd: num(f.liquidityUsd),
     pairCreatedAt: iso(f.pairCreatedAt),
-    deployer: dep ? toDeployerDTO(dep) : null,
-    deployerAddress: dep?.address ?? f.deployerAddress ?? null,
-    deployerText: dep
-      ? deployerLine({ record: recordFromDb(dep.record), launched: dep.launched, dead: dep.dead, fundedFrom: dep.fundedFrom })
-      : null,
+    deployerAddress: f.deployerAddress ?? null,
+    deployerHistory: f.deployerAddress && history ? { total: history.total, coins: history.coins.map(toDeployerCoinDTO) } : null,
+    deployerText: f.deployerAddress && history ? deployerHistoryLine(history) : null,
   };
 }
 
 export function toStep(s: CheckReportRow['steps'][number], env: Env): StepDTO {
-  // steps stored before the third-party coin sources were dropped read as ApeCheck's own
+  // steps stored before ApeCheck dropped its third-party coin sources read in ApeCheck's own words, untagged
   const shown = displayStep({ text: s.text, source: s.source });
   return {
     idx: s.idx,
@@ -409,7 +369,7 @@ function toClaim(c: CheckReportRow['claims'][number]): ClaimDTO {
     result: status,
     label: CLAIM_LABEL[status],
     signal: CLAIM_SIGNAL[status],
-    evidence: c.evidence,
+    evidence: scrubRetired(c.evidence),
     stepIdx: c.stepIdx,
   };
 }
@@ -488,7 +448,7 @@ export function toAsk(a: Pick<AskRow, 'id' | 'question' | 'answer' | 'askerHandl
   return {
     id: a.id,
     question: a.question,
-    answer: a.answer,
+    answer: scrubRetired(a.answer),
     by: a.askerHandle ?? (wallet ? short(wallet) : null),
     via: a.via === 'BOT' ? 'x' : 'site',
     createdAt: a.createdAt.toISOString(),
@@ -520,16 +480,16 @@ export function toReport(c: CheckReportRow, ctx: MapCtx): CheckReportDTO {
     },
     evidence: pickEvidence(ev),
     areas: areasOf(c.areas),
-    coinSummary: c.coinSummary,
+    coinSummary: scrubRetired(c.coinSummary),
     claims: c.claims.map(toClaim),
     steps: c.steps.map(s => toStep(s, ctx.env)),
     stepsExpected,
     progress: progressOf(c.status, ctx.progress?.get(c.id), c.steps.length, stepsExpected),
     narrative: narrativeOf(c.narScore, c.narBand),
-    // the /api page's `coin: { verdict, score }`; the facts the report's Coin tab reads sit next to them. The deep
-    // holder clusters (M4) only for Pro/Max viewers (signed in, or an API key)
+    // the /api page's `coin: { verdict, score }`; the facts the report's Coin tab reads sit next to them (the same for
+    // every viewer: older evidence keys such as the holder clusters are never served)
     coin: c.coinFacts
-      ? { verdict: coinVerdictOf(c.coinScore, c.coinBand), score: c.coinScore, ...toCoinFacts(c.coinFacts), clusters: isProViewer(ctx.viewer) ? clustersOf(ev) : null }
+      ? { verdict: coinVerdictOf(c.coinScore, c.coinBand), score: c.coinScore, ...toCoinFacts(c.coinFacts, ctx.deployerHistory) }
       : null,
     market: toMarket(c, ev, summary, series),
     people: toPeople(c, ev),
@@ -621,7 +581,6 @@ export function toCoinRow(c: CheckSummaryRow, ctx: MapCtx): CoinRowDTO {
       lpLabel: facts.lpLabel,
       authorities: facts.authorities,
       deployerAddress: facts.deployerAddress ?? null,
-      deployerRecord: f.deployer ? recordFromDb(f.deployer.record) : null,
     },
   };
 }
@@ -637,7 +596,8 @@ export interface LiveRow {
   evidence: unknown;
   target: Pick<TargetRow, 'kind' | 'name' | 'ticker' | 'chain' | 'key'>;
   _count: { steps: number };
-  steps: { text: string }[];
+  /** the newest step */
+  steps: { text: string; source?: string | null }[];
 }
 
 export function toLive(c: LiveRow, ctx: MapCtx & { now: number }): LiveCheckDTO {
@@ -660,7 +620,8 @@ export function toLive(c: LiveRow, ctx: MapCtx & { now: number }): LiveCheckDTO 
     step: stepCount,
     stepsExpected,
     progress: progressOf(c.status, ctx.progress?.get(c.id), stepCount, stepsExpected),
-    lastText: c.steps[0]?.text ?? null,
+    // a step stored before ApeCheck dropped its third-party coin sources reads in ApeCheck's own words
+    lastText: c.steps[0] ? displayStep({ text: c.steps[0].text, source: c.steps[0].source ?? null }).text : null,
     mine: isMine(c, ctx.viewer),
   };
 }
@@ -715,5 +676,5 @@ export function toCheckResult(
   c: Pick<CheckReportRow, 'shortId' | 'targetRaw' | 'narScore' | 'narBand' | 'coinScore' | 'coinBand' | 'totalScore' | 'summary'> & { status?: string; error?: string | null },
   env: Pick<Env, 'APP_URL'>,
 ): CheckResult {
-  return checkResultOf(c, env.APP_URL);
+  return checkResultOf({ ...c, summary: scrubRetired(c.summary) }, env.APP_URL);
 }

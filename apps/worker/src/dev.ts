@@ -1,5 +1,5 @@
 /**
- * Local development: the check pipeline, the price tracker, the re-check alerts, the deployer / tier refresh, the
+ * Local development: the check pipeline, the price tracker, the re-check alerts, the tier refresh, the
  * site's follow-up questions and the webhook deliveries in one process (`pnpm dev`), plus the X bot only when asked for
  * with X_BOT_DEV=1.
  *

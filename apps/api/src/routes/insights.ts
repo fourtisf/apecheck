@@ -5,85 +5,74 @@ import {
   NAR_BANDS,
   TUNING,
   checkedOut,
-  hueOf,
+  deployerKey,
   type BotStatsDTO,
+  type ChainKey,
   type DeployerRowDTO,
   type DeployersResponse,
-  type ChainDb,
   type InsightsDTO,
 } from '@apecheck/core';
-import { Prisma, type PrismaClient } from '@apecheck/db';
+import { Prisma, deployerCoins, type DeployerCoinRow, type PrismaClient } from '@apecheck/db';
 import type { AppDeps } from '../context';
-import { coinKeyOf, loadSeries, summaryInclude, toDeployerDTO, toSummary } from '../mappers';
-import { ChainFilterZ, chainDbOf, opt, startOfUtcDay, viewerOf } from './util';
+import { loadSeries, summaryInclude, toDeployerCoinDTO, toSummary } from '../mappers';
+import { ChainFilterZ, opt, startOfUtcDay, viewerOf } from './util';
+
+type DeployerSort = 'real' | 'checked' | 'recent';
 
 const DeployersQueryZ = z.object({
   chain: ChainFilterZ,
-  sort: opt(z.enum(['real', 'dead', 'launched']).default('real')),
+  // `dead` and `launched` sorted by launch records ApeCheck no longer has: old links read as `checked`
+  sort: opt(
+    z
+      .enum(['real', 'checked', 'recent', 'dead', 'launched'])
+      .default('real')
+      .transform((v): DeployerSort => (v === 'dead' || v === 'launched' ? 'checked' : v)),
+  ),
   limit: opt(z.coerce.number().int().min(1).max(500).default(200)),
 });
 
-type DeployerSort = 'real' | 'dead' | 'launched';
+/** most coin rows the deployers page and "Builders worth watching" read (one per checked coin with a known deployer) */
+export const DEPLOYER_COINS_MAX = 5000;
 
 /**
- * A deployer is public when a finished public check names it as a coin's deployer, or when no check names it at all
- * (a wallet known from DevRadar alone). One that only private (Max) checks name never is: listing it, even with no
- * coins, would publish that someone privately vetted a coin of that wallet, and the wallet leads to the coin.
+ * Every deployer wallet named by a finished public coin check, with the coins from it that ApeCheck has checked
+ * (packages/db deployerCoins: one row per coin, its newest public check naming the wallet). A wallet only private (Max)
+ * checks name never shows up: listing it would publish that someone privately vetted a coin of that wallet.
  */
-export const publicDeployerWhere: Prisma.DeployerWhereInput = {
-  OR: [{ coins: { some: { check: { status: 'DONE', isPrivate: false } } } }, { coins: { none: {} } }],
-};
-
-/** Every public deployer with the coins of theirs that are on the feed (latest public finished checks). */
-export async function deployerRows(prisma: PrismaClient, chain: ChainDb | null): Promise<DeployerRowDTO[]> {
-  const rows = await prisma.deployer.findMany({
-    where: { AND: [chain ? { chain } : {}, publicDeployerWhere] },
-    include: {
-      coins: {
-        where: { check: { isLatest: true, status: 'DONE', isPrivate: false } },
-        select: {
-          check: {
-            select: {
-              shortId: true,
-              totalScore: true,
-              coinScore: true,
-              coinBand: true,
-              target: { select: { ticker: true, name: true, key: true } },
-            },
-          },
-        },
-      },
-    },
-  });
-  return rows.map(d => {
-    const coins = d.coins
-      .map(c => c.check)
-      .sort((a, b) => (b.coinScore ?? -1) - (a.coinScore ?? -1));
-    const totals = coins.filter(c => c.totalScore != null).map(c => c.totalScore!);
+export async function deployerRows(prisma: PrismaClient, chain: ChainKey | null): Promise<DeployerRowDTO[]> {
+  const { coins } = await deployerCoins(prisma, { chain, take: DEPLOYER_COINS_MAX });
+  const wallets = new Map<string, { chain: ChainKey; address: string; coins: DeployerCoinRow[] }>();
+  for (const c of coins) {
+    const address = deployerKey(c.chain, c.deployerAddress);
+    const k = `${c.chain}:${address}`;
+    const w = wallets.get(k) ?? { chain: c.chain, address, coins: [] };
+    w.coins.push(c);
+    wallets.set(k, w);
+  }
+  return [...wallets.values()].map(w => {
+    const list = [...w.coins].sort((a, b) => (b.coinScore ?? -1) - (a.coinScore ?? -1));
+    const totals = list.filter(c => c.totalScore != null).map(c => c.totalScore!);
+    const last = Math.max(...list.map(c => c.finishedAt.getTime()));
     return {
-      ...toDeployerDTO(d),
-      checked: coins.length,
-      real: coins.filter(c => c.totalScore != null && checkedOut(c.totalScore, c.coinScore)).length,
+      chain: w.chain,
+      address: w.address,
+      checked: list.length,
+      real: list.filter(c => c.totalScore != null && checkedOut(c.totalScore, c.coinScore)).length,
       avgTotal: totals.length ? Math.round(totals.reduce((a, b) => a + b, 0) / totals.length) : null,
-      coins: coins.map(c => ({
-        id: c.shortId,
-        ticker: c.target.ticker,
-        name: c.target.name,
-        hue: hueOf(c.target.key),
-        coinScore: c.coinScore,
-        coinBand: coinKeyOf(c.coinBand),
-      })),
+      lastChecked: Number.isFinite(last) ? new Date(last).toISOString() : null,
+      coins: list.map(toDeployerCoinDTO),
     };
   });
 }
 
 export function sortDeployers(rows: DeployerRowDTO[], sort: DeployerSort): DeployerRowDTO[] {
   const ratio = (d: DeployerRowDTO) => (d.checked ? d.real / d.checked : -1);
+  const at = (d: DeployerRowDTO) => (d.lastChecked ? Date.parse(d.lastChecked) : 0);
   const tie = (a: DeployerRowDTO, b: DeployerRowDTO) => a.address.localeCompare(b.address);
   const cmp: Record<DeployerSort, (a: DeployerRowDTO, b: DeployerRowDTO) => number> = {
     real: (a, b) => ratio(b) - ratio(a) || b.checked - a.checked || tie(a, b),
-    dead: (a, b) => b.dead - a.dead || b.launched - a.launched || tie(a, b),
-    launched: (a, b) => b.launched - a.launched || b.dead - a.dead || tie(a, b),
+    checked: (a, b) => b.checked - a.checked || b.real - a.real || tie(a, b),
+    recent: (a, b) => at(b) - at(a) || tie(a, b),
   };
   return [...rows].sort(cmp[sort]);
 }
@@ -121,7 +110,8 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 export function registerInsightRoutes(app: FastifyInstance, deps: AppDeps) {
   app.get('/v1/deployers', async (request): Promise<DeployersResponse> => {
     const q = DeployersQueryZ.parse(request.query ?? {});
-    const rows = sortDeployers(await deployerRows(deps.prisma, chainDbOf(q.chain)), q.sort);
+    const chain = q.chain === 'any' || q.chain === 'all' ? null : q.chain;
+    const rows = sortDeployers(await deployerRows(deps.prisma, chain), q.sort ?? 'real');
     return { items: rows.slice(0, q.limit) };
   });
 
@@ -154,7 +144,7 @@ export function registerInsightRoutes(app: FastifyInstance, deps: AppDeps) {
 
     const builders = sortDeployers(deployers.filter(d => d.checked >= 1), 'real')
       .slice(0, 4)
-      .map(d => ({ address: d.address, chain: d.chain, record: d.record, checked: d.checked, real: d.real }));
+      .map(d => ({ address: d.address, chain: d.chain, checked: d.checked, real: d.real }));
 
     return { stats: { checked, today: todayCount, larpSince }, sinceByVerdict, mostChecked, builders };
   });

@@ -9,9 +9,9 @@ import { HttpError, reportError, solanaRpcUrl, startGuardProxy, type Http, type 
 import { AiOutputError } from '../src/ai/anthropic';
 import { createAi } from '../src/ai/index';
 import { aiErrorText, probeAi } from '../src/doctor/ai';
-import { probeDexScreener, probeFourtis, probeGitHub, probeXBot, probeXRead } from '../src/doctor/apis';
+import { probeDexScreener, probeGitHub, probeXBot, probeXRead } from '../src/doctor/apis';
 import { probeEtherscan, probeEvm, probeRobinhood, probeSolana } from '../src/doctor/chains';
-import { headerLines } from '../src/doctor/index';
+import { buildProbes, headerLines } from '../src/doctor/index';
 import { bullWorkers, connectThrough, probeBrowserGuard, probeBrowserHost, probePostgres, probeRedis } from '../src/doctor/infra';
 import { Redactor, dbLabel, hostOf, wsLabel } from '../src/doctor/redact';
 import { formatReport, formatTable, summaryLine } from '../src/doctor/report';
@@ -395,15 +395,12 @@ describe('API probes', () => {
     expect(wrong.status).toBe('FAIL');
     expect(wrong.remedy).toBe('set X_BOT_USER_ID=123, or use the bot account\'s access token');
   });
-  it("Fourtis: SKIP when empty, WARN when half set, WARN on the placeholder paths' 404", async () => {
-    const devRadar = vi.fn(async () => null);
-    const http = fakeHttp(() => ({ status: 404 }));
-    expect((await probeFourtis({ env: prodEnv(), http, fourtis: { devRadar } })).status).toBe('SKIP');
-    expect((await probeFourtis({ env: prodEnv({ FOURTIS_API_URL: 'https://f.example' }), http, fourtis: { devRadar } })).status).toBe('WARN');
-    const r = await probeFourtis({ env: prodEnv({ FOURTIS_API_URL: 'https://f.example/api/', FOURTIS_API_KEY: 'f'.repeat(16) }), http, fourtis: { devRadar } });
-    expect(r.status).toBe('WARN');
-    expect(http.calls[0].url).toBe('https://f.example/api/devradar/eth/0x6982508145454Ce325dDbE47a25d4ec3d2311933');
-    expect(devRadar).not.toHaveBeenCalled();
+  it('variables of a retired coin data service left in .env are ignored: no probe, no env key, no error', () => {
+    const env = prodEnv({ FOURTIS_API_URL: 'https://f.example/api/', FOURTIS_API_KEY: 'f'.repeat(16) });
+    expect(Object.keys(env).filter(k => k.startsWith('FOURTIS'))).toEqual([]);
+    const probes = buildProbes({ env, http: fakeHttp(() => ({ status: 404 })), sources: {} as never } as never).map(p => p.name);
+    expect(probes).toContain('Etherscan V2');
+    expect(probes.filter(n => /fourtis/i.test(n))).toEqual([]);
   });
   it('DexScreener: WARN when only the chain-less lookup fails', async () => {
     const pepe = { chain: 'eth', symbol: 'PEPE', priceUsd: 0.00001, liquidityUsd: 25_000_000, dex: 'uniswap' };

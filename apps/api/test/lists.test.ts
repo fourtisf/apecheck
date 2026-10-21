@@ -10,7 +10,7 @@ import {
   type LiveResponse,
 } from '@apecheck/core';
 import { SNAPSHOT_MAX } from '../src/feed-snapshot';
-import { Client, dbUrlInTimeZone, makeHarness, resetState, seedCheck, seedCoinFacts, seedDeployer, seedTarget, type Harness } from './helpers';
+import { Client, dbUrlInTimeZone, makeHarness, resetState, seedCheck, seedCoinFacts, seedTarget, type Harness } from './helpers';
 
 let h: Harness;
 beforeAll(async () => {
@@ -32,7 +32,6 @@ const min = (n: number) => n * 60_000;
 
 const D1_ADDR = 'BuiLdErWaLLetAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const D2_ADDR = '0x2222222222222222222222222222222222222222';
-const D3_ADDR = 'SeRiALWaLLetCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
 
 let viewer: Client;
 let ids: Record<string, string>;
@@ -43,6 +42,7 @@ let ids: Record<string, string>;
  * C: site helixdex.app (base) total 55 partly, coin 40 sketchy, checked 2,  vol 9000, bot
  * D: coin $NEXA (base)        total 15 larp,   coin 20 rigged,  checked 1,  vol null
  * not on the feed: an older check of A, a running check, a private check, a failed check
+ * deployer wallets (CoinFacts.deployerAddress): A → D1 (sol); C (the coin the site found) and D → D2 (base)
  */
 async function seedFeed() {
   await resetState(h);
@@ -50,17 +50,14 @@ async function seedFeed() {
   await viewer.get('/v1/me');
   const sid = viewer.sid(h.app)!;
 
-  const d1 = await seedDeployer(h.prisma, { chain: 'SOL', address: D1_ADDR, record: 'BUILDER', launched: 2, dead: 0 });
-  const d2 = await seedDeployer(h.prisma, { chain: 'BASE', address: D2_ADDR, record: 'MIXED', launched: 6, dead: 2 });
-  await seedDeployer(h.prisma, { chain: 'SOL', address: D3_ADDR, record: 'SERIAL', launched: 30, dead: 25 });
-
   const tA = await seedTarget(h.prisma, {
     kind: 'COIN', chain: 'SOL', ca: 'OrbitMint1111111111111111111111111111111111', ticker: 'ORBIT', name: '$ORBIT',
     key: 'ca:sol:OrbitMint1111111111111111111111111111111111', checkCount: 10, lastVol5m: '500', lastPrice: '1.5', lastMc: '2000000',
   });
   const tB = await seedTarget(h.prisma, { kind: 'POST', handle: 'kairolabs', name: '@kairolabs', key: 'post:1849', checkCount: 50 });
   const tC = await seedTarget(h.prisma, {
-    kind: 'SITE', chain: 'BASE', domain: 'helixdex.app', name: 'helixdex.app', key: 'site:helixdex.app', checkCount: 2, lastVol5m: '9000', lastPrice: '2.2',
+    kind: 'SITE', chain: 'BASE', ca: '0x3333333333333333333333333333333333333333', domain: 'helixdex.app', name: 'helixdex.app', key: 'site:helixdex.app',
+    checkCount: 2, lastVol5m: '9000', lastPrice: '2.2',
   });
   const tD = await seedTarget(h.prisma, {
     kind: 'COIN', chain: 'BASE', ca: '0x4444444444444444444444444444444444444444', ticker: 'NEXA', name: '$NEXA',
@@ -71,7 +68,7 @@ async function seedFeed() {
     targetId: tA.id, shortId: 'aaaa001', totalScore: 80, narScore: 82, narBand: 'real', coinScore: 78, coinBand: 'ok',
     requesterSid: sid, priceAtCheck: '1', createdAt: today(min(12)), finishedAt: ago(min(10)),
   });
-  await seedCoinFacts(h.prisma, A.id, { deployerId: d1.id, bundlePct: 2.5, top10Pct: 18, devHoldPct: 1.2, lpStatus: 'burned', authorities: 'Renounced' });
+  await seedCoinFacts(h.prisma, A.id, { deployerAddress: D1_ADDR, bundlePct: 2.5, top10Pct: 18, devHoldPct: 1.2, lpStatus: 'burned', authorities: 'Renounced' });
   const E = await seedCheck(h.prisma, { targetId: tA.id, shortId: 'aaaa000', isLatest: false, totalScore: 60, createdAt: today(min(50)), finishedAt: ago(min(45)) });
   await h.prisma.pricePoint.createMany({
     data: [
@@ -91,13 +88,13 @@ async function seedFeed() {
     targetId: tC.id, shortId: 'cccc001', totalScore: 55, narScore: 70, narBand: 'partly', coinScore: 40, coinBand: 'sketchy', via: 'BOT',
     priceAtCheck: '2', createdAt: today(min(6)), finishedAt: ago(min(5)),
   });
-  await seedCoinFacts(h.prisma, C.id, { deployerId: d2.id, sigBundle: 'WARN' });
+  await seedCoinFacts(h.prisma, C.id, { deployerAddress: D2_ADDR, sigBundle: 'WARN' });
 
   const D = await seedCheck(h.prisma, {
     targetId: tD.id, shortId: 'dddd001', totalScore: 15, narScore: 10, narBand: 'larp', coinScore: 20, coinBand: 'rigged',
     priceAtCheck: '1', createdAt: yesterday(), finishedAt: ago(min(30)),
   });
-  await seedCoinFacts(h.prisma, D.id, { deployerId: d2.id, sigDeployer: 'FAIL', lpStatus: 'unlocked' });
+  await seedCoinFacts(h.prisma, D.id, { deployerAddress: D2_ADDR, sigDeployer: 'FAIL', lpStatus: 'unlocked' });
 
   // excluded from every list
   const tX = await seedTarget(h.prisma, { kind: 'SITE', domain: 'hidden.xyz', name: 'hidden.xyz', key: 'site:hidden.xyz' });
@@ -152,7 +149,7 @@ describe('GET /v1/feed', () => {
     expect((await feed('?q=nothing-like-this')).total).toBe(0);
   });
 
-  it('finds and shows a deployer wallet whose launch history is unknown (no Deployer row)', async () => {
+  it("finds and shows a coin's deployer wallet; the wallet is on the deployers page with that coin", async () => {
     const creator = '0x5555555555555555555555555555555555555555';
     const t = await seedTarget(h.prisma, { kind: 'COIN', chain: 'BASE', ca: '0x6666666666666666666666666666666666666666', ticker: 'NOHI', name: '$NOHI', key: 'ca:base:0x6666666666666666666666666666666666666666' });
     const c = await seedCheck(h.prisma, { targetId: t.id, shortId: 'nohi001', totalScore: 40, narScore: 40, narBand: 'partly', coinScore: 40, coinBand: 'sketchy', finishedAt: ago(min(50)) });
@@ -160,12 +157,16 @@ describe('GET /v1/feed', () => {
     try {
       const hit = await feed('?q=0x55555');
       expect(order(hit)).toEqual(['nohi001']);
-      expect(hit.items[0].deployer).toEqual({ address: creator, chain: 'base', record: null });
+      expect(hit.items[0].deployer).toEqual({ address: creator, chain: 'base' });
       const coins = (await viewer.get('/v1/coins?q=0x55555')).json<CoinsResponse>();
-      expect(coins.items[0].facts).toMatchObject({ deployerAddress: creator, deployerRecord: null, sig: { deployer: 'warn' } });
-      // no Deployer row: the deployers page and its counts stay made-up free
+      expect(coins.items[0].facts).toEqual({
+        sig: { deployer: 'warn', bundle: 'ok', holders: 'ok', lp: 'ok', authorities: 'ok' },
+        bundlePct: null, top10Pct: null, devHoldPct: null, lpLabel: 'Unknown', authorities: null, deployerAddress: creator,
+      });
+      // the deployers page lists the wallet with the coins ApeCheck has checked from it
       const deps = (await viewer.get('/v1/deployers')).json<DeployersResponse>();
-      expect(deps.items.map(d => d.address)).not.toContain(creator);
+      expect(deps.items.find(d => d.address === creator)).toMatchObject({ chain: 'base', checked: 1, coins: [{ id: 'nohi001', ticker: 'NOHI' }] });
+      expect(await h.prisma.deployer.count()).toBe(0);
     } finally {
       await h.prisma.check.delete({ where: { id: c.id } });
       await h.prisma.target.delete({ where: { id: t.id } });
@@ -209,7 +210,7 @@ describe('GET /v1/feed', () => {
       id: 'aaaa001', kind: 'coin', status: 'done', name: '$ORBIT', title: 'Orbit', ticker: 'ORBIT', chain: 'sol',
       total: 80, narBand: 'real', coinBand: 'ok', hasCoin: true, mc: 2000000, vol5m: 500, since: 50,
       spark: [0, 20, 50], checks: 10, via: 'web', by: null, mine: true,
-      deployer: { address: D1_ADDR, chain: 'sol', record: 'builder' },
+      deployer: { address: D1_ADDR, chain: 'sol' },
     });
     const b = (await feed('?q=kairo')).items[0];
     expect(b).toMatchObject({ kind: 'post', title: 'Kairo', hasCoin: false, mc: null, since: null, spark: null, via: 'bot', by: 'solsleuth', mine: false, deployer: null });
@@ -350,9 +351,9 @@ describe('GET /v1/coins', () => {
     expect(all.total).toBe(3);
     expect(all.items[0].facts).toEqual({
       sig: { deployer: 'ok', bundle: 'ok', holders: 'ok', lp: 'ok', authorities: 'ok' },
-      bundlePct: 2.5, top10Pct: 18, devHoldPct: 1.2, lpLabel: 'Burned', authorities: 'Renounced', deployerAddress: D1_ADDR, deployerRecord: 'builder',
+      bundlePct: 2.5, top10Pct: 18, devHoldPct: 1.2, lpLabel: 'Burned', authorities: 'Renounced', deployerAddress: D1_ADDR,
     });
-    expect(all.items[2].facts).toMatchObject({ sig: { deployer: 'fail' }, lpLabel: 'Unlocked', deployerRecord: 'mixed' });
+    expect(all.items[2].facts).toMatchObject({ sig: { deployer: 'fail' }, lpLabel: 'Unlocked', deployerAddress: D2_ADDR });
     expect(order((await viewer.get('/v1/coins?tab=sketchy')).json<CoinsResponse>())).toEqual(['cccc001']);
     expect(order((await viewer.get('/v1/coins?tab=all&chain=sol')).json<CoinsResponse>())).toEqual(['aaaa001']);
     expect(order((await viewer.get('/v1/coins?chain=base')).json<CoinsResponse>())).toEqual(['cccc001', 'dddd001']);
@@ -364,21 +365,33 @@ describe('GET /v1/coins', () => {
 describe('GET /v1/deployers', () => {
   beforeAll(seedFeed);
 
-  it('lists every deployer with their checked coins and sorts by record', async () => {
+  it("lists every wallet named by a public coin check, with the coins ApeCheck has checked from it, and sorts them", async () => {
     const real = (await viewer.get('/v1/deployers')).json<DeployersResponse>();
-    expect(real.items.map(d => d.address)).toEqual([D1_ADDR, D2_ADDR, D3_ADDR]);
-    expect(real.items[0]).toMatchObject({ chain: 'sol', record: 'builder', launched: 2, dead: 0, checked: 1, real: 1, avgTotal: 80 });
-    expect(real.items[0].coins).toEqual([{ id: 'aaaa001', ticker: 'ORBIT', name: '$ORBIT', hue: expect.any(Number), coinScore: 78, coinBand: 'ok' }]);
-    expect(real.items[1]).toMatchObject({ record: 'mixed', checked: 2, real: 0, avgTotal: 35 });
+    expect(real.items.map(d => d.address)).toEqual([D1_ADDR, D2_ADDR]);
+    const a = await h.prisma.check.findUniqueOrThrow({ where: { shortId: 'aaaa001' } });
+    expect(real.items[0]).toEqual({
+      chain: 'sol', address: D1_ADDR, checked: 1, real: 1, avgTotal: 80, lastChecked: a.finishedAt!.toISOString(),
+      coins: [{ id: 'aaaa001', ticker: 'ORBIT', name: '$ORBIT', hue: expect.any(Number), coinScore: 78, coinBand: 'ok' }],
+    });
+    // the coin the helixdex.app site check found counts for its wallet like a coin check
+    expect(real.items[1]).toMatchObject({ chain: 'base', checked: 2, real: 0, avgTotal: 35 });
     expect(real.items[1].coins.map(c => c.id)).toEqual(['cccc001', 'dddd001']);
-    expect(real.items[2]).toMatchObject({ record: 'serial', checked: 0, real: 0, avgTotal: null, coins: [] });
+    expect(real.items.every(d => !('record' in d) && !('launched' in d) && !('dead' in d))).toBe(true);
 
-    const dead = (await viewer.get('/v1/deployers?sort=dead')).json<DeployersResponse>();
-    expect(dead.items.map(d => d.address)).toEqual([D3_ADDR, D2_ADDR, D1_ADDR]);
-    const launched = (await viewer.get('/v1/deployers?sort=launched&chain=all')).json<DeployersResponse>();
-    expect(launched.items.map(d => d.address)).toEqual([D3_ADDR, D2_ADDR, D1_ADDR]);
+    const checked = (await viewer.get('/v1/deployers?sort=checked')).json<DeployersResponse>();
+    expect(checked.items.map(d => d.address)).toEqual([D2_ADDR, D1_ADDR]);
+    // C finished 5 minutes ago, A 10
+    const recent = (await viewer.get('/v1/deployers?sort=recent')).json<DeployersResponse>();
+    expect(recent.items.map(d => d.address)).toEqual([D2_ADDR, D1_ADDR]);
+    // links from before: the launch-record sorts read as "checked"
+    for (const sort of ['dead', 'launched']) {
+      const res = await viewer.get(`/v1/deployers?sort=${sort}&chain=all`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json<DeployersResponse>().items.map(d => d.address)).toEqual([D2_ADDR, D1_ADDR]);
+    }
+    expect((await viewer.get('/v1/deployers?sort=hot')).statusCode).toBe(400);
     const sol = (await viewer.get('/v1/deployers?chain=sol')).json<DeployersResponse>();
-    expect(sol.items.map(d => d.address)).toEqual([D1_ADDR, D3_ADDR]);
+    expect(sol.items.map(d => d.address)).toEqual([D1_ADDR]);
   });
 });
 
@@ -388,37 +401,29 @@ describe('deployers named only by private checks (M3)', () => {
   it('are never listed on /v1/deployers or among the insights builders; a public check of their coin makes them public', async () => {
     const PRIV = 'PrivDeployer111111111111111111111111111111111'.slice(0, 44);
     const maxUser = await h.prisma.user.create({ data: { solAddress: 'MaxUserWa11et1111111111111111111111111111111', tier: 'MAX' } });
-    const dPriv = await seedDeployer(h.prisma, { chain: 'SOL', address: PRIV, record: 'SERIAL', launched: 7, dead: 6, fundedFrom: 'FixedFloat' });
     const ca = 'PrivMint11111111111111111111111111111111111';
     const tP = await seedTarget(h.prisma, { kind: 'COIN', chain: 'SOL', ca, ticker: 'PRIV', name: '$PRIV', key: `ca:sol:${ca}`, checkCount: 0 });
     // a Max user's private check: the worker never makes it isLatest
     const p = await seedCheck(h.prisma, {
       targetId: tP.id, shortId: 'priv001', isPrivate: true, isLatest: false, requesterId: maxUser.id, totalScore: 90, coinScore: 90, coinBand: 'clean',
     });
-    await seedCoinFacts(h.prisma, p.id, { deployerId: dPriv.id, deployerAddress: PRIV });
-    // M1: a deployer whose public coin check is not the latest one stays listed (with no coins on the feed)
-    const OLD = 'OldPublicDep1oyer1111111111111111111111111';
-    const dOld = await seedDeployer(h.prisma, { chain: 'SOL', address: OLD, record: 'MIXED', launched: 3, dead: 1 });
-    const older = await h.prisma.check.findUniqueOrThrow({ where: { shortId: ids.E } });
-    await seedCoinFacts(h.prisma, older.id, { deployerId: dOld.id });
+    await seedCoinFacts(h.prisma, p.id, { deployerAddress: PRIV });
 
     const anon = new Client(h.app, '203.0.113.77');
     for (const c of [anon, viewer]) {
-      for (const qs of ['', '?sort=dead', '?sort=launched', '?chain=sol']) {
+      for (const qs of ['', '?sort=checked', '?sort=recent', '?chain=sol']) {
         const listed = (await c.get(`/v1/deployers${qs}`)).json<DeployersResponse>().items.map(d => d.address);
         expect(listed, qs).not.toContain(PRIV);
-        expect(listed, qs).toContain(OLD);
+        expect(listed, qs).toContain(D1_ADDR);
       }
       expect((await c.get('/v1/insights')).json<InsightsDTO>().builders.map(b => b.address)).not.toContain(PRIV);
     }
-    const old = (await anon.get('/v1/deployers?chain=sol')).json<DeployersResponse>().items.find(d => d.address === OLD);
-    expect(old).toMatchObject({ checked: 0, coins: [] });
 
     // the same coin checked publicly afterwards: its deployer is now public, with that coin
     const q = await seedCheck(h.prisma, { targetId: tP.id, shortId: 'pub0001', totalScore: 70, coinScore: 72, coinBand: 'ok' });
-    await seedCoinFacts(h.prisma, q.id, { deployerId: dPriv.id, deployerAddress: PRIV });
+    await seedCoinFacts(h.prisma, q.id, { deployerAddress: PRIV });
     const now = (await anon.get('/v1/deployers')).json<DeployersResponse>().items.find(d => d.address === PRIV);
-    expect(now).toMatchObject({ record: 'serial', launched: 7, dead: 6, checked: 1 });
+    expect(now).toMatchObject({ chain: 'sol', checked: 1, real: 1 });
     expect(now!.coins.map(c => c.id)).toEqual(['pub0001']);
   });
 });
@@ -457,8 +462,8 @@ describe('GET /v1/insights', () => {
     ]);
     expect(r.mostChecked[0]).toMatchObject({ name: '@kairolabs', kind: 'post', checks: 50 });
     expect(r.builders).toEqual([
-      { address: D1_ADDR, chain: 'sol', record: 'builder', checked: 1, real: 1 },
-      { address: D2_ADDR, chain: 'base', record: 'mixed', checked: 2, real: 0 },
+      { address: D1_ADDR, chain: 'sol', checked: 1, real: 1 },
+      { address: D2_ADDR, chain: 'base', checked: 2, real: 0 },
     ]);
   });
 });
@@ -535,6 +540,13 @@ describe('GET /v1/live', () => {
       ],
     });
     await h.redis.set(progressKey(run.id), '0.42');
+    // a check an older worker was running: its newest step reads in ApeCheck's own words
+    const old = await seedCheck(h.prisma, {
+      targetId: t.id, shortId: 'live004', status: 'RUNNING', createdAt: new Date(Date.now() - 60_000), startedAt: new Date(Date.now() - 50_000),
+    });
+    await h.prisma.checkStep.create({
+      data: { checkId: old.id, idx: 0, tMs: 0, status: 'WARN', text: 'WhaleFlow unavailable, holder share unknown (Solana RPC unavailable)', source: 'WhaleFlow' },
+    });
     const ts = await seedTarget(h.prisma, { kind: 'SITE', domain: 'queued.xyz', name: 'queued.xyz', key: 'site:queued.xyz' });
     await seedCheck(h.prisma, { targetId: ts.id, shortId: 'live002', status: 'QUEUED', startedAt: null, createdAt: new Date(Date.now() - 5_000) });
     await seedCheck(h.prisma, { targetId: ts.id, shortId: 'live003', status: 'RUNNING', isPrivate: true, createdAt: new Date() });
@@ -543,7 +555,8 @@ describe('GET /v1/live', () => {
     await seedCheck(h.prisma, { targetId: ts.id, shortId: 'dead001', status: 'RUNNING', createdAt: new Date(Date.now() - 2_000), startedAt: new Date(Date.now() - 3600_000) });
 
     const r = (await c.get('/v1/live')).json<LiveResponse>();
-    expect(r.items.map(i => i.id)).toEqual(['live002', 'live001']);
+    expect(r.items.map(i => i.id)).toEqual(['live002', 'live001', 'live004']);
+    expect(r.items[2].lastText).toBe('Holder share: not checked (Solana RPC unavailable)');
     const [queued, running] = r.items;
     expect(queued).toMatchObject({ kind: 'site', status: 'queued', startedAt: null, step: 0, stepsExpected: 10, progress: 0, lastText: null, mine: false });
     expect(queued.elapsedMs).toBeGreaterThanOrEqual(5_000);
@@ -560,6 +573,7 @@ describe('GET /v1/live', () => {
     const capped = (await c.get('/v1/live')).json<LiveResponse>();
     expect(capped.items).toHaveLength(8);
     expect(capped.items[0].id).toBe('liveq08');
+    expect(JSON.stringify(r)).not.toMatch(/whaleflow/i);
   });
 });
 

@@ -995,7 +995,7 @@ describe('the pipeline queues check.completed', () => {
       coinFacts: {
         ['0x3333333333333333333333333333333333333333']: {
           chain: 'base', address: '0x3333333333333333333333333333333333333333', token: { name: 'Orbit', symbol: 'ORBIT', decimals: 18, supply: '1' },
-          deployer: null, bundle: null, holders: null, lp: null, authorities: null, market: null, stubbed: ['fourtis'], errors: [],
+          deployer: null, bundle: null, holders: null, lp: null, authorities: null, market: null, stubbed: [], errors: [],
         },
       },
     }),

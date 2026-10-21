@@ -1,9 +1,11 @@
 /**
- * Stage D — evidence (no AI): GitHub, the X account, and for coins the Fourtis / on-chain facts.
- * Facts become signals only through ./signals (core helpers + CONFIG/TUNING). A source that is not
- * available leaves its signal unknown and the log says which source was missing.
+ * Stage D — evidence (no AI): GitHub, the X account, and for coins ApeCheck's own facts: on-chain reads, the
+ * deployer wallet and the other coins from it that ApeCheck has checked. Facts become signals only through ./signals
+ * (core helpers + CONFIG/TUNING). A section ApeCheck could not check stays unknown (warn) and the log says
+ * "not checked"; "unavailable" only names a source that failed (an RPC, Etherscan).
  */
-import { CHAINS, deployerLine, short, type ChainKey, type Signal } from '@apecheck/core';
+import { CHAINS, deployerHistoryLine, deployerLine, short, type ChainKey, type Signal } from '@apecheck/core';
+import { coinsByDeployer } from '@apecheck/db';
 import { captureErrors, type CoinRawFacts, type RepoFacts, type XUser } from '@apecheck/sources';
 import type { CheckRun } from './context';
 import { announceCoin, findCoin } from './resolve';
@@ -152,15 +154,21 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
     return line;
   };
 
-  // deployer
+  // deployer: the wallet, and its history from ApeCheck's own checks (shown, never scored: the signal stays unknown)
   const d = raw.deployer;
   if (d && sig.historyKnown) {
-    const text = `Deployer: ${deployerLine({ record: sig.record, launched: d.launched!, dead: d.dead!, fundedFrom: d.fundedFrom })}`;
+    const text = `Deployer: ${deployerLine({ record: sig.record, launched: d.launched!, dead: d.dead! })}`;
     const idx = await steps.step({ status: sig.deployer, text, source: d.source });
     evidence.deployer = { signal: sig.deployer, text, stepIdx: idx >= 0 ? idx : null };
+  } else if (d) {
+    const who = ` (${short(d.address)})`;
+    const history = await within(coinsByDeployer(run.deps.prisma, { chain: run.chain!, address: d.address, excludeCa: run.ca }), 5_000, null);
+    if (history) await steps.step({ status: sig.deployer, text: `Deployer history: ${deployerHistoryLine(history)}${who}`, source: 'ApeCheck' });
+    else await steps.step({ status: 'warn', text: `Deployer history: not checked${who}` });
   } else {
-    const who = d ? ` (${short(d.address)})` : '';
-    await steps.step({ status: 'warn', text: `${unknown('deployer')}${who}` });
+    // EVM: the creator lookup (Etherscan) failed; Solana deployers are not looked up
+    const etherscan = CHAINS[run.chain!].family === 'evm' && raw.errors.some(e => e.startsWith('evm.creator'));
+    await steps.step({ status: 'warn', text: `Deployer: not checked${etherscan ? ' (Etherscan unavailable)' : ''}` });
   }
 
   // bundle
@@ -175,7 +183,7 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
 
   // holders + liquidity
   const h = raw.holders;
-  const lpPart = sig.lpText ? `liquidity ${sig.lpText}` : 'LP status unknown';
+  const lpPart = sig.lpText ? `liquidity ${sig.lpText}` : 'LP status not checked';
   if (h && h.top10Pct != null) {
     const dev = h.devHoldPct != null && h.devHoldPct >= 1 ? `, dev wallet ${pct(h.devHoldPct)}%` : '';
     const text = `Top 10 holders own ${pct(h.top10Pct)}%${dev}, ${lpPart}`;
@@ -183,7 +191,7 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
     const idx = await steps.step({ status, text, source: h.source });
     evidence.holders = { signal: sig.holders, text, stepIdx: idx >= 0 ? idx : null };
   } else {
-    const text = sig.lpText ? `Liquidity ${sig.lpText}; holder share not checked` : unknown('holders')!;
+    const text = sig.lpText ? `Liquidity ${sig.lpText}; holder share: not checked` : unknown('holders')!;
     await steps.step({ status: sig.lpText ? worst('warn', sig.lp) : 'warn', text, source: raw.lp?.source });
   }
 

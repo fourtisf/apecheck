@@ -1,6 +1,7 @@
 /**
  * The browser suite's data: a few sites, coins on two chains, a post check that read its post, a check that
- * stopped before a verdict, and deployers on Base and Solana. Fixed short ids so tests can name rows.
+ * stopped before a verdict, and the deployer wallets of the Base coins (CoinFacts.deployerAddress, as the worker stores
+ * the Etherscan creator). Fixed short ids so tests can name rows.
  */
 import type { openDb } from './env';
 
@@ -23,21 +24,18 @@ export const SITES = [
   { id: 'site003', domain: 'nebula.fi', nar: 88, ago: 90 },
 ] as const;
 
+/** Deployer wallets on Base: 0x1111… deployed two checked coins (one real), 0x2222… one (real). */
+export const DEP_1 = '0x1111111111111111111111111111111111111111';
+export const DEP_2 = '0x2222222222222222222222222222222222222222';
+
 /** Coins: two sketchy ones on Solana, the rest elsewhere or in other bands. */
 export const COINS = [
-  { id: 'coin001', ticker: 'ORBT', chain: 'SOL', coin: 44, nar: 50, ago: 20 },
-  { id: 'coin002', ticker: 'BASED', chain: 'BASE', coin: 82, nar: 70, ago: 40 },
-  { id: 'coin003', ticker: 'RUG', chain: 'SOL', coin: 18, nar: 20, ago: 50 },
-  { id: 'coin004', ticker: 'MEH', chain: 'SOL', coin: 41, nar: 45, ago: 70 },
-  { id: 'coin005', ticker: 'BLUE', chain: 'BASE', coin: 40, nar: 55, ago: 80 },
-] as const;
-
-/** Deployers: on Base the serial launcher has the most dead tokens. */
-export const DEPLOYERS = [
-  { chain: 'BASE', address: '0x1111111111111111111111111111111111111111', record: 'BUILDER', launched: 3, dead: 0 },
-  { chain: 'BASE', address: '0x2222222222222222222222222222222222222222', record: 'SERIAL', launched: 9, dead: 7 },
-  { chain: 'SOL', address: 'So1Dep1oyerAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', record: 'MIXED', launched: 4, dead: 2 },
-  { chain: 'SOL', address: 'So1Dep1oyerBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', record: 'SERIAL', launched: 12, dead: 11 },
+  { id: 'coin001', ticker: 'ORBT', chain: 'SOL', coin: 44, nar: 50, ago: 20, deployer: null },
+  { id: 'coin002', ticker: 'BASED', chain: 'BASE', coin: 82, nar: 70, ago: 40, deployer: DEP_1 },
+  { id: 'coin003', ticker: 'RUG', chain: 'SOL', coin: 18, nar: 20, ago: 50, deployer: null },
+  { id: 'coin004', ticker: 'MEH', chain: 'SOL', coin: 41, nar: 45, ago: 70, deployer: null },
+  { id: 'coin005', ticker: 'BLUE', chain: 'BASE', coin: 40, nar: 55, ago: 80, deployer: DEP_1 },
+  { id: 'coin006', ticker: 'DEPC', chain: 'BASE', coin: 70, nar: 72, ago: 240, deployer: DEP_2 },
 ] as const;
 
 export const POST_CHECK = { id: 'post001', handle: 'kairolabs', text: 'Kairo v2 is live on mainnet today. Try it.' } as const;
@@ -72,12 +70,11 @@ export async function seed(db: Db) {
       },
     });
     await db.coinFacts.create({
-      data: { checkId: check.id, sigDeployer: 'WARN', sigBundle: 'OK', sigHolders: 'WARN', sigLp: 'OK', sigAuthorities: 'OK', top10Pct: 31, holders: 812 },
+      data: {
+        checkId: check.id, deployerAddress: c.deployer, sigDeployer: 'WARN', sigBundle: 'OK', sigHolders: 'WARN', sigLp: 'OK', sigAuthorities: 'OK',
+        top10Pct: 31, holders: 812,
+      },
     });
-  }
-
-  for (const d of DEPLOYERS) {
-    await db.deployer.create({ data: { ...d, firstSeen: new Date('2025-06-01T00:00:00Z') } });
   }
 
   const post = await db.target.create({

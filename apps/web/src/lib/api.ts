@@ -174,7 +174,7 @@ export interface CoinsParams {
 
 export interface DeployersParams {
   chain?: ChainKey | 'all';
-  sort?: 'real' | 'dead' | 'launched';
+  sort?: 'real' | 'checked' | 'recent';
   /** 1–500, default 200 */
   limit?: number;
 }

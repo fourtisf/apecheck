@@ -167,7 +167,7 @@ describe('heuristic judge', () => {
 
   it('adds the coin sentence only when the coin scores under 60; fair launch checks out against the bundle', () => {
     const coin = (score: number, bundle: 'ok' | 'fail') => ({
-      record: 'builder' as const, historyKnown: true, launched: 1, dead: 0, fundedFrom: 'Coinbase', bundlePct: bundle === 'ok' ? 2.1 : 31.2, bundleWallets: 9,
+      record: 'builder' as const, historyKnown: true, launched: 1, dead: 0, bundlePct: bundle === 'ok' ? 2.1 : 31.2, bundleWallets: 9,
       top10Pct: 20, devHoldPct: 1, lpText: 'burned', authoritiesText: 'Renounced', score,
       signals: { deployer: 'ok' as const, bundle, holders: 'ok' as const, lp: 'ok' as const, authorities: 'ok' as const },
       evidence: { bundle: sig(bundle, 'Launch: 2.1% of supply bought by 9 bundled wallets', 9) },

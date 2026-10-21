@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { REP, fmtAge, fmtPct, fmtUsd, short, type CheckReportDTO, type DeployerDTO } from '@apecheck/core';
+import { cap, fmtPct, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { VCard } from '../VCard';
 import { SinceChart } from './SinceChart';
 import { isRunning, noVerdict } from './util';
@@ -89,62 +89,41 @@ function PriceCard({ r }: { r: CheckReportDTO }) {
   );
 }
 
-function DeployerCard({ d }: { d: DeployerDTO }) {
-  const age = fmtAge(d.firstSeen);
-  const line = [
-    d.fundedFrom ? `Funded from ${d.fundedFrom}.` : null,
-    `${d.launched} token${d.launched === 1 ? '' : 's'} launched, ${d.dead} dead.`,
-    age ? `Wallet first seen ${age} ago.` : null,
-  ]
-    .filter(Boolean)
-    .join(' ');
-  return (
-    <div className={`scard r-${d.record}`}>
-      <h3>
-        Deployer
-        <Link href={`/deployers?focus=${encodeURIComponent(d.address)}`} prefetch={false}>
-          All their coins
-        </Link>
-      </h3>
-      <p style={{ margin: '0 0 6px' }}>
-        <span className="mono" style={{ fontSize: 13 }} title={d.address}>
-          {short(d.address)}
-        </span>
-        {'  '}
-        <span className="rep-b">{REP[d.record]}</span>
-      </p>
-      <p className="sub" style={{ margin: 0 }}>
-        {line}
-      </p>
-    </div>
-  );
-}
-
-/** The deployer wallet is known but not its launch history (no DevRadar): the address, and no made-up record. */
-function DeployerAddressCard({ address }: { address: string }) {
+/**
+ * The deployer wallet (the contract creator) and its history as ApeCheck knows it: the other coins from it that
+ * ApeCheck has checked. "All their coins" opens the deployers page on the wallet when there are any.
+ */
+function DeployerCard({ address, coin }: { address: string; coin: Pick<CoinFactsDTO, 'deployerHistory' | 'deployerText'> }) {
+  const total = coin.deployerHistory?.total ?? 0;
   return (
     <div className="scard">
-      <h3>Deployer</h3>
+      <h3>
+        Deployer
+        {total > 0 ? (
+          <Link href={`/deployers?focus=${encodeURIComponent(address)}`} prefetch={false}>
+            All their coins
+          </Link>
+        ) : null}
+      </h3>
       <p style={{ margin: '0 0 6px' }}>
         <span className="mono" style={{ fontSize: 13 }} title={address}>
           {short(address)}
         </span>
       </p>
       <p className="sub" style={{ margin: 0 }}>
-        Launch history not checked.
+        {coin.deployerText ? `${cap(coin.deployerText)}.` : 'Deployer history not checked.'}
       </p>
     </div>
   );
 }
 
-/** repSide(): price since the check, the deployer's record and the share card. */
+/** repSide(): price since the check, the deployer wallet with its history, and the share card. */
 export function Side({ report: r }: { report: CheckReportDTO }) {
-  const d = r.coin?.deployer ?? null;
-  const addr = d ? null : (r.coin?.deployerAddress ?? null);
+  const addr = r.coin?.deployerAddress ?? null;
   return (
     <aside className="rep-side">
       <PriceCard r={r} />
-      {d ? <DeployerCard d={d} /> : addr ? <DeployerAddressCard address={addr} /> : null}
+      {addr && r.coin ? <DeployerCard address={addr} coin={r.coin} /> : null}
       {r.status === 'done' && r.narScore != null ? (
         <div className="scard">
           <h3>Share card</h3>

@@ -1,10 +1,12 @@
 /**
- * Stage D for coins: Fourtis services first, public on-chain / DexScreener fallbacks second.
- * Raw facts only; the worker turns them into ok/warn/fail with the thresholds in @apecheck/core.
+ * Stage D for coins: ApeCheck's own reads only: the chain's RPC (token basics, authorities, Solana's largest
+ * holders), Etherscan (the EVM contract creator), TronGrid (the Tron contract and its origin address) and
+ * DexScreener (market). Bundle share and LP status have no source here and stay null ("not checked"), as do EVM and
+ * Tron holders. Raw facts only; the worker turns them into ok/warn/fail with the thresholds in @apecheck/core.
  */
 import { CHAINS, type ChainKey } from '@apecheck/core';
 import type {
-  CoinRawFacts, DexScreenerSource, EvmSource, EvmTokenBasics, FourtisSource, SolMintInfo, SolanaSource, TronSource,
+  CoinRawFacts, DexScreenerSource, EvmSource, EvmTokenBasics, SolMintInfo, SolanaSource, TronSource,
 } from './types';
 import { TimeoutError, captureErrors, errMsg, uniq, withTimeout } from './util';
 
@@ -31,7 +33,6 @@ export const SOLANA_AMM_AUTHORITIES = new Set([
 ]);
 
 export interface CoinFactsDeps {
-  fourtis: FourtisSource;
   dex: DexScreenerSource;
   evm: EvmSource;
   sol: SolanaSource;
@@ -113,13 +114,9 @@ export async function coinFacts(deps: CoinFactsDeps, chain: ChainKey, address: s
 
   try {
     const family = CHAINS[chain].family;
-    const fourtisOn = deps.fourtis.configured;
     const skip = Promise.resolve(null);
 
-    const [dev, bundle, whale, market, solMint, solTop, evmBasics, evmCreator, tronInfo] = await Promise.all([
-      fourtisOn ? run('fourtis.devRadar', () => deps.fourtis.devRadar(chain, address)) : skip,
-      fourtisOn ? run('fourtis.bundleScan', () => deps.fourtis.bundleScan(chain, address)) : skip,
-      fourtisOn ? run('fourtis.whaleFlow', () => deps.fourtis.whaleFlow(chain, address)) : skip,
+    const [market, solMint, solTop, evmBasics, evmCreator, tronInfo] = await Promise.all([
       run('dexscreener.token', () => deps.dex.token(chain, address)),
       family === 'sol' ? run<SolMintInfo | null>('solana.mintInfo', () => deps.sol.mintInfo(address)) : skip,
       // rounds: largest accounts + supply, then their owners
@@ -154,28 +151,18 @@ export async function coinFacts(deps: CoinFactsDeps, chain: ChainKey, address: s
       facts.token = { name: market.name, symbol: market.symbol, decimals: null, supply: null };
     }
 
-    if (dev) {
-      facts.deployer = {
-        address: dev.deployer, fundedFrom: dev.fundedFrom, launched: dev.launched, dead: dev.dead, firstSeen: dev.firstSeen, source: 'DevRadar',
-      };
-    } else if (evmCreator) {
-      facts.deployer = { address: evmCreator.creator, fundedFrom: null, launched: null, dead: null, firstSeen: null, source: 'On-chain' };
+    // the wallet only: its launch history comes from ApeCheck's own checks (the worker reads it), never from here
+    if (evmCreator) {
+      facts.deployer = { address: evmCreator.creator, launched: null, dead: null, source: 'On-chain' };
     } else if (tronInfo?.creator) {
-      facts.deployer = { address: tronInfo.creator, fundedFrom: null, launched: null, dead: null, firstSeen: null, source: 'On-chain' };
+      facts.deployer = { address: tronInfo.creator, launched: null, dead: null, source: 'On-chain' };
     }
 
-    if (bundle) facts.bundle = { pct: bundle.bundlePct, wallets: bundle.wallets, source: 'BundleScan' };
-
-    if (whale) {
-      facts.holders = { top10Pct: whale.top10Pct, devHoldPct: whale.devHoldPct, count: whale.holders, source: 'WhaleFlow' };
-    } else if (solTop?.length) {
+    // bundle and LP: no source, left null ("not checked")
+    if (solTop?.length) {
       const h = solanaHolders(solTop, market?.pairAddress ?? null, facts.deployer?.address ?? null);
       if (h) facts.holders = { top10Pct: h.top10Pct, devHoldPct: h.devHoldPct, count: null, source: 'On-chain' };
     }
-
-    if (whale?.lp) facts.lp = { status: whale.lp.status, lockedDays: whale.lp.lockedDays ?? null, source: 'WhaleFlow' };
-    // M4: holder clusters only ever come from WhaleFlow (no public fallback): none → no key, nothing stored
-    if (whale?.clusters?.length) facts.clusters = whale.clusters.map(c => ({ label: c.label, wallets: c.wallets, pct: c.pct, fundedFrom: c.fundedFrom ?? null }));
 
     if (solMint?.exists) {
       const mintRenounced = solMint.mintAuthority == null;
@@ -199,10 +186,8 @@ export async function coinFacts(deps: CoinFactsDeps, chain: ChainKey, address: s
       };
     }
 
-    const allStubs = deps.stubbed?.() ?? (fourtisOn ? [] : ['fourtis']);
-    facts.stubbed = allStubs.filter(
-      s => s === 'fourtis' || (family === 'evm' && s === 'etherscan') || (s === `rpc-${chain}`),
-    );
+    const allStubs = deps.stubbed?.() ?? [];
+    facts.stubbed = allStubs.filter(s => (family === 'evm' && s === 'etherscan') || s === `rpc-${chain}`);
     facts.errors = errors();
     return facts;
   } catch (e) {

@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { CHAINS, REP, TUNING, fmtPct, short, type InsightsDTO } from '@apecheck/core';
+import { CHAINS, TUNING, fmtPct, short, type InsightsDTO } from '@apecheck/core';
 import { reportPath } from '@/lib/env';
 import { Avatar } from '../Avatar';
 import { NarBadge } from '../Badges';
@@ -86,7 +86,6 @@ function Builders({ items }: { items: InsightsDTO['builders'] }) {
             <li key={`${d.chain}:${d.address}`}>
               <Link href={`/deployers?focus=${encodeURIComponent(d.address)}`} prefetch={false}>
                 <span className="mono">{short(d.address)}</span>
-                <span className={`rep-b r-${d.record}`}>{REP[d.record]}</span>
                 <small>
                   {d.real} of {d.checked} checked coins real · {CHAINS[d.chain]?.name ?? d.chain}
                 </small>

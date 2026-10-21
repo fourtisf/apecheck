@@ -152,6 +152,27 @@ describe('GET /v1/checks/:id/events', () => {
     expect(h.hub.channelCount).toBe(0);
   });
 
+  it("steps in the words of ApeCheck's retired third-party coin sources read in ApeCheck's own, stored or published live", async () => {
+    const check = await seedSiteCheck('RUNNING', 1, { evidence: { stepsExpected: 10 } });
+    await h.prisma.checkStep.create({
+      data: { checkId: check.id, idx: 1, tMs: 900, status: 'WARN', text: 'DevRadar unavailable, deployer history unknown (0xAbC…Ef02)', source: 'DevRadar' },
+    });
+    const s = await openStream('/v1/checks/sse0001/events');
+    await s.waitFor(evs => evs.some(e => e.event === 'status'));
+    // a worker still running the old code while the API is already new
+    await publish(check.id, { type: 'step', step: { idx: 2, t: 1000, status: 'warn', text: 'BundleScan unavailable, bundle share unknown', source: 'BundleScan' }, progress: 0.3 });
+    await publish(check.id, { type: 'step', step: { idx: 3, t: 1100, status: 'warn', text: 'Bundle share: not checked', source: null }, progress: 0.35 });
+    await s.waitFor(evs => evs.filter(e => e.event === 'step').length >= 4);
+    const steps = s.events().filter(e => e.event === 'step').map(e => e.data as { text: string; source: string | null });
+    expect(steps.slice(1).map(st => [st.text, st.source])).toEqual([
+      ['Deployer history: not checked (0xAbC…Ef02)', null],
+      ['Bundle share: not checked', null],
+      ['Bundle share: not checked', null],
+    ]);
+    expect(s.body()).not.toMatch(/devradar|bundlescan/i);
+    s.close();
+  });
+
   it('delivers done for a check that fails while queued', async () => {
     const check = await seedSiteCheck('QUEUED', 0);
     const s = await openStream('/v1/checks/sse0001/events');

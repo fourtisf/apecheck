@@ -7,7 +7,7 @@
  */
 import type { ChainKey } from './chains';
 import type { ClaimKind, ClaimSource, StepSource } from './labels';
-import type { ClaimStatus, CoinKey, DeployerRecord, NarKey, Signal } from './scoring';
+import type { ClaimStatus, CoinKey, NarKey, Signal } from './scoring';
 import type { TargetKindS } from './detect';
 
 export type CheckStatusS = 'queued' | 'running' | 'done' | 'failed';
@@ -51,15 +51,15 @@ export interface ClaimDTO {
   stepIdx?: number | null;
 }
 
-export interface DeployerDTO {
+/** One coin from a deployer wallet that ApeCheck has checked (its latest finished public check). */
+export interface DeployerCoinDTO {
+  /** shortId of that check, for /c/[id] */
   id: string;
-  chain: ChainKey;
-  address: string;
-  record: DeployerRecord;
-  launched: number;
-  dead: number;
-  fundedFrom: string | null;
-  firstSeen: string | null;
+  ticker: string | null;
+  name: string;
+  hue: number;
+  coinScore: number | null;
+  coinBand: CoinKey | null;
 }
 
 export interface CoinFactsDTO {
@@ -77,20 +77,22 @@ export interface CoinFactsDTO {
   holders: number | null;
   liquidityUsd: number | null;
   pairCreatedAt: string | null;
-  /** the deployer's record; null while its launch history is unknown (no DevRadar), even when the address is known */
-  deployer: DeployerDTO | null;
   /**
-   * The deployer wallet whenever it is known (Etherscan creator, Tron origin address, DevRadar), also when its
-   * launch history isn't: then `deployer` is null and the UI shows the address with "Launch history unavailable".
+   * The deployer wallet when it is known: the Etherscan contract creator (EVM) or the contract's origin address
+   * (Tron). Solana deployers are not looked up. null = not checked.
    */
   deployerAddress?: string | null;
-  /** "3 earlier tokens, 2 dead" — deployerLine() */
-  deployerText: string | null;
   /**
-   * M4: Pro/Max "deep holder clusters" from WhaleFlow (null for other viewers, or when WhaleFlow has no clusters
-   * feed for this coin). Each cluster is a group of wallets funded from the same source.
+   * The other coins from that wallet that ApeCheck has checked (finished public checks, latest per coin, newest first,
+   * the first few only: `total` counts them all). Only coins checked on ApeCheck are counted, so it is a lower bound
+   * and never scored. Present in the report only; null when the wallet is unknown or the lookup failed.
    */
-  clusters?: { label: string; wallets: number; pct: number; fundedFrom: string | null }[] | null;
+  deployerHistory?: { total: number; coins: DeployerCoinDTO[] } | null;
+  /**
+   * deployerHistoryLine() of `deployerHistory`: "no earlier launches seen by ApeCheck" | "2 other coins from this
+   * wallet checked by ApeCheck, $FOO and $BAR"; null when there is no history (wallet unknown, or not in this list).
+   */
+  deployerText: string | null;
 }
 
 /** CheckReportDTO.coin: the coin verdict as on the /api page (`coin: { verdict, score }`) plus the coin facts. */
@@ -197,8 +199,8 @@ export interface CheckSummaryDTO {
   mine: boolean;
   createdAt: string;
   checkedAt: string | null;
-  /** the coin's deployer wallet; `record` is null when its launch history is unknown */
-  deployer: { address: string; chain: ChainKey; record: DeployerRecord | null } | null;
+  /** the coin's deployer wallet, when it is known (CoinFactsDTO.deployerAddress) */
+  deployer: { address: string; chain: ChainKey } | null;
 }
 
 export interface CheckReportDTO extends CheckSummaryDTO {
@@ -292,22 +294,30 @@ export interface InsightsDTO {
   stats: { checked: number; today: number; larpSince: number | null };
   sinceByVerdict: { key: NarKey; name: string; n: number; avg: number }[];
   mostChecked: (CheckSummaryDTO & { checksToday: number })[];
-  builders: { address: string; chain: ChainKey; record: DeployerRecord; checked: number; real: number }[];
+  /** deployer wallets whose coins ApeCheck has checked, most "real" coins first (same rows as the deployers page) */
+  builders: { address: string; chain: ChainKey; checked: number; real: number }[];
 }
 
 export interface CoinRowDTO extends CheckSummaryDTO {
-  facts: Pick<CoinFactsDTO, 'sig' | 'bundlePct' | 'top10Pct' | 'devHoldPct' | 'lpLabel' | 'authorities' | 'deployerAddress'> & {
-    deployerRecord: DeployerRecord | null;
-  };
+  facts: Pick<CoinFactsDTO, 'sig' | 'bundlePct' | 'top10Pct' | 'devHoldPct' | 'lpLabel' | 'authorities' | 'deployerAddress'>;
 }
 export interface CoinsResponse { items: CoinRowDTO[]; total: number }
 
-export interface DeployerRowDTO extends DeployerDTO {
+/**
+ * One deployer wallet on the deployers page: every wallet named by a finished public coin check, with the coins from
+ * it that ApeCheck has checked (latest check per coin). Only coins checked on ApeCheck are counted.
+ */
+export interface DeployerRowDTO {
+  chain: ChainKey;
+  address: string;
+  /** coins from this wallet that ApeCheck has checked */
   checked: number;
-  /** checked coins that "checked out" (checkedOut()) */
+  /** of those, the ones that "checked out" (checkedOut()) */
   real: number;
   avgTotal: number | null;
-  coins: { id: string; ticker: string | null; name: string; hue: number; coinScore: number | null; coinBand: CoinKey | null }[];
+  /** when the newest of those checks finished */
+  lastChecked: string | null;
+  coins: DeployerCoinDTO[];
 }
 export interface DeployersResponse { items: DeployerRowDTO[] }
 

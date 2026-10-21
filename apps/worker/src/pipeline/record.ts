@@ -115,13 +115,6 @@ export function buildEvidence(run: CheckRun): CheckEvidence {
       }
     : null;
 
-  // M4: WhaleFlow's holder clusters (the API serves them to Pro/Max viewers only, so they never go into a public step).
-  // Only what WhaleFlow returned: unconfigured, no answer or no clusters → no key at all.
-  const clusters = run.coin?.raw.clusters;
-  if (clusters?.length) {
-    ev.clusters = clusters.slice(0, 20).map(c => ({ label: c.label, wallets: c.wallets, pct: c.pct, fundedFrom: c.fundedFrom ?? null }));
-  }
-
   ev.post = run.post
     ? { id: run.post.id, author: run.post.authorHandle ?? '', authorId: run.post.authorId, text: run.post.text, createdAt: run.post.createdAt }
     : null;

@@ -196,6 +196,7 @@ export function dbUrlInTimeZone(tz: string): string {
 
 const TABLES = [
   'Notification', 'NoteVote', 'Note', 'Ask', 'BotMention', 'Watch', 'ApiKey', 'WebhookDelivery', 'Webhook', 'PricePoint',
+  // Deployer: the retired table (still in the schema this release; nothing writes it but the legacy-data tests)
   'CoinFacts', 'Claim', 'CheckStep', 'Check', 'Deployer', 'Target', 'User',
 ];
 
@@ -362,20 +363,6 @@ export async function seedCheck(prisma: PrismaClient, c: Partial<Prisma.CheckUnc
       finishedAt: c.status && c.status !== 'DONE' && c.status !== 'FAILED' ? null : new Date(Date.now() - 1800_000),
       ...c,
     } as Prisma.CheckUncheckedCreateInput,
-  });
-}
-
-export async function seedDeployer(prisma: PrismaClient, d: Partial<Prisma.DeployerUncheckedCreateInput> = {}) {
-  const n = next();
-  return prisma.deployer.create({
-    data: {
-      chain: 'SOL',
-      address: `Dep${String(n).padStart(4, '0')}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`,
-      record: 'BUILDER',
-      launched: 1,
-      dead: 0,
-      ...d,
-    } as Prisma.DeployerUncheckedCreateInput,
   });
 }
 

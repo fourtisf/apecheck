@@ -50,7 +50,7 @@ export function coinQuery(f: CoinFilters): string {
 
 /* ---------- /deployers ---------- */
 
-export type DeployerSort = 'real' | 'dead' | 'launched';
+export type DeployerSort = 'real' | 'checked' | 'recent';
 export interface DeployerFilters {
   chain: ChainKey | 'all';
   sort: DeployerSort;
@@ -61,7 +61,9 @@ export const DEPLOYER_DEFAULTS: DeployerFilters = { chain: 'all', sort: 'real', 
 /** GET /v1/deployers has no cursor; its maximum */
 export const DEPLOYERS_LIMIT = 500;
 
-const SORTS = new Set<string>(['real', 'dead', 'launched']);
+const SORTS = new Set<string>(['real', 'checked', 'recent']);
+/** sorts by launch records ApeCheck no longer has: links from before open the closest one */
+const LEGACY_SORTS: Record<string, DeployerSort> = { dead: 'checked', launched: 'checked' };
 /** EVM, Solana and Tron addresses: base58 / hex, nothing else */
 const ADDRESS_RE = /^[A-Za-z0-9]{20,64}$/;
 
@@ -72,7 +74,7 @@ export function parseDeployerFilters(sp: SearchParams | URLSearchParams): Deploy
   const focus = get('focus').trim();
   return {
     chain: isChainKey(chain) ? chain : 'all',
-    sort: SORTS.has(sort) ? (sort as DeployerSort) : 'real',
+    sort: SORTS.has(sort) ? (sort as DeployerSort) : LEGACY_SORTS[sort] ?? 'real',
     focus: ADDRESS_RE.test(focus) ? focus : null,
   };
 }

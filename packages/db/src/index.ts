@@ -20,3 +20,4 @@ export const num = (d: Prisma.Decimal | number | null | undefined): number | nul
 
 export * from './checks';
 export * from './tiers';
+export * from './deployers';

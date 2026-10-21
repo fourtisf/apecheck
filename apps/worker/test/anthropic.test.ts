@@ -279,9 +279,9 @@ describe('browser tool loop', () => {
 
 describe('answers (follow-ups)', () => {
   it('validates the answer and falls back on errors', async () => {
-    const data = { name: '$ORBIT', kind: 'coin' as const, narScore: 52, narBand: 'partly', coinScore: 40, coinBand: 'sketchy', summary: "The 'live' app is a waitlist.", coinSummary: null, signals: {}, evidence: { git: '9 commits' }, claims: [], coin: { deployerLine: '3 earlier tokens, 2 dead', fundedFrom: 'Coinbase', bundlePct: 12.4, bundleWallets: 7, top10Pct: 31, lp: 'Burned', authorities: 'Renounced' } };
-    const ok = new AnthropicAi(env, { client: client(async () => message({ parsed_output: { answer: '  The deployer was funded from Coinbase.  ' } })) });
-    expect(await ok.answer('who funded the deployer?', data)).toBe('The deployer was funded from Coinbase.');
+    const data = { name: '$ORBIT', kind: 'coin' as const, narScore: 52, narBand: 'partly', coinScore: 40, coinBand: 'sketchy', summary: "The 'live' app is a waitlist.", coinSummary: null, signals: {}, evidence: { git: '9 commits' }, claims: [], coin: { deployerLine: 'Deployer history: 2 other coins from this wallet checked by ApeCheck, $FOO and $BAR (0xabc…ef01)', bundlePct: 12.4, bundleWallets: 7, top10Pct: 31, lp: 'Burned', authorities: 'Renounced' } };
+    const ok = new AnthropicAi(env, { client: client(async () => message({ parsed_output: { answer: '  ApeCheck has checked 2 other coins from this deployer: $FOO and $BAR.  ' } })) });
+    expect(await ok.answer('what else did the deployer launch?', data)).toBe('ApeCheck has checked 2 other coins from this deployer: $FOO and $BAR.');
     const broken = new ResilientAi(new AnthropicAi(env, { client: client(async () => { throw new Anthropic.APIConnectionError({ message: 'down' }); }) }));
     expect(await broken.answer('how much was bundled?', data)).toBe('12.4% of supply went to 7 wallets in the launch block.');
   });

@@ -10,19 +10,18 @@ import {
   STEPS_EXPECTED,
   checkChannel,
   clamp,
+  displayStep,
   kindFromDb,
   statusFromDb,
   type CheckChannelMsg,
   type CheckStatusS,
   type StepDTO,
 } from '@apecheck/core';
-import { viewerTier } from '../accounts';
 import type { AppDeps } from '../context';
 import { canView, loadReport, readProgress } from '../checks';
 import { ApiError, MSG } from '../errors';
 import { SHORT_ID_RE } from '../ids';
 import { evidenceOf, shotUrl, toStep, type Viewer } from '../mappers';
-import { viaKey } from '../plugins/apiKeys';
 import { sidSetCookieHeader } from '../plugins/session';
 import { openSse, type SseRegistry, type SseStream } from '../sse';
 import { viewerOf } from './util';
@@ -59,8 +58,6 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps, registr
   app.get('/v1/checks/:id/events', { exposeHeadRoute: false }, async (request, reply) => {
     const { id: shortId } = (request.params ?? {}) as { id?: string };
     if (!shortId || !SHORT_ID_RE.test(shortId)) throw new ApiError(404, 'not_found', MSG.notFound);
-    // M4: Pro/Max viewers get the deep holder clusters in the final report (an API key's tier is already fresh)
-    if (request.viewer.user && !viaKey(request)) await viewerTier(deps, request);
     const viewer = viewerOf(request);
     const head = await deps.prisma.check.findUnique({
       where: { shortId },
@@ -101,8 +98,9 @@ async function pump(deps: AppDeps, stream: SseStream, checkId: string, viewer: V
     if (msg.type === 'step') {
       if (msg.step.idx <= lastIdx) return;
       lastIdx = msg.step.idx;
-      const s = msg.step;
-      // forward only the StepDTO fields, whatever else a publisher put on the message
+      // forward only the StepDTO fields, whatever else a publisher put on the message; a step in the words of an
+      // older worker (a retired third-party source tag) reads like a stored one (toStep)
+      const s = displayStep(msg.step);
       const step: StepDTO = {
         idx: s.idx,
         t: typeof s.t === 'number' ? s.t : 0,

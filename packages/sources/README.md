@@ -9,7 +9,7 @@ import { createSources, startGuardProxy, captureErrors } from '@apecheck/sources
 
 const env = loadEnv();
 const sources = createSources(env);           // one shared Http client, all adapters
-sources.stubbed();                            // e.g. ["x", "fourtis", "etherscan", "rpc-rh"]
+sources.stubbed();                            // e.g. ["x", "etherscan", "rpc-rh"]
 const facts = await sources.coinFacts('sol', mint); // never throws; facts.errors / facts.stubbed explain gaps
 ```
 
@@ -39,7 +39,6 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
 | TronGrid | `adapters/tron.ts` | `TRONGRID_API_KEY` (header `TRON-PRO-API-KEY`) | Works without a key at a low rate. |
 | GitHub | `adapters/github.ts` | `GITHUB_TOKEN` | Works unauthenticated at 60 requests/hour (warned once). Rate limits (403 with `x-ratelimit-remaining: 0`, or 429) → `[]` + `lastError`. |
 | X API v2 | `adapters/x.ts`, `oauth1.ts` | `X_BEARER_TOKEN` (reads); `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` (`canPost`: the bot); `X_BOT_USER_ID` (optional), `X_BOT_HANDLE` | Without the bearer token every post/account read is `null`, listed as `x`. `renameCount()` is always `null` (needs a third-party source). Without the four user keys `reply()` is `null` and `mentions()` uses the Bearer token, or returns `{ posts: [], newestId: null }` when that is missing too (warned once each). |
-| Fourtis | `adapters/fourtis.ts` | `FOURTIS_API_URL`, `FOURTIS_API_KEY` | Without both, `null`, listed as `fourtis`; `coinFacts` uses the public fallbacks. |
 
 ### What each one does
 
@@ -199,45 +198,23 @@ A timeout or 5xx on `POST /2/tweets` does not mean X refused the post (it may ha
 lost), so worker-bot calls this before posting again. Unlike the other methods it **throws** when the lookup fails
 or could not read every post since (`lastError = "x.findReply: …"` too): a failed lookup is never "not posted".
 
-### Fourtis endpoints (placeholders)
-
-Michael defines the real endpoints. Until then the adapter calls, with `Authorization: Bearer FOURTIS_API_KEY`:
-
-| Method | Placeholder path | Expected JSON (bare or wrapped in `{ "data": … }`) |
-|---|---|---|
-| `devRadar` | `GET {FOURTIS_API_URL}/devradar/{chain}/{address}` | `{ deployer, fundedFrom?, launched, dead, firstSeen?, launches?: [{ address, chain?, createdAt?, dead }] }` |
-| `bundleScan` | `GET {FOURTIS_API_URL}/bundlescan/{chain}/{address}` | `{ bundlePct, wallets, launchBlock? }` |
-| `whaleFlow` | `GET {FOURTIS_API_URL}/whaleflow/{chain}/{address}` | `{ top10Pct, devHoldPct, holders?, lp?: { status: "burned" \| "locked" \| "unlocked", lockedDays? }, clusters?: [{ label, wallets, pct, fundedFrom? }] }` |
-
-`{chain}` is the ApeCheck chain key (`sol`, `base`, `eth`, `bnb`, `arb`, `rh`, `trx`). Paths live in
-`FOURTIS_PATHS` and the shapes in the zod schemas at the top of `adapters/fourtis.ts`; change both there when
-the real API lands. A 404 means "no data for this coin" (not an error); a shape mismatch is recorded in `lastError`.
-
-**Holder clusters (M4, Pro/Max "deep holder clusters", placeholder shape).** WhaleFlow may add `clusters`: groups of
-holder wallets it ties together because one source funded them — `label` (non-empty, clipped to 80 characters),
-`wallets` (integer ≥ 1), `pct` (% of supply the group holds, 0–100; numbers or numeric strings, never null), `fundedFrom`
-(the common funder, address or name, clipped to 120; null/absent = unknown). `parseHolderClusters()` validates them
-item by item (`WhaleClusterZ`): an odd item is left out and reported (`lastError = "fourtis.whaleFlow: 2 holder
-cluster(s) with an unexpected shape left out"`) without costing the holder numbers or the other clusters; the 20
-largest by `pct` are kept, largest first. No `clusters`, an empty list or nothing usable → no `clusters` key at all.
-
 ## coinFacts (Stage D for coins)
 
-All calls run in parallel, each capped at 8 s: Fourtis DevRadar / BundleScan / WhaleFlow, DexScreener, and the
-chain's public fallbacks. **Fourtis values win**; every section records its `source`.
+ApeCheck's own reads only: the chain's RPC, Etherscan, TronGrid and DexScreener, all in parallel, each capped at 8 s
+per round of requests. Every section records its `source` (`On-chain` or `DexScreener`). What has no source is `null`
+and the worker logs it as "not checked".
 
-| Section | Fourtis | Fallback |
-|---|---|---|
-| deployer | DevRadar | EVM: Etherscan creator; Tron: contract `origin_address` (launch history `null` = unknown) |
-| bundle | BundleScan | none (`null`) |
-| holders | WhaleFlow | Solana: top-10 % from the largest accounts, leaving out the DexScreener pair and known AMM vault authorities (Raydium AMM v4 / CPMM / LaunchLab, Meteora DAMM v2) and the incinerator |
-| lp | WhaleFlow | none (`null`) |
-| clusters (M4) | WhaleFlow | none: the key is absent (never empty, never estimated from the largest accounts) |
-| authorities | — | Solana: mint/freeze authority ("Renounced" / "Mint renounced, freeze active" / "Mint still active"); EVM/Tron: mint renounced = no mint function OR owner renounced (an ownerless contract with a mint function is unknown, not renounced) |
-| market | DexScreener | — |
+| Section | Source |
+|---|---|
+| deployer | EVM: the Etherscan contract creator; Tron: the contract's `origin_address` (TronGrid `getcontract`); Solana: none (`null`). Only the wallet: `launched` / `dead` are always `null`. Its history (the other coins ApeCheck has checked from it) is read by the worker and the API from ApeCheck's own checks (`@apecheck/db` `coinsByDeployer`). |
+| bundle | none (`null`) |
+| holders | Solana: top-10 % from the largest accounts, leaving out the DexScreener pair and known AMM vault authorities (Raydium AMM v4 / CPMM / LaunchLab, Meteora DAMM v2) and the incinerator; EVM, Tron: none (`null`). The holder count has no source (`count: null`). |
+| lp | none (`null`) |
+| authorities | Solana: mint/freeze authority ("Renounced" / "Mint renounced, freeze active" / "Mint still active"); EVM/Tron: mint renounced = no mint function OR owner renounced (an ownerless contract with a mint function is unknown, not renounced) |
+| market | DexScreener |
 
-`stubbed` lists the adapters that ran as stubs for this coin (`fourtis`, `etherscan` for EVM, `rpc-rh`);
-`errors` lists non-fatal failures in call order (`"fourtis.bundleScan: timeout"`). It never throws.
+`stubbed` lists the adapters that ran as stubs for this coin (`etherscan` for EVM, `rpc-rh`);
+`errors` lists non-fatal failures in call order (`"solana.largestHolders: timeout"`). It never throws.
 
 ## HTTP client (`createHttp(env)`)
 

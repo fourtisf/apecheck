@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { QUEUES, type AskJob, type AskJobResult } from '@apecheck/core';
 import { askDoneKey, processAsk, startAsksWorker, type AskDeps } from '../src/asks/index';
 import { safeAnswer } from '../src/asks/answer';
+import { loadAnswerData, publicEvidence } from '../src/ai/answer-data';
 import type { AnswerData } from '../src/ai/types';
 import { memoryLogger } from '../src/log';
 import { urlSpans } from '../src/bot/xtext';
@@ -146,5 +147,43 @@ describe('the asks queue', () => {
       await conn.quit();
       await asks.close();
     }
+  });
+});
+
+describe('answer data of a check stored before ApeCheck dropped its third-party coin sources', () => {
+  it('no holder clusters, no retired stub entry, no retired name in the free text; the deployer history from ApeCheck', async () => {
+    const c = await finishedCheck();
+    // the site check found its coin on Base
+    await prisma.target.update({ where: { id: c.targetId }, data: { chain: 'BASE', ca: '0x' + '5'.repeat(40) } });
+    await prisma.check.update({
+      where: { id: c.id },
+      data: {
+        summary: 'DevRadar was unavailable, so the deployer history is unknown.',
+        coinSummary: 'Holders per WhaleFlow look concentrated.',
+        evidence: {
+          launch: "'Launch app' opens the app",
+          clusters: [{ label: 'Launch snipers', wallets: 14, pct: 12.4, fundedFrom: '0x9a1f00000000000000000000000000000000c0de' }],
+          stubbed: ['x', 'fourtis', 'ai'],
+        },
+      },
+    });
+    await prisma.claim.create({ data: { checkId: c.id, idx: 0, text: 'Fair launch', source: 'site_hero', kind: 'fair_launch', status: 'NOT_SEEN', evidence: 'BundleScan had no launch data' } });
+    await prisma.coinFacts.create({
+      data: {
+        checkId: c.id, deployerAddress: '0xabcd00000000000000000000000000000000ef02',
+        sigDeployer: 'WARN', sigBundle: 'WARN', sigHolders: 'WARN', sigLp: 'WARN', sigAuthorities: 'OK',
+      },
+    });
+    const data = (await loadAnswerData(prisma, c.id))!;
+    const flat = JSON.stringify(data);
+    expect(flat).not.toMatch(/fourtis|devradar|bundlescan|whaleflow/i);
+    expect('clusters' in data.evidence).toBe(false);
+    expect(data.evidence.stubbed).toEqual(['x', 'ai']);
+    expect(data.summary).toBe('The deployer lookup was unavailable, so the deployer history is unknown.');
+    expect(data.coinSummary).toBe('Holders per the holder lookup look concentrated.');
+    expect(data.claims[0].evidence).toBe('The bundle lookup had no launch data');
+    expect(data.coin?.deployerLine).toBe('Deployer history: no earlier launches seen by ApeCheck (0xabc…ef02)');
+    expect(publicEvidence({ launch: 'x', clusters: [] } as never)).toEqual({ launch: 'x' });
+    expect(publicEvidence(null)).toEqual({});
   });
 });

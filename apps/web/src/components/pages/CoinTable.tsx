@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { REP, fmtUsd, short, type CoinRowDTO, type Signal } from '@apecheck/core';
+import { fmtUsd, short, type CoinRowDTO, type Signal } from '@apecheck/core';
 import { reportPath } from '@/lib/env';
 import { Avatar } from '../Avatar';
 import { CoinBadge, Pct } from '../Badges';
@@ -63,15 +63,9 @@ export function CoinRow({ item: it }: { item: CoinRowDTO }) {
         {f.authorities ? <Dotted sig={f.sig.authorities}>{f.authorities}</Dotted> : nil}
       </span>
       <span className="td">
-        {f.deployerRecord ? (
-          <span className={`rep-b r-${f.deployerRecord}`}>{REP[f.deployerRecord]}</span>
-        ) : f.deployerAddress ? (
-          // wallet known, launch history not: show the address, never a made-up record
-          <span title={f.deployerAddress} style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-            <span className="mono" style={{ fontSize: 13 }}>
-              {short(f.deployerAddress)}
-            </span>
-            <small style={{ fontSize: 12, lineHeight: 1.3, color: 'var(--mute)' }}>Launch history not checked</small>
+        {f.deployerAddress ? (
+          <span className="mono" style={{ fontSize: 13 }} title={f.deployerAddress}>
+            {short(f.deployerAddress)}
           </span>
         ) : (
           nil

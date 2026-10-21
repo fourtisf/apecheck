@@ -6,7 +6,6 @@ import http from 'node:http';
 import { SsrfError, reportError } from '@apecheck/sources';
 import type {
   CoinRawFacts,
-  DevRadarFacts,
   DexTokenInfo,
   EvmTokenBasics,
   EvmTxRequest,
@@ -81,10 +80,6 @@ export interface FakeData {
   evmBasics?: Record<string, EvmTokenBasics | null>;
   /** Solana mintInfo by mint; null = the RPC failed */
   solMints?: Record<string, SolMintInfo | null>;
-  /** DevRadar answers by coin address (lowercase for EVM); a missing key = no data (404) */
-  devRadar?: Record<string, DevRadarFacts | 'error'>;
-  /** Fourtis configured (default false) */
-  fourtisConfigured?: boolean;
   /** wallet token balances by owner (EVM lowercase); null = unreadable */
   balances?: Record<string, number | null>;
 }
@@ -92,7 +87,7 @@ export interface FakeData {
 export type FakeSources = Sources & { calls: string[]; simulated: EvmTxRequest[]; data: FakeData };
 
 export function emptyCoinFacts(chain: ChainKey, address: string): CoinRawFacts {
-  return { chain, address, token: null, deployer: null, bundle: null, holders: null, lp: null, authorities: null, market: null, stubbed: ['fourtis'], errors: [] };
+  return { chain, address, token: null, deployer: null, bundle: null, holders: null, lp: null, authorities: null, market: null, stubbed: [], errors: [] };
 }
 
 export function fakeSources(env: Env, data: FakeData = {}): FakeSources {
@@ -219,27 +214,11 @@ export function fakeSources(env: Env, data: FakeData = {}): FakeSources {
         return null;
       },
     },
-    fourtis: {
-      configured: data.fourtisConfigured ?? false,
-      lastError: null,
-      async devRadar(chain, address) {
-        calls.push(`fourtis.devRadar ${chain} ${address}`);
-        if (!(data.fourtisConfigured ?? false)) return null;
-        const hit = data.devRadar?.[chain === 'sol' || chain === 'trx' ? address : address.toLowerCase()];
-        if (hit === 'error') {
-          reportError('fourtis.devRadar: timeout');
-          return null;
-        }
-        return hit ?? null;
-      },
-      async bundleScan() { return null; },
-      async whaleFlow() { return null; },
-    },
     async coinFacts(chain, address) {
       calls.push(`coinFacts ${chain} ${address}`);
       return data.coinFacts?.[address.toLowerCase()] ?? emptyCoinFacts(chain, address);
     },
-    stubbed: () => ['fourtis'],
+    stubbed: () => [],
   };
   return sources;
 }

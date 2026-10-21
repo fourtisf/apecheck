@@ -31,6 +31,11 @@ export function Unknown() {
   return <span className="muted">Unknown</span>;
 }
 
+/** Shown in place of a coin fact ApeCheck has no source for, or did not get this time: never a made-up value. */
+export function NotChecked() {
+  return <span className="muted">Not checked</span>;
+}
+
 export type FactRow = [label: string, value: ReactNode, source: string];
 
 /** dl.facts with the prototype's three columns: label, value, source (the source column hides on phones). */

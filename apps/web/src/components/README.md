@@ -144,13 +144,12 @@ an older URL after Back.
 - Signing in or out on a report re-asks `GET /v1/checks/:id`, so "mine", Helpful marks and Watch follow the viewer.
 - Max viewers get a "Private" toggle in the hero form (`.probe-priv`, beside the input like the type chip; sends `private: true`).
 - The global notifier stays quiet while the viewer is on that report's page.
-- Deployer: `coin.deployer` (known record) → the record card and badge; only `coin.deployerAddress` (history unknown) → the
-  short address with "Launch history unavailable" (Coin tab, side card, coins table), never a made-up record.
+- Deployer: the address (`coin.deployerAddress`, short, in mono) and "Deployer history" (`coin.deployerText`: the other
+  coins from the wallet that ApeCheck has checked, source "ApeCheck") or "Not checked" (Coin tab, side card with "All
+  their coins" when there are some; the coins table shows the address only). Coin facts ApeCheck has no source for
+  (bundle, LP, holder count, EVM/Tron holders) read "Not checked" (`NotChecked` in `report/util.tsx`) with no source
+  tag; the source column only ever says On-chain, ApeCheck or DexScreener.
 - A pasted contract whose chain couldn't be read (`kind === 'coin' && !hasCoin`) says so; it is never "No coin linked".
-- Coin tab, M4: **Wallet clusters** (`Clusters` in `CoinTab.tsx`) under the coin facts when `coin.clusters` has items (the
-  API sends them to Pro/Max viewers only): heading with the `.lock` "Pro" marker, one `.facts` row per cluster: label,
-  "12.4% of supply", "14 wallets, funded from …" (a wallet address in mono, shortened; a name as written), source
-  WhaleFlow. Nothing otherwise.
 - A check that stopped without a verdict (`noVerdict(r)` in `report/util.tsx`: failed, or finished with no narrative
   score) opens on the Agent run tab (`initialTab`), and Claims, Coin and the price card say the run stopped before
   that point instead of "no claims found" / "no coin linked". Claims or coin facts saved before it stopped still show.
@@ -201,6 +200,11 @@ render for the URL the page was loaded with, so after Back the server props can 
 The views therefore start from `useUrlSearchParams()` (the URL the browser is on) and only use the server's rows when
 they were rendered for those same filters; otherwise they load the right rows first.
 
+/deployers lists every wallet that deployed a coin ApeCheck has checked (`DeployerRowDTO`): wallet with "Last checked …",
+chain, checked coins, real (`real/checked`, kept on phones), average total, and the checked coins as chips when a row
+opens. Sorts: most real, most checked coins, recently checked (old `?sort=dead|launched` links open "most checked").
+The chain filter offers the chains whose deployer ApeCheck looks up (EVM and Tron).
+
 ## /bot
 
 The example thread (`pickBotExample` in `pages/botExample.ts`) never shows a reply the bot didn't post or words someone
@@ -227,7 +231,8 @@ pnpm --filter @apecheck/web typecheck   # src and test/
   EIP-6963, `window.ethereum`, Wallet Standard, `window.phantom.solana`, declines, API errors) and the account rules
   and markup (`account.test.tsx`: tier cards, `$APECHECK` quote, holding line, watch toasts, watchlist filters and
   migration, forwarded cookies, `?x=`); M4 (`m4-ui.test.tsx`): who gets keys and webhooks or the Max line, status
-  pills, the webhook URL check, the code tabs' shapes, the Coin tab's clusters. Components render with `react-dom/server`.
+  pills, the webhook URL check, the code tabs' shapes, the Coin tab and side card with ApeCheck's own sources; M3
+  (`m3-ui.test.tsx`) also the deployers page's columns and sorts. Components render with `react-dom/server`.
 - Browser suite (`test/e2e`, `vitest.e2e.config.ts`): its own database `apecheck_test_web` (created and migrated, then
   seeded by `test/e2e/seed.ts`), Redis db 3, the API on 127.0.0.1:4611 and the web on 127.0.0.1:3611 (built into
   `.next-e2e`; `tsconfig.json` is put back after the build). Needs local Postgres + Redis; Playwright and its Chromium
@@ -260,6 +265,6 @@ pnpm --filter @apecheck/web typecheck   # src and test/
   refused, the secret shown once), Send test delivered by the worker with a valid `ApeCheck-Signature`, a disabled
   webhook enabled again, focus kept on Send test, Send test backing off from a stuck ping and stopping at a 429, Delete
   of a webhook another tab deleted first (row and secret gone), Revoke after the session ended (back to the Max line),
-  the Coin tab's clusters for Pro and not for a signed-out reader, and
+  holder clusters an older check stored shown to nobody (Pro included), and
   /api as Max and signed out at 1440, 900 and 390px, light and dark (no sideways scroll, header columns aligned;
   screenshots in the log folder's `m4-shots/`).

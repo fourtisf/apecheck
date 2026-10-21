@@ -6,7 +6,7 @@ import { DEPLOYERS_LIMIT, parseDeployerFilters, type SearchParams } from '@/comp
 
 export const metadata: Metadata = {
   title: 'Deployers',
-  description: 'Every wallet that launched a checked coin, with its launch history: builders, mixed records and serial launchers.',
+  description: 'Every wallet that deployed a coin ApeCheck has checked, and how its checked coins scored. Only coins checked on ApeCheck are counted.',
 };
 
 export const dynamic = 'force-dynamic';

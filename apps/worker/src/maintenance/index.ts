@@ -1,7 +1,11 @@
 /**
  * worker-prices also runs the slow periodic jobs of M3 on their own queue ("maintenance", produced and consumed only
- * here), so they never hold up a price tick: the daily deployer refresh from DevRadar (deployers.ts) and the hourly
- * tier refresh (tiers.ts). One job at a time.
+ * here), so they never hold up a price tick: the hourly tier refresh (tiers.ts). One job at a time.
+ *
+ * The daily deployer refresh (RETIRED_DEPLOYERS_JOB) is gone: it only ever asked a third-party service ApeCheck no
+ * longer uses. Deployer history is now read from ApeCheck's own checks when it is shown, so nothing needs refreshing.
+ * Its job scheduler may still sit in Redis from an older release: startMaintenanceWorker removes it, and a leftover
+ * job of that name finishes as a no-op.
  */
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Env } from '@apecheck/core';
@@ -10,13 +14,13 @@ import { createSources, walletTokenBalance, type Sources } from '@apecheck/sourc
 import { createLogger, type Logger } from '../log';
 import { bullConnection } from '../redis';
 import type { RunningWorker } from '../worker';
-import { DEPLOYERS_JOB, DEPLOYERS_PATTERN, refreshDeployers } from './deployers';
 import { TIERS_JOB, TIERS_PATTERN, refreshTiers } from './tiers';
 
-export { refreshDeployers, DEPLOYERS_JOB, DEPLOYERS_PATTERN, type DeployerRefreshResult } from './deployers';
 export { refreshTiers, TIERS_JOB, TIERS_PATTERN, type TierRefreshResult } from './tiers';
 
 export const MAINTENANCE_QUEUE = 'maintenance';
+/** the retired daily deployer refresh: its scheduler is removed at start, a leftover job does nothing */
+export const RETIRED_DEPLOYERS_JOB = 'deployers-refresh';
 
 /** Balance reads for computeTier: the wallet's TOKEN_ADDRESS balance through @apecheck/sources (null when unreadable). */
 export function balanceReader(sources: Pick<Sources, 'evm' | 'sol'>): ReadBalance {
@@ -44,22 +48,24 @@ export async function startMaintenanceWorker(opts: MaintenanceWorkerOptions): Pr
   const bull = bullConnection(env.REDIS_URL);
   const queue = new Queue(MAINTENANCE_QUEUE, { connection: bull });
   const keep = { removeOnComplete: 20, removeOnFail: 20 };
-  await queue.upsertJobScheduler(DEPLOYERS_JOB, { pattern: DEPLOYERS_PATTERN, tz: 'UTC' }, { name: DEPLOYERS_JOB, data: {}, opts: keep });
+  // an older release scheduled the retired deployer refresh daily: without this the scheduler in Redis keeps firing
+  await queue.removeJobScheduler(RETIRED_DEPLOYERS_JOB).catch(err => log.warn(`could not remove the ${RETIRED_DEPLOYERS_JOB} scheduler`, err));
   await queue.upsertJobScheduler(TIERS_JOB, { pattern: TIERS_PATTERN, tz: 'UTC' }, { name: TIERS_JOB, data: {}, opts: keep });
   const worker = new Worker(
     MAINTENANCE_QUEUE,
     async (job: Job) => {
-      if (job.name === DEPLOYERS_JOB) return refreshDeployers({ prisma, fourtis: sources.fourtis, log });
       if (job.name === TIERS_JOB) return refreshTiers({ env, prisma, readBalance, log });
+      // queued by an older release before its scheduler was removed: nothing to do
+      if (job.name === RETIRED_DEPLOYERS_JOB) return { retired: true };
       log.warn(`unknown maintenance job ${job.name}`);
       return null;
     },
-    // a deployer refresh can take minutes (one DevRadar call per coin)
+    // a tier refresh can take minutes (one balance read per wallet)
     { connection: bull, concurrency: 1, lockDuration: 300_000 },
   );
   worker.on('failed', (job, err) => log.error(`${job?.name ?? 'maintenance job'} failed`, err));
   worker.on('error', err => log.error('maintenance worker error', err));
-  log.info(`deployer refresh daily (${DEPLOYERS_PATTERN} UTC${sources.fourtis.configured ? '' : ', skipped until Fourtis is configured'}); tier refresh hourly (${TIERS_PATTERN} UTC)`);
+  log.info(`tier refresh hourly (${TIERS_PATTERN} UTC)`);
   let closing: Promise<void> | null = null;
   return {
     queue,

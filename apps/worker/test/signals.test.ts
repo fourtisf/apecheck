@@ -75,23 +75,24 @@ describe('acct signal', () => {
 });
 
 describe('coin signals (core helpers only)', () => {
-  it('unknown sections are warn, unknown deployer history is "mixed", each says which source was missing', () => {
+  it('sections not checked are warn, an unknown deployer history is "mixed", each line says "not checked"', () => {
     const s = coinSignals(emptyCoinFacts('base', '0x1'));
     expect(s).toMatchObject({ record: 'mixed', historyKnown: false, deployer: 'warn', bundle: 'warn', holders: 'warn', lp: 'warn', authorities: 'warn' });
     expect(s.unknown.map(u => u.line)).toEqual([
-      'Deployer history not checked',
-      'Bundle share not checked',
-      'Holder share not checked',
-      'LP status unknown, liquidity lock not checked',
+      'Deployer history: not checked',
+      'Bundle share: not checked',
+      'Holder share: not checked',
+      'LP status: not checked',
       'Mint and freeze authorities unknown',
     ]);
   });
 
   it('maps facts with CONFIG thresholds', () => {
     const f = emptyCoinFacts('sol', 'Mint111');
-    f.deployer = { address: 'Dep', fundedFrom: null, launched: 12, dead: 11, firstSeen: null, source: 'DevRadar' };
-    f.bundle = { pct: 31.5, wallets: 14, source: 'BundleScan' };
-    f.holders = { top10Pct: 18, devHoldPct: 9.5, count: 300, source: 'WhaleFlow' };
+    // every section filled (no source fills a launch record, bundle or LP today: the mapping stays for when one does)
+    f.deployer = { address: 'Dep', launched: 12, dead: 11, source: 'On-chain' };
+    f.bundle = { pct: 31.5, wallets: 14, source: 'On-chain' };
+    f.holders = { top10Pct: 18, devHoldPct: 9.5, count: 300, source: 'On-chain' };
     f.lp = { status: 'locked', lockedDays: 30, source: 'On-chain' };
     f.authorities = { mintRenounced: true, freezeActive: true, owner: null, text: 'Mint renounced, freeze active', source: 'On-chain' };
     const s = coinSignals(f);

@@ -9,11 +9,10 @@ import {
   LIVE_CHANNEL,
   checkChannel,
   type CheckChannelMsg,
-  chainToDb,
   claimStatusToDb,
   clipSentence,
+  deployerKey,
   progressKey,
-  recordToDb,
   scoreCheck,
   sigToDb,
   type ClaimStatus,
@@ -42,7 +41,6 @@ export interface SavedCheck {
 }
 
 const finite = (n: number | null | undefined): number | null => (n != null && Number.isFinite(n) ? n : null);
-const addrKey = (chain: string, a: string) => (chain === 'sol' || chain === 'trx' ? a : a.toLowerCase());
 const asDate = (s: string | null | undefined) => {
   if (!s) return null;
   const d = new Date(s);
@@ -91,38 +89,10 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
     // still this run's check (a re-run of the job may have taken it over): lock the row and make sure
     const mine = await tx.check.updateMany({ where: { id: checkId, startedAt: owner, status: 'RUNNING' }, data: { status: 'RUNNING' } });
     if (!mine.count) throw new RunSuperseded();
-    let deployerId: string | null = null;
-    // the wallet is shown whenever it is known; a Deployer row (record, counts) only when its history is
-    let deployerAddress: string | null = null;
-    if (run.coin && run.chain) {
-      const d = run.coin.raw.deployer;
-      const chain = chainToDb(run.chain)!;
-      if (d?.address) deployerAddress = addrKey(run.chain, d.address);
-      // a private check (Max) never creates or refreshes a Deployer row: the deployers page lists every row, and one
-      // only it wrote would publish that someone privately vetted a coin of that wallet. It links a row the public
-      // already knows, like a check whose history is unknown; its own report keeps the wallet and the deployer line.
-      if (d && run.coin.signals.historyKnown && !isPrivate) {
-        const address = addrKey(run.chain, d.address);
-        const fields = {
-          record: recordToDb(run.coin.signals.record),
-          launched: Math.max(0, Math.round(d.launched!)),
-          dead: Math.max(0, Math.round(d.dead!)),
-          fundedFrom: d.fundedFrom,
-          firstSeen: asDate(d.firstSeen),
-        };
-        const dep = await tx.deployer.upsert({
-          where: { chain_address: { chain, address } },
-          create: pgSafe({ chain, address, ...fields }),
-          update: pgSafe(fields),
-          select: { id: true },
-        });
-        deployerId = dep.id;
-      } else if (d) {
-        // history unknown (or a private check): link a deployer we already know, never write made-up counts
-        const dep = await tx.deployer.findUnique({ where: { chain_address: { chain, address: addrKey(run.chain, d.address) } }, select: { id: true } });
-        deployerId = dep?.id ?? null;
-      }
-    }
+    // the deployer wallet when it is known: the deployer history (the other coins ApeCheck has checked from it) is read
+    // from these rows (packages/db coinsByDeployer), public checks only
+    const d = run.coin && run.chain ? run.coin.raw.deployer : null;
+    const deployerAddress = d?.address && run.chain ? deployerKey(run.chain, d.address) : null;
 
     await tx.claim.deleteMany({ where: { checkId } });
     if (claims.length) {
@@ -143,7 +113,6 @@ export async function saveStage(run: CheckRun): Promise<SavedCheck> {
     if (run.coin && s) {
       const raw = run.coin.raw;
       const data = {
-        deployerId,
         deployerAddress,
         sigDeployer: sigToDb(s.deployer)!,
         sigBundle: sigToDb(s.bundle)!,

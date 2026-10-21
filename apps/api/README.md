@@ -44,9 +44,21 @@ selects another file, e.g. a staging config).
   cache has one too. The /bot page shows a real thread only from it. `mention.inReplyToId` is the X id of the post the
   mention replies to (null for a quote tweet or a post of its own): /bot draws `post` above the mention only when it
   equals `post.id`, so a quoted or linked post is never shown as the post the mention replies to.
-- `coin.deployer` is the Deployer row (known launch history only); `coin.deployerAddress` is the wallet whenever it is known.
-  The summary's `deployer` is `{ address, chain, record }` with `record: null` when the history is unknown. Feed / coins
-  search also matches `CoinFacts.deployerAddress`.
+- Coin facts come from ApeCheck's own sources only. `coin.deployerAddress` is the deployer wallet when it is known (EVM:
+  the Etherscan contract creator; Tron: the contract's origin address); `coin.deployerHistory` is `{ total, coins }`: the
+  other coins from that wallet that ApeCheck has checked (latest public check per coin, newest first, at most 10 in
+  `coins`; `total` counts them all), read live with `@apecheck/db` `coinsByDeployer`, `null` without a wallet or when
+  the lookup failed. `coin.deployerText` is its line ("no earlier launches seen by ApeCheck", "2 other coins from this
+  wallet checked by ApeCheck, $FOO and $BAR"). The summary's `deployer` is `{ address, chain }`. Feed / coins search also
+  matches `CoinFacts.deployerAddress`.
+- **Changed shape (this release):** `DeployerDTO`, `coin.deployer`, `coin.clusters`, the summary's `deployer.record`,
+  `CoinRowDTO.facts.deployerRecord`, `InsightsDTO.builders[].record` and MCP `deployer_history`'s `deployers` are gone;
+  `DeployerRowDTO` is `{ chain, address, checked, real, avgTotal, lastChecked, coins }`; `coin.deployerHistory` is new.
+  The report is the same for every viewer (no tier-only part).
+- Data stored before ApeCheck dropped its third-party coin sources is shown in ApeCheck's own words: old step source
+  tags are dropped and their "unavailable" lines read "not checked" (`displayStep`, also on the SSE relay and
+  `/v1/live`), the retired names in old summaries, claim evidence and answers are replaced (`scrubRetired`), and old
+  holder clusters in `Check.evidence` are never served. Stored bundle / LP / holder-count values still show.
 
 | Variable | Used for |
 |---|---|
@@ -92,7 +104,7 @@ brings an API key to key/webhook management or the wallet session routes gets 40
 | GET | `/v1/feed` | `FeedResponse`. `tab=latest\|checked\|real\|least\|vol\|watch`, `type=all\|coin\|post\|site`, `nar=<band>\|any`, `coin=<band>\|any`, `chain=<key>\|any`, `q`, `cursor`, `limit` (1–100, default 25), `ids=<shortId,…>`, `via=bot\|web\|api` (`bot`: checks the bot started, and checks it answered on X from cache). `tab=watch` without `ids` for a signed-in viewer: their account's watchlist (M3) |
 | GET | `/v1/live` | `LiveResponse`: up to 8 queued/running public checks, newest first |
 | GET | `/v1/coins` | `CoinsResponse`. `tab=all\|clean\|ok\|sketchy\|rigged`, `chain`, `q`, `limit` (1–500, default 200) |
-| GET | `/v1/deployers` | `DeployersResponse`. `chain=all\|<key>`, `sort=real\|dead\|launched`, `limit` (1–500, default 200). A deployer is listed when a finished public check names it, or when no check names it (known from DevRadar alone); one named only by private checks never is (`publicDeployerWhere`) |
+| GET | `/v1/deployers` | `DeployersResponse`. `chain=all\|<key>`, `sort=real\|checked\|recent` (`dead` / `launched` read as `checked`), `limit` (1–500, default 200). One row per wallet named by a finished public coin check, with the coins from it that ApeCheck has checked (latest public check per coin); a wallet named only by private checks never is |
 | GET | `/v1/insights` | `InsightsDTO`: header stats (`checked` = finished checks all time, `today` = finished since 00:00 UTC, so never more than `checked`), since-check by verdict (latest public coin verdicts finished in the last 30 days), most checked today, builders worth watching |
 | GET | `/v1/bot/stats` | `BotStatsDTO`: replies today, median reply seconds (from `BotMention.repliedAt` when the bot stored it, else the check's `finishedAt`), distinct accounts that typed the bot's handle (`BotMention.tagged`, set by the worker: not X's reply prefix, retweets of a tag or the bot itself) |
 | GET | `/v1/auth/nonce?chain=evm\|sol&address=…[&chainId=…]` | `AuthNonceResponse` (no-store): the exact message to sign, see Wallet sign-in |
@@ -324,7 +336,7 @@ messages the API issues; `test/asks.test.ts` runs a small BullMQ worker on queue
 M4: `test/keys.test.ts` (management, show-once, no plaintext anywhere in Postgres or Redis, key auth on every developer
 route, revoked / invalid / non-Max keys, keys refused by management, per-key limit, credits), `test/webhooks.test.ts`
 (CRUD, URL rules in dev and production, the ping job, deliveries; `FakeSources.dns` is the resolver),
-`test/clusters.test.ts`, and `test/mcp.test.ts`: the SDK's MCP `Client` over `StreamableHTTPClientTransport` against the
+and `test/mcp.test.ts`: the SDK's MCP `Client` over `StreamableHTTPClientTransport` against the
 API listening on 127.0.0.1, with in-test workers on `checks` (marks the check DONE / FAILED and publishes `done`) and
 `asks`.
 
@@ -367,9 +379,7 @@ curl -N https://api.apecheck.io/v1/checks/8f2a91x/events -H "Authorization: Bear
 ```
 
 The report has the /api page fields (`narrative: { verdict, score }`, `coin: { verdict, score, … }`, `total`,
-`summary`, `claims[].result`, `report_url`) next to everything the site shows. Pro/Max viewers (a session or a key)
-also get `coin.clusters` (WhaleFlow wallet clusters: `{ label, wallets, pct, fundedFrom }[]`, from
-`Check.evidence.clusters`; `null` for everyone else or when there are none), and their copy is sent `private, no-store`.
+`summary`, `claims[].result`, `report_url`) next to everything the site shows, the same for every viewer.
 
 ### Webhooks (`src/webhooks.ts`; delivery is the worker's, queue `webhooks`)
 
@@ -474,7 +484,7 @@ comment every 15 s. Failures are MCP tool errors (`isError: true`, the reason as
 | `run_check(target)` | starts a check like `POST /v1/checks` with the key (via API, one daily check unless a fresh verdict or a running check of the project is reused; 10 a minute per account, shared with keyed `POST /v1/checks`, else a `rate_limited` tool error) and waits up to 150 s (at most 5 waiting calls per account: more return `running` at once); sends `notifications/progress` with the live log when the client passes a `progressToken` (the value rises with every notification) | `{ id, status: "done", target, narrative, coin, total, verdict, summary, report_url }` (the webhook `check` shape; `verdict` = the narrative verdict enum), `{ id, status: "running", report_url, message }` after 150 s, a tool error for a failed check |
 | `get_check(id)` | the report as `GET /v1/checks/:id` for the key's owner (an id or an `…/c/<id>` link) | the full `CheckReportDTO` |
 | `ask_followup(id, question)` | a follow-up as `POST /v1/checks/:id/asks` (3–280 characters, finished checks, `ASKS_PER_HOUR`) | `{ check, id, question, answer, by, via, createdAt }` |
-| `deployer_history(wallet)` | the wallet's deployer record (`/deployers` rules: public, or named by your own private checks) and its checked coins (latest visible check per coin, up to 50) | `{ wallet, known, deployers: (DeployerDTO & { recordText })[], coins: [{ id, name, ticker, chain, ca, coinScore, coinVerdict, narrative, verdict, total, checkedAt, report_url }] }` |
+| `deployer_history(wallet)` | coins from the wallet that ApeCheck has checked (latest visible check per coin: public, or your own private checks; up to 50; an EVM address matches whatever its case) | `{ wallet, known, coins: [{ id, name, ticker, chain, ca, coinScore, coinVerdict, narrative, verdict, total, checkedAt, report_url }] }` |
 
 Client setup (replace `ak_live_…` with your key; a long `run_check` may need a client tool timeout above 150 s):
 

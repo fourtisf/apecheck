@@ -22,7 +22,6 @@ export function judgeInput(run: CheckRun): JudgeInput {
       historyKnown: s.historyKnown,
       launched: raw.deployer?.launched ?? null,
       dead: raw.deployer?.dead ?? null,
-      fundedFrom: raw.deployer?.fundedFrom ?? null,
       bundlePct: raw.bundle?.pct ?? null,
       bundleWallets: raw.bundle?.wallets ?? null,
       top10Pct: raw.holders?.top10Pct ?? null,

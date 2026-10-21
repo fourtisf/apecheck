@@ -2,7 +2,7 @@
  * worker-prices (PM2): the light periodic work, no browser —
  *  - "since check" price points from DexScreener (HANDOFF §10) and the daily screenshot cleanup (queue "prices");
  *  - re-check alerts for watched targets: fingerprints, notifications, Max automatic re-checks (queue "rechecks", M3);
- *  - the daily deployer refresh from DevRadar and the hourly tier refresh (queue "maintenance", M3);
+ *  - the hourly tier refresh (queue "maintenance", M3);
  *  - webhook deliveries: check.completed, watch.changed and test pings, signed and POSTed with retries (queue
  *    "webhooks", M4).
  */

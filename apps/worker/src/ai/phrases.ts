@@ -53,7 +53,7 @@ export function coinSentence(c: CoinJudgeFacts): string {
   if (s.holders === 'fail' && c.top10Pct != null) return `Top 10 wallets hold ${c.top10Pct}%`;
   if (s.lp === 'fail') return 'Liquidity is unlocked';
   if (s.authorities === 'fail') return 'The mint is still active';
-  // a warn can mean "measured and middling" or "not available"; only the first is about the holders
+  // a warn can mean "measured and middling" or "not checked"; only the first is about the holders
   const measured =
     (s.bundle === 'warn' && c.bundlePct != null) ||
     (s.holders === 'warn' && (c.top10Pct != null || c.devHoldPct != null)) ||
@@ -61,9 +61,9 @@ export function coinSentence(c: CoinJudgeFacts): string {
   if (measured) return 'Holders are somewhat concentrated';
   const nothingKnown =
     !c.historyKnown && c.bundlePct == null && c.top10Pct == null && c.devHoldPct == null && c.lpText == null && c.authoritiesText == null;
-  if (nothingKnown) return 'None of the coin data was available';
+  if (nothingKnown) return 'None of the coin data could be checked';
   if (s.bundle === 'warn' || s.holders === 'warn' || s.lp === 'warn' || s.authorities === 'warn' || c.record === 'mixed') {
-    return 'Some of the coin data was unavailable';
+    return 'Some of the coin data was not checked';
   }
   return 'Supply and liquidity look clean';
 }

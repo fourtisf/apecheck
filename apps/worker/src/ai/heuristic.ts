@@ -282,22 +282,21 @@ export function heuristicAnswer(question: string, d: AnswerData): string {
   const ev = d.evidence;
   if (/deploy|dev wallet|fund/.test(q)) {
     if (!d.coin) return 'There is no coin linked to this one yet, so there is no deployer to trace.';
-    const funded = d.coin.fundedFrom ? `The deployer was funded from ${d.coin.fundedFrom}. ` : '';
-    return d.coin.deployerLine ? `${funded}Track record: ${d.coin.deployerLine}.` : `${funded}The deployer's history was not available for this check.`;
+    return d.coin.deployerLine ? `${d.coin.deployerLine}.` : 'The deployer was not checked for this coin.';
   }
   if (/bundl|snip|launch block/.test(q)) {
     if (!d.coin) return 'No coin linked, so there is no supply to check.';
     return d.coin.bundlePct != null
       ? `${d.coin.bundlePct}% of supply went to ${d.coin.bundleWallets ?? 'several'} wallets in the launch block.`
-      : 'Bundle data was not available for this check.';
+      : 'Bundle share was not checked for this coin.';
   }
   if (/holder|whale|top ?10|concentrat/.test(q)) {
     if (!d.coin) return 'No coin linked, so there are no holders to check.';
-    return d.coin.top10Pct != null ? `The top 10 holders own ${d.coin.top10Pct}%${d.coin.lp ? `; liquidity is ${d.coin.lp.toLowerCase()}` : ''}.` : 'Holder data was not available for this check.';
+    return d.coin.top10Pct != null ? `The top 10 holders own ${d.coin.top10Pct}%${d.coin.lp ? `; liquidity is ${d.coin.lp.toLowerCase()}` : ''}.` : 'Holder share was not checked for this coin.';
   }
   if (/liquidity|\blp\b|rug/.test(q)) {
     if (!d.coin) return 'No coin linked, so there is no liquidity to check.';
-    return d.coin.lp ? `Liquidity: ${d.coin.lp}. Authorities: ${d.coin.authorities ?? 'unknown'}.` : 'LP status was not available for this check.';
+    return d.coin.lp ? `Liquidity: ${d.coin.lp}. Authorities: ${d.coin.authorities ?? 'unknown'}.` : 'LP status was not checked for this coin.';
   }
   if (/github|code|repo|open.?source/.test(q)) return ev.git ? `GitHub: ${ev.git}.` : 'The code was not checked.';
   if (/team|doxx|founder|who/.test(q)) return ev.acct ? `${ev.acct}. The check looks at the account, not who runs it.` : 'There was no X account to check.';

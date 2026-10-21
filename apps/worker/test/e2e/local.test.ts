@@ -65,7 +65,7 @@ it('a queued check on the local working-app fixture finishes DONE with the expec
   expect(texts).toContain('GitHub unavailable, code not checked');
   expect(texts).toContain('X unavailable, account age unknown');
   const ev = c.evidence as CheckEvidence;
-  expect(ev.stubbed).toEqual(expect.arrayContaining(['x', 'fourtis', 'ai']));
+  expect(ev.stubbed).toEqual(expect.arrayContaining(['x', 'ai']));
   expect(c.durationMs!).toBeLessThan(180_000);
 
   const job = await queue.getJob(check.id);

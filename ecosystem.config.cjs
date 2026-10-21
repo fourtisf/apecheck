@@ -75,7 +75,7 @@ module.exports = {
       name: 'worker-prices',
       cwd: path.join(root, 'apps/worker'),
       // price tracking and the daily screenshot cleanup; M3: re-check alerts for watchlists (queue "rechecks"; Max
-      // watchers' automatic re-checks go to worker-checks), the daily deployer refresh and the hourly tier refresh;
+      // watchers' automatic re-checks go to worker-checks) and the hourly tier refresh;
       // M4: webhook deliveries (queue "webhooks": check.completed from worker-checks, watch.changed from the re-check
       // alerts, test pings from the API), signed and POSTed through the SSRF guard with retries over ~6 h. While it is
       // down, deliveries wait in the queue (none are lost; a sweep re-queues any whose job went missing).
