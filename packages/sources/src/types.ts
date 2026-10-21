@@ -103,6 +103,25 @@ export interface DexTokenInfo {
   socials: { type: string; url: string }[];
   imageUrl: string | null;
 }
+/**
+ * A token DexScreener lists only on chains ApeCheck has no on-chain reads for (Sonic, Polygon, Avalanche…): enough to
+ * name the chain and find the project's links. No market numbers: nothing about the coin is checked or scored there.
+ */
+export interface DexOtherChainToken {
+  /** DexScreener's chain id, e.g. "sonic" */
+  dexChain: string;
+  /** display name, e.g. "Sonic" ("another chain" for an id that doesn't look like one) */
+  chainName: string;
+  address: string;
+  name: string | null;
+  symbol: string | null;
+  /** project websites from token info */
+  websites: string[];
+  /** socials from token info: { type: "twitter" | "telegram" | ..., url } */
+  socials: { type: string; url: string }[];
+  imageUrl: string | null;
+  pairUrl: string | null;
+}
 export interface DexScreenerSource {
   configured: boolean;
   /** last non-fatal error (also reported to the current captureErrors() scope) */
@@ -112,6 +131,12 @@ export interface DexScreenerSource {
   /** Many tokens at once (price tracker). Returns a map keyed by lowercase address. */
   tokens(chain: ChainKey, addresses: string[]): Promise<Map<string, DexTokenInfo>>;
   search(query: string): Promise<DexTokenInfo[]>;
+  /**
+   * A token listed only on chains ApeCheck doesn't support (/latest/dex/tokens, every chain): its most liquid pair
+   * there. null when a supported chain lists it too (token() answers then), when nothing lists it, or on an error
+   * (lastError). Optional so test fakes need not stub it.
+   */
+  otherChain?(address: string): Promise<DexOtherChainToken | null>;
 }
 
 /* ---------------- Chains ---------------- */

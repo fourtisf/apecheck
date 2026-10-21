@@ -122,6 +122,11 @@ export class CheckRun {
   coinAnnounced = false;
   /** an address seen on the page / in the post that couldn't be vetted because DexScreener or the RPCs were down */
   unconfirmedCoin: { address: string; why: string } | null = null;
+  /**
+   * a contract DexScreener lists only on a chain ApeCheck has no reads for (Sonic, Polygon…; `chain` is its name):
+   * named in the log, never scored, and not looked up again on the page or in the post
+   */
+  otherChain: { address: string; chain: string } | null = null;
 
   /* Stage B */
   session: BrowseSession | null = null;

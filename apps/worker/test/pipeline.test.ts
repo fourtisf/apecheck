@@ -24,7 +24,7 @@ import { memoryLogger } from '../src/log';
 import { recoverStaleChecks, runCheck, type PipelineDeps } from '../src/pipeline';
 import { scoredSignals } from '../src/pipeline/signals';
 import { challengeHandler, closedPort, serveFixture, serveHandler, testLookup, type FixtureSite } from './fixture-server';
-import { dexInfo, fakeSources, repoFacts, xUser, type FakeData } from './fakes';
+import { dexInfo, dexOther, fakeSources, repoFacts, xUser, type FakeData, type FakeSources } from './fakes';
 import { createCheck, heuristicAi, prisma, resetDb, testEnv } from './helpers';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
@@ -304,6 +304,53 @@ describe('pipeline run(checkId)', () => {
     expect(await ai.answer('was it bundled?', answerData!)).toBe('Bundle share was not checked for this coin.');
     expect(await ai.answer('who are the top 10 holders?', answerData!)).toBe('Holder share was not checked for this coin.');
     expect(await ai.answer('is the liquidity locked?', answerData!)).toBe('LP status was not checked for this coin.');
+  });
+
+  describe('a contract DexScreener lists only on Sonic (no on-chain reads there)', () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const ON_SONIC = "Contract on Sonic: 0x17c…d1fc (on-chain reads aren't supported there yet, so the coin isn't checked)";
+
+    it('the check runs on the website from its token info: site, GitHub and docs tested, no coin score', async () => {
+      const url = sites.get('working-app')!.url;
+      const d = deps({ ...workingData(), dexOther: { [SONIC]: dexOther({ address: SONIC, websites: [url], socials: [{ type: 'twitter', url: 'https://x.com/orbitswap' }] }) } });
+      const check = await createCheck(SONIC);
+      const res = await runCheck(check.id, d);
+      expect(res.status).toBe('done');
+      const c = await stored(check.id);
+      const texts = c.steps.map(s => s.text);
+      expect(texts.slice(0, 3)).toEqual([ON_SONIC, 'Token metadata: website working-app.test, X @orbitswap', "Checking the project's website instead: working-app.test"]);
+      expect(c.steps[0]).toMatchObject({ status: 'WARN', source: 'DexScreener' });
+      expect(texts).toContain('Opening working-app.test in a clean browser');
+      expect(texts.some(t => /^GitHub: \d+ commits/.test(t))).toBe(true);
+      expect(texts.some(t => /^Docs: /.test(t))).toBe(true);
+      // the coin is named once and never scored or called "not found"
+      expect(texts.some(t => /not found|No contract found/i.test(t))).toBe(false);
+      expect(texts[texts.length - 1]).toMatch(/^Scoring \d+ claims$/);
+      expect(c.coinScore).toBeNull();
+      expect(c.coinFacts).toBeNull();
+      expect((d.sources as FakeSources).calls.filter(x => x.startsWith('coinFacts'))).toEqual([]);
+      expect(c.target).toMatchObject({ key: 'site:working-app.test', kind: 'SITE', domain: 'working-app.test', chain: null });
+      expect(await prisma.target.count({ where: { key: `ca:evm:${SONIC}` } })).toBe(0);
+      expect((c.evidence as CheckEvidence).site?.loaded).toBe(true);
+      expect((c.evidence as CheckEvidence).market).toBeNull();
+    });
+
+    it('without a website in its token info: nothing is made up (no site, no coin score, no "not found")', async () => {
+      const d = deps({ dexOther: { [SONIC]: dexOther({ address: SONIC }) } });
+      const check = await createCheck(SONIC);
+      const res = await runCheck(check.id, d);
+      expect(res.status).toBe('done');
+      const c = await stored(check.id);
+      const texts = c.steps.map(s => s.text);
+      expect(texts.slice(0, 2)).toEqual([ON_SONIC, 'No website in the token metadata']);
+      expect(texts).toContain('No website found to open');
+      expect(texts.some(t => /not found|No contract found|Opening /i.test(t))).toBe(false);
+      expect(c.coinScore).toBeNull();
+      expect(c.coinFacts).toBeNull();
+      expect((d.sources as FakeSources).calls.filter(x => x.startsWith('coinFacts'))).toEqual([]);
+      expect(c.target).toMatchObject({ key: `ca:evm:${SONIC}`, kind: 'COIN', chain: null, domain: null });
+      expect((c.evidence as CheckEvidence).site).toBeNull();
+    });
   });
 
   /** a finished check of another coin on Base whose deployer wallet is `wallet` (as an earlier ApeCheck check stored it) */
