@@ -371,7 +371,7 @@ describe('GET /v1/deployers', () => {
     const a = await h.prisma.check.findUniqueOrThrow({ where: { shortId: 'aaaa001' } });
     expect(real.items[0]).toEqual({
       chain: 'sol', address: D1_ADDR, checked: 1, real: 1, avgTotal: 80, lastChecked: a.finishedAt!.toISOString(),
-      coins: [{ id: 'aaaa001', ticker: 'ORBIT', name: '$ORBIT', hue: expect.any(Number), coinScore: 78, coinBand: 'ok' }],
+      coins: [{ id: 'aaaa001', ticker: 'ORBIT', name: '$ORBIT', hue: expect.any(Number), logo: null, coinScore: 78, coinBand: 'ok' }],
     });
     // the coin the helixdex.app site check found counts for its wallet like a coin check
     expect(real.items[1]).toMatchObject({ chain: 'base', checked: 2, real: 0, avgTotal: 35 });

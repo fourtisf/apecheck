@@ -272,8 +272,8 @@ export function buildSeries(
 /* ---------------- DTOs ---------------- */
 
 /** One coin of a deployer wallet that ApeCheck has checked (packages/db deployerCoins row). */
-export function toDeployerCoinDTO(c: Pick<DeployerCoinRow, 'shortId' | 'ticker' | 'name' | 'key' | 'coinScore' | 'coinBand'>): DeployerCoinDTO {
-  return { id: c.shortId, ticker: c.ticker, name: c.name, hue: hueOf(c.key), coinScore: c.coinScore, coinBand: coinKeyOf(c.coinBand) };
+export function toDeployerCoinDTO(c: Pick<DeployerCoinRow, 'shortId' | 'ticker' | 'name' | 'key' | 'logo' | 'coinScore' | 'coinBand'>): DeployerCoinDTO {
+  return { id: c.shortId, ticker: c.ticker, name: c.name, hue: hueOf(c.key), logo: logoUrl(c.logo), coinScore: c.coinScore, coinBand: coinKeyOf(c.coinBand) };
 }
 
 export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {

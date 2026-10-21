@@ -88,7 +88,7 @@ describe('deployers page', () => {
     real: 1,
     avgTotal: 54,
     lastChecked: new Date(Date.now() - 3 * 3600_000).toISOString(),
-    coins: [{ id: 'cccc001', ticker: 'HELIX', name: '$HELIX', hue: 120, coinScore: 61, coinBand: 'ok' }],
+    coins: [{ id: 'cccc001', ticker: 'HELIX', name: '$HELIX', hue: 120, logo: null, coinScore: 61, coinBand: 'ok' }],
     ...o,
   });
   const view = (items: DeployerRowDTO[]) =>

@@ -14,6 +14,7 @@ import { finishResolve, resolveStage, saveTarget } from '../src/pipeline/resolve
 import { fetchLogo, saveLogo, storeLogo } from '../src/pipeline/logo';
 import { StepLogger } from '../src/pipeline/steps';
 import { inside } from '../src/maintenance/shots';
+import { LOGOS_BATCH, backfillLogos } from '../src/maintenance/logos';
 import { probeGeckoTerminal } from '../src/doctor/gecko';
 import { dexInfo, fakeSources, type FakeData } from './fakes';
 import { createCheck, heuristicAi, memoryStepDeps, prisma, resetDb, testEnv, tmpDir } from './helpers';
@@ -192,6 +193,59 @@ describe('logos', () => {
     expect(inside(dir, 'logos', 'abc.png')).toBeNull();
     expect(inside(dir, 'clx0abc123')).toBe(path.join(dir, 'clx0abc123'));
     expect(inside(dir, 'cards', 'Ab12Cd3.png')).toBe(path.join(dir, 'cards', 'Ab12Cd3.png'));
+  });
+});
+
+describe('logo backfill (coins checked before logos were stored)', () => {
+  it('stores the image a check would pick, skips coins with a logo, and asks a coin without an image again only after a day', async () => {
+    await resetDb();
+    const env = testEnv();
+    const ZAP_MINT = 'ZapMint1111111111111111111111111111111111111';
+    const coin = (ca: string, chain: 'SOL' | 'BASE', logo: string | null = null) =>
+      prisma.target.create({ data: { kind: 'COIN', chain, ca, name: ca.slice(0, 6), key: `ca:${chain.toLowerCase()}:${ca}`, logo, lastCheckedAt: new Date() } });
+    const kimchi = await coin(KIMCHI, 'SOL');
+    const zap = await coin(ZAP, 'BASE');
+    const bare = await coin(ZAP_MINT, 'SOL');
+    const has = await coin('HasLogo11111111111111111111111111111111111', 'SOL', 'logos/' + 'a'.repeat(64) + '.png');
+    await prisma.target.create({ data: { kind: 'SITE', domain: 'kairo.app', name: 'kairo.app', key: 'site:kairo.app' } });
+
+    // KIMCHI: no DexScreener info, its pump.fun metadata has the image; ZAP: DexScreener's image; the third has none
+    const sources = fakeSources(env, { dexTokens: { [ZAP.toLowerCase()]: dexInfo({ chain: 'base', address: ZAP, imageUrl: 'https://dd.dexscreener.com/ds-data/tokens/base/zap.png' }) } });
+    const asked: string[] = [];
+    sources.tokenLinks = {
+      configured: true,
+      async metadata(_chain, address) {
+        asked.push(address);
+        return address === KIMCHI ? pumpMeta() : null;
+      },
+      async gecko() {
+        return null;
+      },
+    };
+    const http = bytesHttp(PNG, { 'content-type': 'image/png' });
+    (sources as { http: Http }).http = http;
+    const tried = new Map<string, number>();
+    let now = Date.now();
+    const run = () => backfillLogos({ prisma, sources, screenshotDir: env.SCREENSHOT_DIR, log: memoryLogger(), tried, now: () => now });
+
+    expect(await run()).toEqual({ stored: 2, missing: 1 });
+    const logo = async (id: string) => (await prisma.target.findUniqueOrThrow({ where: { id } })).logo;
+    expect(await logo(kimchi.id)).toMatch(LOGO_PATH_RE);
+    expect(await logo(zap.id)).toMatch(LOGO_PATH_RE);
+    expect(await logo(bare.id)).toBeNull();
+    expect(await logo(has.id)).toBe('logos/' + 'a'.repeat(64) + '.png');
+    // ZAP never needed the metadata: DexScreener had the image
+    expect(asked.sort()).toEqual([KIMCHI, ZAP_MINT].sort());
+    expect(http.reqs).toHaveLength(2);
+
+    // the coin without an image waits a day
+    asked.length = 0;
+    expect(await run()).toEqual({ stored: 0, missing: 0 });
+    expect(asked).toEqual([]);
+    now += 25 * 3600_000;
+    expect(await run()).toEqual({ stored: 0, missing: 1 });
+    expect(asked).toEqual([ZAP_MINT]);
+    expect(LOGOS_BATCH).toBeGreaterThan(0);
   });
 });
 

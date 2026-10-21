@@ -58,6 +58,8 @@ export interface DeployerCoinDTO {
   ticker: string | null;
   name: string;
   hue: number;
+  /** the coin's stored logo ("/shots/logos/…"), null when none */
+  logo: string | null;
   coinScore: number | null;
   coinBand: CoinKey | null;
 }

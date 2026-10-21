@@ -237,7 +237,7 @@ describe('GET /v1/checks/:id', () => {
         deployerAddress: DEP,
         deployerHistory: {
           total: 1,
-          coins: [{ id: 'prior01', ticker: 'PRIOR', name: '$PRIOR', hue: hueOf(`ca:sol:${PRIOR_MINT}`), coinScore: 62, coinBand: 'ok' }],
+          coins: [{ id: 'prior01', ticker: 'PRIOR', name: '$PRIOR', hue: hueOf(`ca:sol:${PRIOR_MINT}`), logo: null, coinScore: 62, coinBand: 'ok' }],
         },
         deployerText: '1 other coin from this wallet checked by ApeCheck, $PRIOR',
       },

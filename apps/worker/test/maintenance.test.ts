@@ -9,7 +9,7 @@ import { Queue, QueueEvents } from 'bullmq';
 import { Redis } from 'ioredis';
 import { memoryLogger } from '../src/log';
 import { refreshTiers } from '../src/maintenance/tiers';
-import { MAINTENANCE_QUEUE, RETIRED_DEPLOYERS_JOB, TIERS_JOB, balanceReader, startMaintenanceWorker } from '../src/maintenance/index';
+import { LOGOS_JOB, MAINTENANCE_QUEUE, RETIRED_DEPLOYERS_JOB, TIERS_JOB, balanceReader, startMaintenanceWorker } from '../src/maintenance/index';
 import { fakeSources } from './fakes';
 import { prisma, resetDb, testEnv } from './helpers';
 
@@ -36,6 +36,7 @@ describe('retired deployer refresh', () => {
       worker = await startMaintenanceWorker({ env, prisma, sources: fakeSources(env), log });
       expect(await queue.getJobScheduler(RETIRED_DEPLOYERS_JOB)).toBeFalsy();
       expect(await queue.getJobScheduler(TIERS_JOB)).toBeTruthy();
+      expect(await queue.getJobScheduler(LOGOS_JOB)).toBeTruthy();
       expect(log.lines.join('\n')).toContain('tier refresh hourly');
 
       // a job of the old name still queued: finishes without doing anything

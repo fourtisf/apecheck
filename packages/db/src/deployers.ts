@@ -26,6 +26,8 @@ export interface DeployerCoinRow {
   ticker: string | null;
   /** Target.key, for the avatar hue */
   key: string;
+  /** Target.logo ("logos/<sha256>.<ext>"), null until one was stored */
+  logo: string | null;
   narScore: number | null;
   coinScore: number | null;
   totalScore: number | null;
@@ -77,7 +79,7 @@ export async function deployerCoins(prisma: PrismaClient, q: DeployerCoinsQuery 
     SELECT x.*, count(*) OVER () AS "total" FROM (
       SELECT DISTINCT ON (t."chain", ${COIN_KEY})
         c."id" AS "checkId", c."shortId", c."targetId", t."chain"::text AS "chain", t."ca", f."deployerAddress",
-        t."name", t."ticker", t."key", c."narScore", c."coinScore", c."totalScore", c."narBand", c."coinBand", c."finishedAt"
+        t."name", t."ticker", t."key", t."logo", c."narScore", c."coinScore", c."totalScore", c."narBand", c."coinBand", c."finishedAt"
       FROM "CoinFacts" f
       JOIN "Check" c ON c."id" = f."checkId"
       JOIN "Target" t ON t."id" = c."targetId"

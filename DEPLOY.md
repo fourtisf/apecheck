@@ -10,7 +10,7 @@ Processes (PM2, `ecosystem.config.cjs`):
 | `api` | Fastify REST + SSE (`apps/api`) | 4000 (localhost only) |
 | `worker-checks` | check pipeline; drives the browser agent | — |
 | `worker-bot` | @ApeCheckBot mentions + replies (§14); answers the site's follow-up questions (M3, queue `asks`), so it must run even before the bot has X keys | — |
-| `worker-prices` | price tracking, screenshot cleanup; M3: re-check alerts for watchlists (queue `rechecks`), hourly tier refresh; M4: webhook deliveries (queue `webhooks`, outbound HTTPS to developers' URLs through the SSRF guard) | — |
+| `worker-prices` | price tracking, screenshot cleanup; M3: re-check alerts for watchlists (queue `rechecks`), hourly tier refresh, coin logo backfill (DexScreener, token metadata, GeckoTerminal); M4: webhook deliveries (queue `webhooks`, outbound HTTPS to developers' URLs through the SSRF guard) | — |
 
 Plus one systemd unit, `apecheck-browser.service` (`deploy/browser`): Chromium itself, as a separate user with no access
 to the app's secrets (§6). Its Playwright endpoint is `127.0.0.1:9223` (localhost only); worker-checks' SSRF guard proxy is `127.0.0.1:9224`.

@@ -74,7 +74,7 @@ function DeployerRow({ d, i, open, focus, onToggle }: { d: DeployerRowDTO; i: nu
           <div className="chips">
             {d.coins.map(c => (
               <Link key={c.id} className="chip-l" href={reportPath(c.id)} prefetch={false}>
-                <Avatar item={{ kind: 'coin', hue: c.hue, ticker: c.ticker, name: c.name }} size={20} />
+                <Avatar item={{ kind: 'coin', hue: c.hue, ticker: c.ticker, name: c.name, logo: c.logo }} size={20} />
                 <b>{c.ticker ? `$${c.ticker}` : c.name}</b>
                 <CoinBadge score={c.coinScore} />
               </Link>
