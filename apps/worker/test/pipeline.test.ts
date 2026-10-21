@@ -397,6 +397,20 @@ describe('pipeline run(checkId)', () => {
         data: { evmChains: { [EVM]: 'base' }, coinFacts: { [EVM]: empty('base', EVM, ['evm.creator: HTTP 500 from api.etherscan.io']) } } as FakeData,
         expected: ['Deployer: not checked (Etherscan unavailable)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
       },
+      // EVM: no Etherscan key, Blockscout down; then both down
+      {
+        target: EVM,
+        data: { evmChains: { [EVM]: 'base' }, coinFacts: { [EVM]: empty('base', EVM, ['evm.creator.blockscout: HTTP 503 from base.blockscout.com']) } } as FakeData,
+        expected: ['Deployer: not checked (Blockscout unavailable)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
+      },
+      {
+        target: EVM,
+        data: {
+          evmChains: { [EVM]: 'base' },
+          coinFacts: { [EVM]: empty('base', EVM, ['evm.creator: Free API access is not supported for this chain', 'evm.creator.blockscout: HTTP 503 from base.blockscout.com']) },
+        } as FakeData,
+        expected: ['Deployer: not checked (Etherscan and Blockscout unavailable)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
+      },
       // Tron: the contract's origin address, nothing else
       {
         target: TRC,
@@ -413,8 +427,8 @@ describe('pipeline run(checkId)', () => {
       const all = JSON.stringify({ steps: c.steps, summary: c.summary, coinSummary: c.coinSummary, evidence: c.evidence, claims: c.claims });
       expect(all).not.toMatch(/fourtis|devradar|bundlescan|whaleflow/i);
       for (const s of c.steps) expect([s.text, s.source]).not.toEqual([s.text, expect.stringMatching(/DevRadar|BundleScan|WhaleFlow/)]);
-      // "unavailable" only for a source that really failed (an RPC, Etherscan, a market source not configured here)
-      const unavailable = texts.filter(t => /unavailable/.test(t) && !/\((Solana RPC|Etherscan) unavailable\)$/.test(t) && !/^(DexScreener|X) unavailable/.test(t));
+      // "unavailable" only for a source that really failed (an RPC, Etherscan or Blockscout, a market source not configured here)
+      const unavailable = texts.filter(t => /unavailable/.test(t) && !/\((Solana RPC|Etherscan|Blockscout|Etherscan and Blockscout) unavailable\)$/.test(t) && !/^(DexScreener|X) unavailable/.test(t));
       expect([k.target, unavailable]).toEqual([k.target, []]);
       expect(c.coinFacts?.sigBundle).toBe('WARN');
       expect(c.coinFacts?.sigLp).toBe('WARN');

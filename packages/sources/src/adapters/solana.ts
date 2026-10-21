@@ -7,15 +7,20 @@ import type { Env } from '@apecheck/core';
 import { warnOnce } from '@apecheck/core/node';
 import type { Http, SimResult, SolMintInfo, SolanaWalletSource } from '../types';
 import { jsonRpc } from '../rpc';
-import { ErrorState, RE_SOL_ADDRESS, errMsg, toUnits } from '../util';
+import { ErrorState, RE_SOL_ADDRESS, errMsg, reportError, toUnits } from '../util';
 
 const TIMEOUT_MS = 8_000;
 /**
  * A busy node's quick refusal ("account index service overloaded, please try again", a 429, a 5xx): the next request
  * usually goes through. Timeouts are not retried (the check's budget is spent already).
  */
-const BUSY = /overloaded|try again|too many requests|rate limit|HTTP (429|50[0234])\b/i;
+export const SOLANA_BUSY = /overloaded|try again|too many requests|rate limit|HTTP (429|50[0234])\b/i;
 const BUSY_PAUSE_MS = 400;
+/**
+ * Reported (not as a "solana." error, so the RPC isn't called down) when the public node answered for a busy one:
+ * the check log and the doctor show that the configured RPC keeps refusing.
+ */
+export const SOLANA_PUBLIC_FALLBACK = 'fallback.solana.largestHolders';
 
 export const SPL_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 export const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
@@ -165,15 +170,24 @@ export class SolanaAdapter implements SolanaWalletSource {
     try {
       return await this.rpc('getTokenLargestAccounts', params);
     } catch (e) {
-      if (!BUSY.test(errMsg(e))) throw e;
+      if (!SOLANA_BUSY.test(errMsg(e))) throw e;
     }
     await new Promise(r => setTimeout(r, BUSY_PAUSE_MS));
+    let busy: string;
     try {
       return await this.rpc('getTokenLargestAccounts', params);
     } catch (e) {
-      if (this.url === PUBLIC_SOLANA_RPC || !BUSY.test(errMsg(e))) throw e;
+      busy = errMsg(e);
+      if (this.url === PUBLIC_SOLANA_RPC || !SOLANA_BUSY.test(busy)) throw e;
     }
-    return this.rpc('getTokenLargestAccounts', params, PUBLIC_SOLANA_RPC);
+    const host = new URL(this.url).host;
+    try {
+      const out = await this.rpc('getTokenLargestAccounts', params, PUBLIC_SOLANA_RPC);
+      reportError(`${SOLANA_PUBLIC_FALLBACK}: ${host} refused as busy (${busy}), the public node answered`);
+      return out;
+    } catch (e) {
+      throw new Error(`${host} refused as busy (${busy}); public node: ${errMsg(e)}`);
+    }
   }
 
   async mintInfo(mint: string): Promise<SolMintInfo | null> {

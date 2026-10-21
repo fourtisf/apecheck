@@ -5,7 +5,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { getEnv, type Env } from '@apecheck/core';
-import { HttpError, reportError, solanaRpcUrl, startGuardProxy, type Http, type HttpRequest, type HttpResponse } from '@apecheck/sources';
+import { HttpError, SOLANA_PUBLIC_FALLBACK, reportError, solanaRpcUrl, startGuardProxy, type Http, type HttpRequest, type HttpResponse } from '@apecheck/sources';
 import { AiOutputError } from '../src/ai/anthropic';
 import { createAi } from '../src/ai/index';
 import { aiErrorText, probeAi } from '../src/doctor/ai';
@@ -321,9 +321,46 @@ describe('EVM probes', () => {
     const r = await probeEtherscan({ env: prodEnv({ ETHERSCAN_API_KEY: 'K'.repeat(20) }), evm: partial });
     expect(r.status).toBe('WARN');
     expect(r.detail).toBe('creator found via Etherscan eth, arb; Blockscout base; not on bnb (evm.creator: Free API access is not supported for this chain)');
-    expect(r.remedy).toMatch(/BNB Chain needs an Etherscan plan/);
+    expect(r.remedy).toMatch(/plan does not cover bnb .*BNB Chain needs a plan that covers it/);
     const all = { creator: vi.fn(async () => ({ creator: '0xabc', txHash: null, createdAt: null, via: 'etherscan' as const })) };
     expect((await probeEtherscan({ env: prodEnv({ ETHERSCAN_API_KEY: 'K'.repeat(20) }), evm: all })).status).toBe('PASS');
+  });
+  it('EVM deployer lookup: the remedy names what failed (the host asked, the quota), not always the plan', async () => {
+    const keyedDown = {
+      creator: vi.fn(async (chain: string) => {
+        if (chain === 'bnb') {
+          reportError('evm.creator: fetch failed (getaddrinfo ENOTFOUND api.etherscan.io)');
+          return null;
+        }
+        return { creator: '0xabc', txHash: null, createdAt: null, via: 'blockscout' as const };
+      }),
+    };
+    const r1 = await probeEtherscan({ env: prodEnv({ ETHERSCAN_API_KEY: 'K'.repeat(20) }), evm: keyedDown });
+    expect(r1.status).toBe('WARN');
+    expect(r1.remedy).toMatch(/no answer from api\.etherscan\.io/);
+    const quota = {
+      creator: vi.fn(async (chain: string) => {
+        if (chain === 'bnb') {
+          reportError('evm.creator: Max daily rate limit reached');
+          return null;
+        }
+        return { creator: '0xabc', txHash: null, createdAt: null, via: 'etherscan' as const };
+      }),
+    };
+    expect((await probeEtherscan({ env: prodEnv({ ETHERSCAN_API_KEY: 'K'.repeat(20) }), evm: quota })).remedy).toMatch(/quota/);
+    // no key, Blockscout unreachable: the Blockscout host, never api.etherscan.io
+    const unreachable = {
+      creator: vi.fn(async (chain: string) => {
+        reportError(`evm.creator.blockscout: fetch failed (getaddrinfo ENOTFOUND ${chain}.blockscout.com)`);
+        return null;
+      }),
+    };
+    const r3 = await probeEtherscan({ env: prodEnv(), evm: unreachable });
+    expect(r3.status).toBe('FAIL');
+    expect(r3.remedy).toMatch(/no answer from eth\.blockscout\.com/);
+    // no key, Blockscout answering errors: Blockscout named
+    const busy = { creator: vi.fn(async () => (reportError('evm.creator.blockscout: HTTP 503 from base.blockscout.com'), null)) };
+    expect((await probeEtherscan({ env: prodEnv(), evm: busy })).remedy).toMatch(/^Blockscout answered with an error/);
   });
   it('EVM deployer lookup: a rejected key is FAIL even when Blockscout answers', async () => {
     const creator = vi.fn(async (chain: string) => {
@@ -362,6 +399,31 @@ describe('Solana probe', () => {
     expect(r.status).toBe('WARN');
     expect(r.detail).toContain('largest holders failed: solana.largestHolders: HTTP 429');
     expect(r.detail).not.toContain('h'.repeat(20));
+  });
+
+  it('holders answered by the public node for a busy keyed one: WARN naming it, busy remedy; a plan refusal keeps the plan remedy', async () => {
+    const sol = {
+      mintInfo: async () => mint,
+      largestHolders: async () => {
+        reportError(`${SOLANA_PUBLIC_FALLBACK}: mainnet.helius-rpc.com refused as busy (account index service overloaded), the public node answered`);
+        return holders;
+      },
+    };
+    const r = await probeSolana({ env: prodEnv({ HELIUS_API_KEY: 'h'.repeat(20) }), sol });
+    expect(r.status).toBe('WARN');
+    expect(r.detail).toContain('largest holders mainnet.helius-rpc.com refused as busy (account index service overloaded), the public node answered');
+    expect(r.remedy).toMatch(/refuses getTokenLargestAccounts as busy: checks then ask the public node/);
+    const excluded = {
+      mintInfo: async () => mint,
+      largestHolders: async () => {
+        reportError('solana.largestHolders: excluded from account secondary indexes');
+        return [];
+      },
+    };
+    const r2 = await probeSolana({ env: prodEnv({ RPC_SOLANA: 'https://my.rpc/KEY' }), sol: excluded });
+    expect(r2.status).toBe('WARN');
+    expect(r2.remedy).toMatch(/use a plan that serves them/);
+    expect(r2.remedy).not.toMatch(/public node/);
   });
 });
 

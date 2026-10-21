@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createSolana, PUBLIC_SOLANA_RPC, SOL_READ_METHODS, solanaRpcUrl } from '../src/adapters/solana';
+import { createSolana, PUBLIC_SOLANA_RPC, SOLANA_PUBLIC_FALLBACK, SOL_READ_METHODS, solanaRpcUrl } from '../src/adapters/solana';
 import { jsonRpc } from '../src/rpc';
+import { captureErrors } from '../src/util';
 import { fakeHttp, fixture, rpcHandler, testEnv } from './helpers';
 
 const MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
@@ -153,7 +154,12 @@ describe('Solana adapter: largestHolders', () => {
     expect(largestHosts(second)).toEqual([HELIUS, HELIUS]);
 
     const fallback = fakeHttp(node(busy), rpcHandler(HOST, { getTokenLargestAccounts: answer }));
-    expect(await createSolana(testEnv({ HELIUS_API_KEY: 'k' }), fallback).largestHolders(MINT)).toEqual([{ owner: OWNERS[0], account: ACCOUNTS[0], amount: '10', pct: 10 }]);
+    const viaPublic = await captureErrors(() => createSolana(testEnv({ HELIUS_API_KEY: 'k' }), fallback).largestHolders(MINT));
+    expect(viaPublic.value).toEqual([{ owner: OWNERS[0], account: ACCOUNTS[0], amount: '10', pct: 10 }]);
+    // reported apart from the "solana." errors (those call the RPC down), without the key
+    expect(viaPublic.errors).toEqual([
+      `${SOLANA_PUBLIC_FALLBACK}: ${HELIUS} refused as busy (account index service overloaded, please try again.), the public node answered`,
+    ]);
     expect(largestHosts(fallback)).toEqual([HELIUS, HELIUS, HOST]);
     const owners = fallback.calls.find(c => (c.body as { method: string }).method === 'getMultipleAccounts');
     expect(new URL(owners!.url).host).toBe(HELIUS);
@@ -164,6 +170,12 @@ describe('Solana adapter: largestHolders', () => {
     expect(await sol.largestHolders(MINT)).toEqual([]);
     expect(largestHosts(pub)).toEqual([HOST, HOST]);
     expect(sol.lastError).toMatch(/largestHolders: account index service overloaded/);
+
+    // the public node refuses too: one error naming both
+    const both = fakeHttp(node(busy), rpcHandler(HOST, { getTokenLargestAccounts: () => ({ error: { code: 429, message: 'Too many requests' } }) }));
+    const solBoth = createSolana(testEnv({ HELIUS_API_KEY: 'k' }), both);
+    expect(await solBoth.largestHolders(MINT)).toEqual([]);
+    expect(solBoth.lastError).toBe(`solana.largestHolders: ${HELIUS} refused as busy (account index service overloaded, please try again.); public node: Too many requests`);
   });
 });
 

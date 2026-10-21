@@ -158,10 +158,15 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
     if (history) await steps.step({ status: sig.deployer, text: `Deployer history: ${deployerHistoryLine(history)}${who}`, source: 'ApeCheck' });
     else await steps.step({ status: 'warn', text: `Deployer history: not checked${who}` });
   } else {
-    // EVM: the creator lookup (Etherscan) failed, or Etherscan has no creator on record ("No data found": an answer,
-    // not an outage); Solana deployers are not looked up
-    const etherscan = CHAINS[run.chain!].family === 'evm' && raw.errors.some(e => e.startsWith('evm.creator') && !/\bno (data|records?|result)\b/i.test(e));
-    await steps.step({ status: 'warn', text: `Deployer: not checked${etherscan ? ' (Etherscan unavailable)' : ''}` });
+    // EVM: the creator lookups failed (Etherscan, then Blockscout), or have no creator on record ("No data found": an
+    // answer, not an outage); Solana deployers are not looked up
+    const failed = CHAINS[run.chain!].family === 'evm' ? raw.errors.filter(e => e.startsWith('evm.creator') && !/\bno (data|records?|result)\b/i.test(e)) : [];
+    const down = [
+      ...(failed.some(e => e.startsWith('evm.creator:') && !/: timeout$/.test(e)) ? ['Etherscan'] : []),
+      ...(failed.some(e => e.startsWith('evm.creator.blockscout:')) ? ['Blockscout'] : []),
+    ];
+    const why = down.length ? ` (${down.join(' and ')} unavailable)` : failed.length ? ' (lookup timed out)' : '';
+    await steps.step({ status: 'warn', text: `Deployer: not checked${why}` });
   }
 
   // bundle

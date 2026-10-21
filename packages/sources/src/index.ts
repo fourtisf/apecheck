@@ -40,7 +40,7 @@ export {
   createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, ALCHEMY_NETWORKS, BLOCKSCOUT_API, resolveEvmRpc, type EvmRpcSource, DETECT_RETRY_DELAY_MS, ERC1271_MAGIC, ERC1271_MAGIC_WORD, ERC1271_TIMEOUT_MS, encodeIsValidSignature,
   type EvmOptions,
 } from './adapters/evm';
-export { createSolana, SolanaAdapter, SOL_READ_METHODS, SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM, solanaRpcUrl } from './adapters/solana';
+export { createSolana, SolanaAdapter, SOL_READ_METHODS, SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM, SOLANA_BUSY, SOLANA_PUBLIC_FALLBACK, solanaRpcUrl } from './adapters/solana';
 export { toUnits } from './util';
 export { base58Decode, base58Encode } from './base58';
 export { createTron, TronAdapter, TRONGRID_BASE } from './adapters/tron';

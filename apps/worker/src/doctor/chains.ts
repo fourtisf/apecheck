@@ -6,7 +6,7 @@
  */
 import { CHAINS, type ChainKey, type Env } from '@apecheck/core';
 import {
-  BLOCKSCOUT_API, COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, EVM_READ_METHODS, TRONGRID_BASE, captureErrors, jsonRpc, resolveEvmRpc, solanaRpcUrl,
+  BLOCKSCOUT_API, COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, EVM_READ_METHODS, SOLANA_BUSY, SOLANA_PUBLIC_FALLBACK, TRONGRID_BASE, captureErrors, jsonRpc, resolveEvmRpc, solanaRpcUrl,
   type EvmSource, type Http, type SolanaSource, type TronSource,
 } from '@apecheck/sources';
 import { hostOf } from './redact';
@@ -175,34 +175,40 @@ export const ETHERSCAN_REMEDY =
  */
 export async function probeEtherscan(deps: { env: Env; evm: Pick<EvmSource, 'creator'> }): Promise<ProbeOutcome> {
   const keyed = !!deps.env.ETHERSCAN_API_KEY;
-  const rows: { chain: EvmProbeChain; via: 'etherscan' | 'blockscout' | null; error: string | null }[] = [];
+  const rows: { chain: EvmProbeChain; via: 'etherscan' | 'blockscout' | null; errors: string[] }[] = [];
   for (const chain of ['eth', 'base', 'bnb', 'arb'] as const) {
     if (!keyed && !BLOCKSCOUT_API[chain]) {
-      rows.push({ chain, via: null, error: 'needs ETHERSCAN_API_KEY (no Blockscout explorer)' });
+      rows.push({ chain, via: null, errors: ['needs ETHERSCAN_API_KEY (no Blockscout explorer)'] });
       continue;
     }
     const { value, errors } = await captureErrors(() => deps.evm.creator(chain, EVM_PROBE_TOKENS[chain].address));
-    rows.push(value?.creator ? { chain, via: value.via ?? 'etherscan', error: null } : { chain, via: null, error: errors.join('; ') || 'no creator returned' });
+    rows.push(value?.creator ? { chain, via: value.via ?? 'etherscan', errors: [] } : { chain, via: null, errors: errors.length ? errors : ['no creator returned'] });
   }
-  const errs = rows.flatMap(r => (r.error ? [r.error] : []));
-  const rejected = keyed && errs.some(e => /invalid api key|missing\/invalid/i.test(e));
+  const bad = rows.filter(r => !r.via);
   const by = (via: string) => rows.filter(r => r.via === via).map(r => r.chain);
   const found = [
     ...(by('etherscan').length ? [`Etherscan ${by('etherscan').join(', ')}`] : []),
     ...(by('blockscout').length ? [`Blockscout ${by('blockscout').join(', ')}`] : []),
   ];
-  const bad = rows.filter(r => !r.via);
-  const detail = `creator found via ${found.length ? found.join('; ') : 'none'}${bad.length ? `; not on ${bad.map(r => `${r.chain} (${r.error})`).join(', ')}` : ''}`;
-  if (rejected) return fail(detail, 'ETHERSCAN_API_KEY is rejected: create a new key at etherscan.io/myapikey');
-  if (!found.length) {
-    return fail(detail, networkRemedy(errs[0] ?? '', 'api.etherscan.io') ?? 'neither Etherscan nor Blockscout answered: check the server\'s outbound HTTPS');
+  const detail = `creator found via ${found.length ? found.join('; ') : 'none'}${bad.length ? `; not on ${bad.map(r => `${r.chain} (${r.errors.join('; ')})`).join(', ')}` : ''}`;
+
+  // Etherscan's own answers (errors of the "evm.creator:" call), and a network failure named with the host asked
+  const etherscanErrs = bad.flatMap(r => r.errors.filter(e => e.startsWith('evm.creator:')));
+  const network = bad
+    .flatMap(r => r.errors.map(e => networkRemedy(e, e.startsWith('evm.creator.blockscout') ? hostOf(BLOCKSCOUT_API[r.chain]) : 'api.etherscan.io')))
+    .find(Boolean);
+  if (keyed && etherscanErrs.some(e => /invalid api key|missing\/invalid/i.test(e))) {
+    return fail(detail, 'ETHERSCAN_API_KEY is rejected: create a new key at etherscan.io/myapikey');
   }
+  const etherscanRemedy = etherscanErrs.some(e => /not supported for this chain|upgrade your api plan/i.test(e))
+    ? `your Etherscan plan does not cover ${bad.map(r => r.chain).join(', ')} (the free plan has no Base or BNB Chain): their deployer address stays empty unless Blockscout answers (Ethereum, Base, Arbitrum); BNB Chain needs a plan that covers it`
+    : 'Etherscan answered with an error: check the key, its quota and its plan at etherscan.io/myapikey';
+  const blockscoutRemedy = 'Blockscout answered with an error or is down: run the doctor again later, or set ETHERSCAN_API_KEY';
+  if (!found.length) return fail(detail, network ?? (keyed ? etherscanRemedy : blockscoutRemedy));
   return outcome(
     { ok: true, configured: keyed, importance: 'optional', degraded: bad.length > 0 },
     detail,
-    keyed
-      ? 'those chains\' deployer address stays empty: BNB Chain needs an Etherscan plan that covers it (the free plan does not); Ethereum, Base and Arbitrum fall back to Blockscout'
-      : ETHERSCAN_REMEDY,
+    !keyed ? ETHERSCAN_REMEDY : network ?? (etherscanErrs.length ? etherscanRemedy : blockscoutRemedy),
   );
 }
 
@@ -246,19 +252,23 @@ export async function probeSolana(deps: { env: Env; sol: Pick<SolanaSource, 'min
   }
   const notes: string[] = [];
   const h = holders.value;
-  if (!h.rows.length) notes.push(`largest holders failed: ${holders.errors[0] ?? 'empty answer'}`);
+  // the public node answered for the configured one (reported apart from the errors, which name a failed read)
+  const fellBack = holders.errors.find(e => e.startsWith(SOLANA_PUBLIC_FALLBACK));
+  const errs = holders.errors.filter(e => e !== fellBack);
+  if (!h.rows.length) notes.push(`largest holders failed: ${errs[0] ?? 'empty answer'}`);
   else {
-    if (h.rows.every(r => !r.owner)) notes.push(`holder owners unread: ${holders.errors[0] ?? 'getMultipleAccounts failed'}`);
+    if (fellBack) notes.push(`largest holders ${fellBack.slice(SOLANA_PUBLIC_FALLBACK.length + 2)}`);
+    if (h.rows.every(r => !r.owner)) notes.push(`holder owners unread: ${errs[0] ?? 'getMultipleAccounts failed'}`);
     if (h.ms > HOLDERS_BUDGET_MS) notes.push(`holders took ${h.ms} ms, over the ${HOLDERS_BUDGET_MS / 1000} s a check gives them`);
   }
   const detail = `${where}, USDC decimals=6 mint authority set${h.rows.length ? `, JUP top ${h.rows.length} holders in ${h.ms} ms` : ''}${notes.length ? `; ${notes.join('; ')}` : ''}`;
-  return outcome(
-    { ...f, ok: true, degraded: notes.length > 0 },
-    detail,
-    rpc.configured
-      ? `${rpc.source} is slow or refuses getTokenLargestAccounts, and so did the public node it falls back to: holders may read "not checked" (a busy index usually answers on the next check; if this stays, use a plan that serves it)`
-      : SOLANA_REMEDY,
-  );
+  let remedy = SOLANA_REMEDY;
+  if (rpc.configured) {
+    remedy = fellBack || (!h.rows.length && errs.some(e => SOLANA_BUSY.test(e)))
+      ? `${rpc.source} refuses getTokenLargestAccounts as busy: checks then ask the public node, which is rate limited (holders read "not checked" when it refuses too); if this stays, use a plan that serves it`
+      : `${rpc.source} is slow or refuses getTokenLargestAccounts or getMultipleAccounts: holders read "not checked" in checks; use a plan that serves them`;
+  }
+  return outcome({ ...f, ok: true, degraded: notes.length > 0 }, detail, remedy);
 }
 
 export const TRON_USDT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
