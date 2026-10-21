@@ -9,17 +9,26 @@
  * go over 280. BOT_INCLUDE_LINK appends "apecheck.io/c/<id>" (APP_URL's host); off by default because X bills posts
  * with a URL at a much higher rate.
  *
+ * A check that could test nothing about the project has no verdict: its reply is the check's own reason, never "try
+ * again" ("Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for stridefun. Tag me
+ * under a post with its link or contract."). Any other failed check gets FAILED_TEXT.
+ *
  * Model-written text (the judge's summary, a follow-up answer) is built from untrusted page, docs and post content,
  * so it is made safe before it is posted (sanitizeModelText, HANDOFF §11): it never mentions anyone (its @handles
  * lose their "@") and never carries a link (scheme URLs are dropped, every other domain is defanged to
  * "orbit[.]xyz"). A model line in which xtext still finds anything X might link is left out of the reply. The only
  * link a reply can hold is the opt-in report link (onlyReportLink checks the final text).
  */
-import { BOT_DISCLAIMER, COIN_BANDS, COIN_LABEL, NAR_BANDS, NAR_LABEL, coinBand, narBand, scrubRetired } from '@apecheck/core';
+import { BOT_DISCLAIMER, COIN_BANDS, COIN_LABEL, NAR_BANDS, NAR_LABEL, NOT_ENOUGH_PREFIX, coinBand, isNotEnough, narBand, scrubRetired } from '@apecheck/core';
 import { X_MAX_LENGTH, fitPart, hasLink, urlSpans, xLength } from './xtext';
 
 export const HELP_TEXT = "Tag me under a project's post, or include its link or contract.";
 export const FAILED_TEXT = "Couldn't finish this check. Try again in a few minutes.";
+/**
+ * A "Not enough to check" reason that can't be posted as it is (it would still hold a link): the general one, which
+ * names no lookup (the reason it stands for may name only some of them).
+ */
+export const NOT_ENOUGH_TEXT = 'Not enough to check: nothing about this project could be tested.';
 export const PRO_POINTER_TEXT = 'Follow-up answers here are for Pro holders. The full report is on the ApeCheck site.';
 export const NO_ANSWER_TEXT = 'This check has no answer for that.';
 
@@ -38,6 +47,13 @@ export interface ReplyCheck {
   coinScore: number | null;
   coinBand: string | null;
   summary: string | null;
+  /** Check.error: why a FAILED check has no verdict ("Not enough to check: …" is posted, core isNotEnough) */
+  error?: string | null;
+  /**
+   * The coin is on a chain ApeCheck can't read yet (Check.evidence.otherChain, see otherChainOf): `chain` is its name,
+   * `site` the website from its token info that the check moved to (null when it didn't). The reply says so.
+   */
+  otherChain?: { chain: string; site?: string | null } | null;
 }
 
 const NAR_KEYS = new Set<string>(NAR_BANDS.map(b => b.key));
@@ -108,8 +124,46 @@ function fitLines(lines: (string | null)[], fitIdx: number | null): string {
   return keep(part === '…' ? null : part);
 }
 
-/** The verdict reply for a finished check, or the failure line for a check that didn't finish. */
+/**
+ * Longest site (defanged) and chain names the other-chain line names; longer ones are left out ("the website",
+ * "another chain"), so that line, a verdict head with a coin, the disclaimer and the report link always fit in 280.
+ */
+const OTHER_SITE_MAX = 60;
+const OTHER_CHAIN_MAX = 24;
+
+/**
+ * The fixed line of a check whose coin is on a chain ApeCheck can't read (ReplyCheck.otherChain): the verdict is for
+ * the website from the token's info (defanged: never a link) and the coin wasn't checked. At most 167 characters.
+ */
+export function otherChainLine(o: NonNullable<ReplyCheck['otherChain']>): string | null {
+  const named = stripLinks(stripMentions(o.chain));
+  const chain = named.length > OTHER_CHAIN_MAX ? 'another chain' : named;
+  if (!chain || hasLink(chain)) return null;
+  const site = o.site ? stripLinks(o.site) : '';
+  if (site && site.length <= OTHER_SITE_MAX && !hasLink(site)) return `This verdict is for ${site}, the website in the token's info; the coin on ${chain} wasn't checked.`;
+  if (o.site) return `This verdict is for the website in the token's info; the coin on ${chain} wasn't checked.`;
+  return `The coin on ${chain} wasn't checked: ApeCheck can't read that chain yet.`;
+}
+
+/**
+ * The reply for a check that could test nothing about the project: its reason, which names the target ("for
+ * @stridefun", "orbitswap.xyz didn't load"), so it is made safe like model text (no mention, no link), and the opt-in
+ * report link.
+ */
+function notEnoughReply(check: ReplyCheck, error: string, opts: ComposeOpts): string {
+  let line = sanitizeModelText(error);
+  // nothing after the prefix, or something X could still link: the general line
+  if (!line.slice(NOT_ENOUGH_PREFIX.length).trim() || hasLink(line)) line = NOT_ENOUGH_TEXT;
+  const link = opts.includeLink ? reportLink(opts.appUrl, check.shortId) : null;
+  return fitLines([line, link], 0);
+}
+
+/**
+ * The verdict reply for a finished check; for a check that could test nothing about the project, its reason; for any
+ * other check that didn't finish, the failure line.
+ */
 export function composeReply(check: ReplyCheck, opts: ComposeOpts): string {
+  if (check.status === 'FAILED' && isNotEnough(check.error)) return notEnoughReply(check, check.error, opts);
   if (check.status !== 'DONE' || check.narScore == null || !Number.isFinite(check.narScore)) return FAILED_TEXT;
   const nar = Math.round(check.narScore);
   const narKey = (check.narBand && NAR_KEYS.has(check.narBand) ? check.narBand : narBand(Math.max(0, nar)).key) as keyof typeof NAR_LABEL;
@@ -123,7 +177,9 @@ export function composeReply(check: ReplyCheck, opts: ComposeOpts): string {
   // last guard: a summary in which anything could still be a link is left out (the verdict stands without it)
   if (summary && hasLink(summary)) summary = '';
   const link = opts.includeLink ? reportLink(opts.appUrl, check.shortId) : null;
-  return fitLines([head, summary || null, BOT_DISCLAIMER, link], 1);
+  // a coin ApeCheck couldn't check: one fixed line right under the verdict (the summary is what gets cut to fit)
+  const other = check.otherChain ? otherChainLine(check.otherChain) : null;
+  return fitLines([head, other, summary || null, BOT_DISCLAIMER, link], 2);
 }
 
 /** A Pro follow-up: the model's answer (from the check's stored data only), made safe and cut to fit. */

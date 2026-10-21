@@ -150,6 +150,10 @@ an older URL after Back.
   (bundle, LP, holder count, EVM/Tron holders) read "Not checked" (`NotChecked` in `report/util.tsx`) with no source
   tag; the source column only ever says On-chain, ApeCheck or DexScreener.
 - A pasted contract whose chain couldn't be read (`kind === 'coin' && !hasCoin`) says so; it is never "No coin linked".
+- A coin on a chain ApeCheck can't read (`otherChain`, from `Check.evidence.otherChain`: a Sonic contract whose check
+  moved to the website in its token info, or one found in a post or on a page) reads "Coin on Sonic: not checked
+  (ApeCheck can't read that chain yet)" (`otherChainCoinText`) in the verdict panel, the Coin tab and the price card,
+  and "Coin on Sonic: not checked" in the feed's coin cell; never "No coin linked" or "paste the contract".
 - A check that stopped without a verdict (`noVerdict(r)` in `report/util.tsx`: failed, or finished with no narrative
   score) opens on the Agent run tab (`initialTab`), and Claims, Coin and the price card say the run stopped before
   that point instead of "no claims found" / "no coin linked". Claims or coin facts saved before it stopped still show.

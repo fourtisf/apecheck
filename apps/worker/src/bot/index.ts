@@ -27,7 +27,7 @@ import { processReply, replyBackoff, type ReplyOutcome } from './reply';
 export { handleMention, processMention, storeMention, botIdentity, isTransientError, MentionBusyError, type BotDeps, type MentionOutcome } from './handle';
 export { processReply, cardPng, isRetryable, replyBackoff, type ReplyOutcome } from './reply';
 export { resolveBotTarget, type BotResolution } from './resolve';
-export { composeReply, composeFollowUp, composePointer, HELP_TEXT, FAILED_TEXT, PRO_POINTER_TEXT } from './compose';
+export { composeReply, composeFollowUp, composePointer, HELP_TEXT, FAILED_TEXT, NOT_ENOUGH_TEXT, PRO_POINTER_TEXT } from './compose';
 
 export const SINCE_KEY = 'bot:since_id';
 export const LOCK_KEY = 'bot:lock';

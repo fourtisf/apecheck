@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { BOT_DISCLAIMER } from '@apecheck/core';
 import {
   FAILED_TEXT,
+  NOT_ENOUGH_TEXT,
   NO_ANSWER_TEXT,
   PRO_POINTER_TEXT,
   composeFollowUp,
   composePointer,
   composeReply,
+  fitsX,
   onlyReportLink,
   reportLink,
   sanitizeModelText,
@@ -21,6 +23,8 @@ import { X_URL_LENGTH, fitPart, hasLink, urlSpans, xLength } from '../src/bot/xt
 
 const OFF = { includeLink: false, appUrl: 'https://apecheck.io' };
 const ON = { includeLink: true, appUrl: 'https://apecheck.io' };
+
+const spansOf = (t: string) => urlSpans(t.normalize('NFC')).map(([a, b]) => t.normalize('NFC').slice(a, b));
 
 const check = (p: Partial<ReplyCheck> = {}): ReplyCheck => ({
   status: 'DONE',
@@ -112,10 +116,89 @@ describe('composeReply', () => {
     );
   });
 
+  describe("a coin on a chain ApeCheck can't read (evidence.otherChain)", () => {
+    const site = check({ narScore: 64, narBand: 'likely', coinScore: null, coinBand: null, summary: 'The app loads and the swap reaches a transaction.', otherChain: { chain: 'Sonic', site: 'esco.example' } });
+
+    it('one fixed line under the verdict: the verdict is for the site from the token info (never a link), the coin was not checked', () => {
+      expect(composeReply(site, OFF)).toBe(
+        "LIKELY REAL (64/100)\nThis verdict is for esco[.]example, the website in the token's info; the coin on Sonic wasn't checked.\n" +
+          `The app loads and the swap reaches a transaction.\n${BOT_DISCLAIMER}`,
+      );
+      expect(spansOf(composeReply(site, OFF))).toEqual([]);
+      expect(spansOf(composeReply(site, ON))).toEqual(['apecheck.io/c/k3x9a2q']);
+    });
+
+    it('a check that stayed on the contract (no website) or a post: only that the coin was not checked', () => {
+      const t = composeReply(check({ coinScore: null, coinBand: null, otherChain: { chain: 'Sonic', site: null } }), OFF);
+      expect(t.split('\n')[1]).toBe("The coin on Sonic wasn't checked: ApeCheck can't read that chain yet.");
+      // a site name too long to fit is left out, never the line
+      const long = composeReply(check({ coinScore: null, coinBand: null, otherChain: { chain: 'Sonic', site: `${'a'.repeat(70)}.example` } }), OFF);
+      expect(long.split('\n')[1]).toBe("This verdict is for the website in the token's info; the coin on Sonic wasn't checked.");
+    });
+
+    it('stays within 280 (fitsX) with the longest names, a coin in the head and a long summary: the summary is what gets cut', () => {
+      // the longest site (60 characters defanged) and chain (24, DexScreener's longest id) names that are still named
+      const longest = { chain: 'Abcdefghijk Lmnopqrstuvw', site: `${'a'.repeat(50)}.example` };
+      const line = composeReply(check({ coinScore: null, coinBand: null, otherChain: longest }), OFF).split('\n')[1];
+      expect(line).toBe(`This verdict is for ${'a'.repeat(50)}[.]example, the website in the token's info; the coin on Abcdefghijk Lmnopqrstuvw wasn't checked.`);
+      expect(line).toHaveLength(167);
+      // a longer chain name is not spelled out
+      expect(composeReply(check({ otherChain: { chain: 'A'.repeat(25), site: null } }), OFF).split('\n')[1]).toBe(
+        "The coin on another chain wasn't checked: ApeCheck can't read that chain yet.",
+      );
+      const summary = 'The app loads but the main flow stops at a waitlist page '.repeat(8).trim();
+      for (const opts of [OFF, ON]) {
+        for (const otherChain of [site.otherChain!, longest, { chain: 'Sonic', site: null }]) {
+          // the widest head there is: "PARTLY REAL (100/100) · Coin: SKETCHY (100)"
+          for (const scores of [{ coinScore: null, coinBand: null }, { narScore: 100, narBand: 'partly', coinScore: 100, coinBand: 'sketchy' }]) {
+            const t = composeReply(check({ narScore: 37, narBand: 'llarp', summary, otherChain, ...scores }), opts);
+            expect(fitsX(t)).toBe(true);
+            expect(xLength(t)).toBeLessThanOrEqual(280);
+            const lines = t.split('\n');
+            expect(lines[1]).toMatch(/wasn't checked/);
+            expect(lines.at(opts.includeLink ? -2 : -1)).toBe(BOT_DISCLAIMER);
+            expect(spansOf(t)).toEqual(opts.includeLink ? ['apecheck.io/c/k3x9a2q'] : []);
+            if (otherChain !== longest || !scores.coinScore) expect(lines[2].endsWith('…')).toBe(true);
+          }
+        }
+      }
+    });
+
+    it('without otherChain the reply is unchanged', () => {
+      expect(composeReply(check({ otherChain: null }), OFF)).toBe(composeReply(check(), OFF));
+    });
+  });
+
   it('says a failed check could not finish', () => {
     expect(composeReply(check({ status: 'FAILED' }), OFF)).toBe(FAILED_TEXT);
     expect(composeReply(check({ status: 'FAILED' }), ON)).toBe("Couldn't finish this check. Try again in a few minutes.");
     expect(composeReply(check({ narScore: null }), OFF)).toBe(FAILED_TEXT);
+    // an outage that left nothing tested is still "couldn't finish", never "not enough"
+    expect(composeReply(check({ status: 'FAILED', error: "Nothing about @stridefun could be checked: GitHub didn't answer" }), OFF)).toBe(FAILED_TEXT);
+  });
+
+  it('a check that could test nothing about the project: its reason, never "try again" or a score', () => {
+    const failed = (error: string) => check({ status: 'FAILED', narScore: null, narBand: null, coinScore: null, coinBand: null, summary: null, error });
+    // the incidents: an X profile with no links, and a contract on a chain ApeCheck doesn't support
+    const stride = failed(
+      "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.",
+    );
+    const strideText = "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for stridefun. Tag me under a post with its link or contract.";
+    expect(composeReply(stride, OFF)).toBe(strideText);
+    expect(composeReply(stride, ON)).toBe(`${strideText}\napecheck.io/c/k3x9a2q`);
+    const esco = failed("Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, and its token info lists no website.");
+    expect(composeReply(esco, OFF)).toBe(esco.error);
+    // a site the reason names is not a link in the reply (nobody is mentioned, nothing but the report link is linked)
+    const site = composeReply(failed('Not enough to check: orbitswap.xyz blocks automated browsers, and no GitHub repo was found for it.'), ON);
+    expect(site).toBe('Not enough to check: orbitswap[.]xyz blocks automated browsers, and no GitHub repo was found for it.\napecheck.io/c/k3x9a2q');
+    expect(onlyReportLink(site, 'apecheck.io/c/k3x9a2q')).toBe(true);
+    for (const t of [composeReply(stride, ON), composeReply(esco, ON), site]) {
+      expect(t).not.toMatch(/try again|\/100|PARTLY|@/i);
+      expect(xLength(t)).toBeLessThanOrEqual(280);
+    }
+    // a reason with nothing after the prefix: the general line
+    expect(composeReply(failed('Not enough to check: '), OFF)).toBe(NOT_ENOUGH_TEXT);
+    expect(composeReply(failed('Not enough to check: @'), ON)).toBe(`${NOT_ENOUGH_TEXT}\napecheck.io/c/k3x9a2q`);
   });
 
   it('appends the report link only with BOT_INCLUDE_LINK, on the APP_URL host', () => {
@@ -162,7 +245,6 @@ describe('composeReply', () => {
 });
 
 describe('model-written text never carries a link (HANDOFF §11)', () => {
-  const spansOf = (t: string) => urlSpans(t.normalize('NFC')).map(([a, b]) => t.normalize('NFC').slice(a, b));
 
   it('stripLinks drops scheme URLs and defangs every domain, whatever its TLD', () => {
     expect(stripLinks('Claim at https://claim-airdrop.example/connect today.')).toBe('Claim at today.');

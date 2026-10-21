@@ -3,8 +3,9 @@
  * stored mention's own tweet id and nothing else (HANDOFF §11: no reply without a stored BotMention; the bot never
  * mentions anyone unprompted).
  *
- *  - help → HELP_TEXT; check → composeReply() (verdict, or the "Couldn't finish" line for a FAILED check) with the
- *    share card PNG (SCREENSHOT_DIR/cards/<shortId>.png, else WEB_INTERNAL_URL/card/<shortId>.png, else text only);
+ *  - help → HELP_TEXT; check → composeReply() (verdict; for a FAILED check its "Not enough to check" reason, or the
+ *    "Couldn't finish" line) with, for a verdict, the share card PNG (SCREENSHOT_DIR/cards/<shortId>.png, else
+ *    WEB_INTERNAL_URL/card/<shortId>.png, else text only);
  *    follow-up → the pointer line stored by handle.ts, or for a Pro author an answer from the check's stored data
  *    (asks/answer.ts answerFromCheck, the same answer site asks get), saved as an Ask (via BOT) with Check.asksCount + 1, once even across retries.
  *  - success → REPLIED, replyTweetId, replyText, repliedAt, and the hourly reply counter. A Redis marker written right
@@ -21,6 +22,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { otherChainOf } from '@apecheck/core';
 import { captureErrors } from '@apecheck/sources';
 import { answerFromCheck, cleanQuestion } from '../asks/answer';
 import { errText } from '../log';
@@ -139,7 +141,9 @@ function loadMention(deps: BotDeps, id: string) {
   return deps.prisma.botMention.findUnique({
     where: { id },
     include: {
-      check: { select: { id: true, shortId: true, status: true, narScore: true, narBand: true, coinScore: true, coinBand: true, summary: true, cardPath: true } },
+      check: {
+        select: { id: true, shortId: true, status: true, narScore: true, narBand: true, coinScore: true, coinBand: true, summary: true, error: true, cardPath: true, evidence: true },
+      },
     },
   });
 }
@@ -248,7 +252,9 @@ export async function processReply(deps: BotDeps, mentionId: string, attempt: Re
       if (!last) throw new RetryReplyError('the check is still running');
       return fail(deps, m, 'the check did not finish in time');
     }
-    text = composeReply(m.check as ReplyCheck, composeOpts(deps.env));
+    // a coin on a chain ApeCheck can't read: the reply says the coin wasn't checked (and which site the verdict is for)
+    const reply: ReplyCheck = { ...m.check, status: m.check.status as ReplyCheck['status'], otherChain: otherChainOf(m.check.evidence) };
+    text = composeReply(reply, composeOpts(deps.env));
     if (m.check.status === 'DONE' && text !== FAILED_TEXT) png = await cardPng(deps, m.check);
   }
   if (!fitsX(text)) return fail(deps, m, 'reply text over 280 characters');

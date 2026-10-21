@@ -995,7 +995,9 @@ describe('the pipeline queues check.completed', () => {
       coinFacts: {
         ['0x3333333333333333333333333333333333333333']: {
           chain: 'base', address: '0x3333333333333333333333333333333333333333', token: { name: 'Orbit', symbol: 'ORBIT', decimals: 18, supply: '1' },
-          deployer: null, bundle: null, holders: null, lp: null, authorities: null, market: null, stubbed: [], errors: [],
+          // one coin fact read, so the check is scored (with none it would be "Not enough to check")
+          deployer: null, bundle: null, holders: null, lp: null, market: null, stubbed: [], errors: [],
+          authorities: { mintRenounced: true, freezeActive: false, owner: null, text: 'Renounced', source: 'On-chain' },
         },
       },
     }),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { currentStubs, deployerHistoryLine, displayStep, scrubRetired } from '../src/labels';
+import { otherChainOf } from '../src/evidence';
+import { NOT_ENOUGH_LABEL, NOT_ENOUGH_PREFIX, currentStubs, deployerHistoryLine, displayStep, isNotEnough, notEnoughReason, otherChainCoinText, scrubRetired } from '../src/labels';
 
 describe('displayStep: steps stored before ApeCheck dropped its third-party coin sources', () => {
   it('reads their "unavailable" lines as "not checked", without the retired source tag, keeping the suffix', () => {
@@ -75,5 +76,36 @@ describe('free text and stub lists stored about old checks', () => {
   it('currentStubs drops the retired adapter only', () => {
     expect(currentStubs(['x', 'fourtis', 'etherscan', 'ai'])).toEqual(['x', 'etherscan', 'ai']);
     expect(currentStubs(undefined)).toEqual([]);
+  });
+});
+
+describe('"Not enough to check": a check that could test nothing about the project', () => {
+  const STRIDE =
+    "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.";
+  it('isNotEnough tells it from an outage or any other failure by its prefix', () => {
+    expect(isNotEnough(STRIDE)).toBe(true);
+    expect(STRIDE.startsWith(NOT_ENOUGH_PREFIX)).toBe(true);
+    for (const e of ["Nothing about @stridefun could be checked: GitHub didn't answer", 'The check hit an error and could not finish', 'not enough to check: lower case', '', null, undefined]) {
+      expect(isNotEnough(e)).toBe(false);
+    }
+  });
+  it('notEnoughReason is the reason as a sentence of its own', () => {
+    expect(notEnoughReason(STRIDE)).toBe("ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.");
+    expect(NOT_ENOUGH_LABEL).toBe('Not enough to check');
+  });
+});
+
+describe("a coin on a chain ApeCheck can't read (Check.evidence.otherChain)", () => {
+  const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+  it('reads what the worker stored, and nothing that does not hold up', () => {
+    expect(otherChainOf({ otherChain: { chain: 'Sonic', address: SONIC, site: 'esco.example' } })).toEqual({ chain: 'Sonic', address: SONIC, site: 'esco.example' });
+    expect(otherChainOf({ otherChain: { chain: 'Sonic', address: SONIC.toUpperCase().replace('0X', '0x') } })).toEqual({ chain: 'Sonic', address: SONIC, site: null });
+    expect(otherChainOf({ otherChain: { chain: 'Sonic', address: SONIC, site: 'https://evil.example/x' } })?.site).toBeNull();
+    for (const ev of [null, undefined, [], 'x', {}, { otherChain: null }, { otherChain: { chain: '', address: SONIC } }, { otherChain: { chain: 'Sonic', address: 'nope' } }, { otherChain: { chain: 'x'.repeat(41), address: SONIC } }]) {
+      expect(otherChainOf(ev)).toBeNull();
+    }
+  });
+  it('one sentence for the report and the feed', () => {
+    expect(otherChainCoinText('Sonic')).toBe("Coin on Sonic: not checked (ApeCheck can't read that chain yet)");
   });
 });

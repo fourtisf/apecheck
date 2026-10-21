@@ -190,4 +190,14 @@ describe('heuristic answers', () => {
     expect(heuristicAnswer('is the github legit?', d)).toBe('GitHub: 412 commits, last push 2 days ago.');
     expect(heuristicAnswer('can I actually use the app today?', d)).toBe("'Launch app' opens a waitlist form.");
   });
+
+  it("a coin on a chain ApeCheck can't read is named as not checked, never \"no coin linked\"", () => {
+    const d = {
+      name: 'esco.example', kind: 'site' as const, narScore: 64, narBand: 'likely', coinScore: null, coinBand: null, summary: 'The app loads.', coinSummary: null, signals: {},
+      evidence: { otherChain: { chain: 'Sonic', address: '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc', site: 'esco.example' } }, claims: [], coin: null,
+    };
+    for (const q of ['who funded the deployer?', 'was it bundled?', 'who holds the top 10?', 'is the liquidity locked?']) {
+      expect(heuristicAnswer(q, d)).toBe("The coin is on Sonic, which ApeCheck can't read yet, so it wasn't checked.");
+    }
+  });
 });

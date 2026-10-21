@@ -1,5 +1,6 @@
 /** Copy shared by web, API, worker and bot. Same words as the prototype. */
 import { NAR_BANDS, COIN_BANDS } from './config';
+import { cap } from './format';
 import type { ClaimStatus, DeployerRecord, Signal } from './scoring';
 import type { TargetKindS } from './detect';
 
@@ -13,6 +14,20 @@ export const COIN_LABEL: Record<(typeof COIN_BANDS)[number]['key'], string> = {
 /** API verdict enums as shown on the /api page: "PARTLY_REAL", "SKETCHY" */
 export const narVerdictEnum = (key: keyof typeof NAR_LABEL) => NAR_LABEL[key].replace(/ /g, '_');
 export const coinVerdictEnum = (key: keyof typeof COIN_LABEL) => COIN_LABEL[key];
+
+/**
+ * Check.error of a check that could test nothing about the project (no site loaded, no docs, no GitHub repo, no coin
+ * facts, no claim confirmed or contradicted): it ends FAILED with this reason instead of a score, because the neutral
+ * middle every unknown adds up to ("PARTLY REAL (50/100)") would be a verdict nothing supports. It is an answer, not
+ * an outage: the bot posts the reason instead of "try again", a recent one is reused like a cached verdict
+ * (@apecheck/db findReusableCheck), and tagging the bot again in the same thread is not a retry.
+ */
+export const NOT_ENOUGH_PREFIX = 'Not enough to check: ';
+export const NOT_ENOUGH_LABEL = 'Not enough to check';
+/** Check.error says the check could test nothing about the project (NOT_ENOUGH_PREFIX). */
+export const isNotEnough = (error: string | null | undefined): error is string => typeof error === 'string' && error.startsWith(NOT_ENOUGH_PREFIX);
+/** The reason of a "Not enough to check" error as a sentence of its own: "No website, GitHub repo or … was found for @x." */
+export const notEnoughReason = (error: string): string => cap(error.slice(NOT_ENOUGH_PREFIX.length).trim());
 
 export const KIND_LABEL: Record<TargetKindS, string> = { coin: 'Coin', post: 'Post', site: 'Site' };
 
@@ -129,6 +144,14 @@ export function lpLabel(lpStatus: string | null | undefined): string {
   const m = lpStatus.match(/^locked(?::(\d+))?$/);
   if (m) return m[1] ? `Locked ${m[1]} days` : 'Locked';
   return lpStatus;
+}
+
+/**
+ * A coin on a chain ApeCheck has no on-chain reads for (CheckEvidence.otherChain), as the report and the feed say it:
+ * "Coin on Sonic: not checked (ApeCheck can't read that chain yet)".
+ */
+export function otherChainCoinText(chain: string): string {
+  return `Coin on ${chain}: not checked (ApeCheck can't read that chain yet)`;
 }
 
 export const BOT_DISCLAIMER = 'Checks the claims, not the team. DYOR.';

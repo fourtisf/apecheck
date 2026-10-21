@@ -38,7 +38,7 @@ whose check another run took over, stops without writing, publishing or replying
 | A resolve | no | `detect()` the input. EVM → `evm.detectChain` (Base, Ethereum, BNB, Arbitrum, Robinhood); X post → `x.getPost` (free embed read: links, cashtags, contracts; never the paid X API); X profile → the handle only (accounts are not read); website → normalised. Gaps: contract → website + X handle (+ Telegram, Discord, logo URL) merged per field from DexScreener's token info > the token's own metadata (`On-chain`: Solana via Helius DAS `getAsset` with `HELIUS_API_KEY`, else the Metaplex metadata PDA / Token-2022 `tokenMetadata`, then the metadata JSON through the SSRF guard, 256 KB, 8 s) > GeckoTerminal token info (no key), the last two read in parallel with DexScreener, capped and never fatal; one `Token metadata: website foo.xyz, X @foo` step per source (`src/pipeline/resolve.ts` `fromTokenLinks`, `packages/sources` `links.ts` / `adapters/token-links.ts`). After Stage A the coin's logo (same priority) is downloaded through the guard (1 MB, PNG/JPEG/WebP/GIF by magic bytes, never SVG) to `SCREENSHOT_DIR/logos/<sha256>.<ext>` and saved as `Target.logo` (`src/pipeline/logo.ts`), before the share card is drawn; website → the page HTML (guarded fetch) for a contract address and an X link; post → linked site / contract. A lookup still running at the stage's timeout writes nothing (its steps are dropped, no `run.*` field changes). After the stage, `runCheck` gives the Target its canonical key (`ca:<chain>:<address>`, …); if another Target already owns it, the check is moved there and `checkCount` fixed. A coin's `coinFacts()` is asked right then, so it runs alongside the browser. |
 | B browse | `AI_MODEL_JUDGE` | Fresh context, open the site (network idle, max 20 s), screenshot, hero/footer/links. A bot challenge (Cloudflare `cf-mitigated` / "Just a moment...", DDoS-Guard, Vercel checkpoint, 429) gets up to 8 s to solve itself; if it doesn't, the site is "could not be checked" (`site.infraError`, `degraded: browse:blocked`), never "didn't load". Bounded exploration (`browser/agent.ts`): at most `CHECK_MAX_AGENT_ACTIONS` actions and 60 s, tools `click(text)`, `scroll()`, `open_link(url)`, `done(reason)`, a screenshot step after every action. Once an app screen is reached, an empty amount field gets a small amount (as a tester would) so a main button waiting for input can be tried. A captured transaction is simulated within what is left of the stage. The verdict uses a snapshot of what the explorer saw when the stage ended: an action still in flight can't change it later; a transaction captured but not recorded in time gets its own step ("not simulated in time"). Then the docs: same-site links to depth 2 / 15 pages. |
 | C claims | `AI_MODEL_FAST` | Up to `TUNING.maxClaims` claims from the hero, footer, docs, post and X bio. `ClaimsOutZ` + `normaliseClaims`. |
-| D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin". With a deployer wallet, the step "Deployer history: …" lists the other coins from it that ApeCheck has checked (below). |
+| D evidence | no | GitHub (repos linked from the site, docs, bio or post; a name search only counts when owner/repo clearly match; a lookup with no answer in 15 s is GitHub unavailable, never "no repository found"), the X account, and for coins the `coinFacts()` answer (asked after Stage A). A contract the rendered page shows is picked up here too. If the stage runs out of time before the coin is assessed, the coin is still scored: with the facts if they already arrived, else as unknown (deployer `mixed`, every section `warn`, "Coin data not gathered in time; counts as unknown"), never as "no coin" (with nothing else tested either, the check ends "Nothing about … could be checked": below). With a deployer wallet, the step "Deployer history: …" lists the other coins from it that ApeCheck has checked (below). |
 | E judge | `AI_MODEL_JUDGE` | Claim statuses with one-sentence evidence citing a step, `acct`/`git` (used only where Stage D could not decide, and never above `warn`), summary ≤ 180 chars, coin summary. `JudgeOutZ` + `normaliseJudge`. The model never sees or picks a score. A judge that times out, or a model that fails and is replaced by the stand-in (claims or judge), leaves a `warn` step ("Claim review timed out; used the simple rules"). |
 | F save | no | `scoreCheck()` from core. One transaction: signals, `CheckEvidence`, scores, bands, areas, claims (in extraction order, `Claim.idx` 0..n-1), `CoinFacts` (with `deployerAddress` whenever the wallet is known), Deployer upsert (never from a private check: the deployers page lists every row, so a private check only links a row the public already knows), `priceAtCheck`/`mcAtCheck`, first `PricePoint`, `Target.last*`, `isLatest` moved to this check (a private check never takes or clears `isLatest` and leaves `Target.lastCheckedAt` / `checkCount` alone: the public verdict stays the public one). Then the share card (`GET WEB_INTERNAL_URL/card/<shortId>.png`, 5 s, skipped with a log line when the web app is down) → `SCREENSHOT_DIR/cards/<shortId>.png`, `done` on `check:{id}`, `end` on `live`, a `bot-replies` job for every X mention still waiting on the check (`BotMention` `QUEUED`, done or failed), the `rechecked` notifications of the watchers whose automatic re-check this is (see Re-check alerts; also after a failure), and its `check.completed` webhooks (requester, Max joiners, re-check watchers: see Webhooks; also after a failure). |
 
@@ -50,6 +50,41 @@ fails, the worker's `failed` handler ends the check (`FAILED`, final step, `done
 5 minutes `worker-checks` ends checks that would never finish: `RUNNING` for more than twice the budget, and `QUEUED`
 (> 10 min) or `RUNNING` (> 2 min) checks whose job is gone, failed or completed (e.g. a job that stalled past its
 limit). SIGTERM stops taking jobs, gives running checks 15 s, then interrupts them (they mark themselves `FAILED`).
+
+### Not enough to check (`pipeline/enough.ts`)
+
+A check that could test nothing about the project gets no score: every signal would be unknown (`warn`), and unknowns
+add up to the neutral middle, so an X profile with no links and a contract on a chain ApeCheck doesn't support would
+both read "PARTLY REAL (50/100)". Nothing was tested when, from the run's own evidence, all of these hold: no site
+answered (none found, it blocks automated browsers, or our own browser failed on it or never got to it; a site that
+answered but didn't load, a dead project site, is a result and is scored as not loading, `launch = fail`), no docs
+were read, no GitHub repo was found (none linked, and a name search found none; forks count as found), no coin fact was
+read (no coin on a supported chain, or one whose every scored section, deployer history, bundle, holders, LP and
+authorities, is unknown: its coin score would be the made-up SKETCHY (50)), and no claim was confirmed or contradicted
+(every claim, if any, is `not_seen`). Anything tested is scored as before: a site that loaded but has no repo, a dead
+site, a repo without a site, a coin with one fact read, a claim contradicted because the site that calls itself live
+didn't load. With no claims the decision comes right after Stage D and the judge is not called; with claims, after the
+judge.
+
+Such a check ends `FAILED`, never `DONE`, so it never takes `isLatest`, a feed slot or a share card:
+- every lookup answered: `Check.error` (and a final `warn` step) names the lookups that ran for this kind of target,
+  and only those, after core's `NOT_ENOUGH_PREFIX`: "Not enough to check: ApeCheck doesn't read X profiles, and no
+  GitHub repo was found for @stridefun. Tag me under a post with its link or contract." (an X profile: only the GitHub
+  search by its name ran), "Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, and its
+  token info lists no website." (`run.otherChain`), "Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB
+  Chain or Arbitrum." (`run.missingCoin`: every RPC asked and DexScreener answered; a bare contract has no name to
+  search GitHub for), "Not enough to check: foo.xyz blocks automated browsers, and no GitHub repo was found for it.",
+  "Not enough to check: the post by @foo links no project website, no coin was found in it, and no GitHub repo was
+  found for @foo.", "Not enough to check: none of the coin facts ApeCheck scores were found for $ORB on Base, and no
+  GitHub repo was found for it.". It is an answer, not an outage (`isNotEnough`): the bot posts the reason, a recent one is reused like a cached
+  verdict (`findReusableCheck`: no second credit for the same answer; Re-check still runs it again), and a re-tag in
+  the thread is not a retry;
+- a lookup that could have found something didn't answer (Stage A or D cut short, GitHub down or slower than 15 s, the
+  post unreadable, an address the RPCs or DexScreener couldn't vet, DexScreener down while the RPCs asked said "no
+  code", a coin whose facts are all unread because its RPC didn't answer or they weren't gathered in time, our browser
+  failing on the site or no time left to open it): "Nothing about @stridefun could be checked: GitHub didn't answer",
+  "Nothing about $ORB could be checked: the Base RPC didn't answer", a final `fail` step, and from there on a failed
+  run like any other ("Couldn't finish this check. Try again in a few minutes.", never cached).
 
 ### Signal rules (`pipeline/signals.ts`)
 
@@ -150,12 +185,14 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
      `quotedId` = some `BotMention.replyTweetId`) is a question about that check (`kind: 'followup'`, `isFollowUp`) —
      unless the author typed the bot's handle with a new link, contract or X post of another target (or a bare
      "@ApeCheckBot @project"): that is a check of it (rules 4–5). An @handle inside a question ("is the @orbitxyz team
-     doxxed?") stays a question. Tagging the bot under its "Couldn't finish" post runs that check's target again. A Pro/Max author
+     doxxed?") stays a question. Tagging the bot under its "Couldn't finish" post runs that check's target again (not
+     under a "Not enough to check" one: the same lookups would give the same answer and cost another reply). A Pro/Max author
      (`User.tier` through `User.xUserId`, linked in M3) gets an answer from that check's stored data only
      (`answerFromCheck`: `loadAnswerData` + `ai.answer`, `AI_MODEL_JUDGE`, the same as site asks), saved as an `Ask` (via `BOT`, `askerHandle`) with
      `Check.asksCount + 1`. Anyone else gets one line pointing to the site ("Follow-up answers here are for Pro holders.
      The full report is on the ApeCheck site."), once per person per thread (`pointer_already_sent`), no URL unless
-     `BOT_INCLUDE_LINK`. Empty questions (`empty_question`) and replies to a "Couldn't finish" post (`no_report`) get none;
+     `BOT_INCLUDE_LINK`. Empty questions (`empty_question`) and replies to a "Couldn't finish" or "Not enough to check"
+     post (`no_report`) get none;
   3. the author has to have **typed** the bot's handle: X's `display_text_range` (`XPost.displayTextRange`); when X sent
      none, the leading @handles X carries into a reply (the parent's author and its mentions) are its prefix. A bot
      handle only in that prefix is someone chatting further down a thread the bot is in (`not_tagged`) — except a direct
@@ -179,15 +216,16 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
      one the same way). When only a post's author (or nothing) is found and the thread already has a public check, that
      check (a tag under the project's own "2/" post). Nothing → the help line "Tag me under a project's post, or include
      its link or contract." (`kind: 'help'`), at most once per thread (`help_already_sent`);
-  5. **one check per target**: the same target already checked in this thread (running, or done at any age), else the
-     shared `findReusableCheck()` of `@apecheck/db` (same rules as `POST /v1/checks`: the same target running, or a verdict
-     younger than `CACHE_HOURS`), else `createCheck()` (via `BOT`, `requesterHandle`, `postId` for an X post, the linked
+  5. **one check per target**: the same target already checked in this thread (running, or answered at any age: a
+     verdict or "Not enough to check"), else the shared `findReusableCheck()` of `@apecheck/db` (same rules as
+     `POST /v1/checks`: the same target running, or a verdict or "Not enough to check" younger than `CACHE_HOURS`), else `createCheck()` (via `BOT`, `requesterHandle`, `postId` for an X post, the linked
      `User` as requester) + a `checks` job with `PRIORITY.bot`, all under the API's `lock:create:<key>` lock. The mention is
      linked (`checkId`, `targetKey`, `kind: 'check'`, `QUEUED`) before the job is queued. A finished check (a cached
      verdict) is answered at once; a running one when Stage F queues the reply of **every** `QUEUED` mention linked to it.
      **Tagging twice in the same thread never makes a second check.** Another account's tag in the thread gets its own reply
      with the same verdict; the same account re-tagging for the same check is linked to it and not answered again
-     (`answered_in_thread`: the thread already has, or will get, their answer, and X refuses a repeated post).
+     (`answered_in_thread`: the thread already has, or will get, their answer, and X refuses a repeated post), unless
+     that check failed for an outage: then the re-tag is the retry.
   Rules 2, 4 and 5 count against the hourly limits before anything starts (`bot/limits.ts`): `BOT_USER_HOURLY` per free
   account, `BOT_PRO_USER_HOURLY` for Pro/Max, `BOT_HOURLY_CAP` for the bot (`user_limit` / `global_limit`). A mention
   is counted when it is accepted (each accepted mention gets exactly one reply), so a burst can't overshoot while checks
@@ -202,7 +240,12 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
   'Launch app' does nothing; GitHub pushed in one burst at launch.
   Checks the claims, not the team. DYOR.
   ```
-  No "· Coin: …" without a coin; a FAILED check: "Couldn't finish this check. Try again in a few minutes." Max 280
+  No "· Coin: …" without a coin; a check that could test nothing about the project: its own reason, made safe like
+  model text and followed by the opt-in report link ("Not enough to check: ApeCheck doesn't read X profiles, and no
+  GitHub repo was found for stridefun. Tag me under a post with its link or contract."); any other FAILED check:
+  "Couldn't finish this check. Try again in a few minutes." A coin on a chain ApeCheck can't read (`Check.evidence.otherChain`) adds one fixed line under the verdict:
+  "This verdict is for esco[.]example, the website in the token's info; the coin on Sonic wasn't checked." (a check
+  that moved to that site), else "The coin on Sonic wasn't checked: ApeCheck can't read that chain yet." Max 280
   counted the way X counts (`bot/xtext.ts`: URL = 23, CJK and other wide characters = 2, any emoji = 2, NFC); the summary is
   cut at a word boundary with "…". `xLength` is an upper bound: a domain under a TLD the list in `xtext.ts` doesn't know
   counts max(its length, 23), since X links every gTLD. `BOT_INCLUDE_LINK=true` appends `apecheck.io/c/<id>`
@@ -582,13 +625,20 @@ with a working Connect wallet button, a main button that only opens a dialog, U+
 Cloudflare challenge, error text; coins with ApeCheck's own facts only: the deployer history from earlier public checks of
 the wallet, never a private one, and Solana / EVM / Tron coins whose every step says "not checked" in ApeCheck's words); `test/pipeline-timing.test.ts` covers late and repeated work (an abandoned Stage A, a
 coin whose Stage D ran short, model fallbacks in the log, re-runs, a run that lost its check, stuck-check recovery, the
-browser pool relaunch).
+browser pool relaunch). `test/not-enough.test.ts` covers checks that could test nothing (the @stridefun X profile and the
+contract on Sonic from production, a contract on no chain, a post naming one, claims nothing could settle, a coin
+whose every fact is unknown): FAILED with only the lookups that ran, no score, no judge call without claims; GitHub
+down or too slow, an RPC, DexScreener, the coin's RPC or the post not answering makes it an outage instead; a repo
+found by name, a coin with one fact read, or a claim contradicted, is still scored; on a standalone run, a site that
+answered but didn't load is tested, a bot wall is "Not enough to check", our browser failing is an outage. A dead site
+with nothing else is scored with `launch = fail`, a bot-walled one is "Not enough to check" (`test/pipeline.test.ts`).
 
 The bot: `test/bot-resolve.test.ts` (target resolution table: links, contracts, handles, reply prefix, quotes, the bot's own
 links, several candidates, non-Latin and empty text), `test/bot-compose.test.ts` (reply format, X lengths with URLs / CJK /
-emoji, link on/off, no coin, failed), `test/bot.test.ts` (with a `FakeX`, `test/fake-x.ts`: ignore rules, limits,
-idempotency, one check per thread, cache hits, follow-ups Pro / non-Pro, posting retries and refusals, since_id, the lock
-and the idle mode) and `test/bot-flow.test.ts` (M2 acceptance through the real queues and pipeline: a tag under a project
+emoji, link on/off, no coin, failed, "Not enough to check" made safe), `test/bot.test.ts` (with a `FakeX`,
+`test/fake-x.ts`: ignore rules, limits, idempotency, one check per thread, cache hits, "Not enough to check" answered with
+its reason, reused and never retried, follow-ups Pro / non-Pro, posting retries and refusals, since_id, the lock and the
+idle mode) and `test/bot-flow.test.ts` (M2 acceptance through the real queues and pipeline: a tag under a project
 post whose link is the local working-app fixture gets one reply with the verdict and the card PNG, and a second tag in the
 thread makes no second check). The same on the real X adapter: `test/bot-adapter.test.ts` (the adapter's recorded API
 fixtures over a fake Http) and `test/bot-x-e2e.test.ts`, where `createSources()` builds the X adapter over `test/x-api.ts`,

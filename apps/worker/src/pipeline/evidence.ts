@@ -9,7 +9,7 @@ import { CHAINS, deployerHistoryLine, deployerLine, short, type ChainKey, type S
 import { coinsByDeployer } from '@apecheck/db';
 import { captureErrors, type CoinRawFacts, type RepoFacts, type XUser } from '@apecheck/sources';
 import type { CheckRun } from './context';
-import { announceCoin, findCoin } from './resolve';
+import { announceCoin, findCoin, listOf } from './resolve';
 import type { StepSink } from './steps';
 import { coinSignals, gitFacts, gitSignal, worst } from './signals';
 import type { StageCtx } from './stage';
@@ -36,12 +36,18 @@ function projectNames(run: CheckRun): string[] {
 
 interface GithubLookup {
   repos: RepoFacts[];
-  /** GitHub answered with errors (down, rate limited, unreachable) and nothing was found */
+  /** GitHub answered with errors (down, rate limited, unreachable) or not within 15 s, and nothing was found */
   unavailable: boolean;
-  viaSearch: boolean;
+  /** the name searched for (the project's first name), when no repo link was found to read */
+  searched: string | null;
+  /** repo links read (at most 4) */
+  links: number;
   /** no repo link anywhere and no project name to search for: GitHub was never asked */
   nothingToLookUp: boolean;
 }
+
+/** How long one GitHub lookup (a repo link, the name search) may take before GitHub counts as not answering. */
+const GITHUB_LOOKUP_MS = 15_000;
 
 async function githubEvidence(run: CheckRun, signal: AbortSignal): Promise<GithubLookup> {
   const gh = run.sources.github;
@@ -50,21 +56,29 @@ async function githubEvidence(run: CheckRun, signal: AbortSignal): Promise<Githu
     if (u && /^https?:\/\/(www\.)?github\.com\/[A-Za-z0-9-]+/i.test(u)) urls.add(u.replace(/\/+$/, ''));
   }
   const names = projectNames(run);
-  if (!urls.size && !names.length) return { repos: [], unavailable: false, viaSearch: false, nothingToLookUp: true };
+  if (!urls.size && !names.length) return { repos: [], unavailable: false, searched: null, links: 0, nothingToLookUp: true };
+  // a lookup that didn't answer in time found nothing, but it never said there is nothing: GitHub is unavailable
+  let late = false;
+  const timed = async (p: Promise<RepoFacts[]>) => {
+    const r = await within<RepoFacts[] | null>(p, GITHUB_LOOKUP_MS, null);
+    if (!r) late = true;
+    return r ?? [];
+  };
+  const links = [...urls].slice(0, 4);
   // errors of this check only (captureErrors), not another check's that runs at the same time
   const { value, errors } = await captureErrors(async () => {
     const byName = new Map<string, RepoFacts>();
-    const lists = await Promise.all([...urls].slice(0, 4).map(u => within(gh.fromUrl(u), 15_000, [] as RepoFacts[])));
+    const lists = await Promise.all(links.map(u => timed(gh.fromUrl(u))));
     for (const r of lists.flat()) byName.set(r.fullName.toLowerCase(), r);
-    let viaSearch = false;
+    let searched: string | null = null;
     if (!byName.size && !urls.size && !signal.aborted && names.length) {
-      viaSearch = true;
-      const hits = await within(gh.searchByName(names[0]), 15_000, [] as RepoFacts[]);
+      searched = names[0];
+      const hits = await timed(gh.searchByName(names[0]));
       for (const r of hits.filter(h => repoMatchesProject(h, names, run.domain))) byName.set(r.fullName.toLowerCase(), r);
     }
-    return { repos: [...byName.values()], viaSearch };
+    return { repos: [...byName.values()], searched };
   });
-  return { ...value, unavailable: !value.repos.length && errors.length > 0, nothingToLookUp: false };
+  return { ...value, links: links.length, unavailable: !value.repos.length && (errors.length > 0 || late), nothingToLookUp: false };
 }
 
 export function emptyFacts(run: CheckRun, error: string): CoinRawFacts {
@@ -225,7 +239,13 @@ export async function evidenceStage(run: CheckRun, ctx: StageCtx): Promise<void>
     const facts = gh.repos.length ? gitFacts(gh.repos, launchAt) : gitFacts([], null);
     const g = gitSignal(facts, { claimsOpenSource, anchor: launchAt ? 'launch' : 'first' })!;
     const idx = await steps.step({ status: g.signal, text: `GitHub: ${g.text}`, source: 'GitHub', url: facts.originals[0]?.url ?? null });
-    run.git = { facts, signal: { signal: g.signal, text: `GitHub: ${g.text}`, stepIdx: idx >= 0 ? idx : null }, plain: g.text, found: facts.originals.length > 0 };
+    run.git = {
+      facts,
+      signal: { signal: g.signal, text: `GitHub: ${g.text}`, stepIdx: idx >= 0 ? idx : null },
+      plain: g.text,
+      found: facts.originals.length > 0,
+      asked: { links: gh.links, search: gh.searched },
+    };
   }
   run.steps.setProgress(0.7);
 
@@ -252,8 +272,12 @@ export async function evidenceStage(run: CheckRun, ctx: StageCtx): Promise<void>
     // name only the places that were actually read
     const where = [run.site.loaded ? 'on the site' : null, run.post ? 'in the post' : null].filter(Boolean).join(' or ');
     const u = run.unconfirmedCoin;
+    const m = run.missingCoin;
     if (u) await steps.step({ status: 'warn', text: `Address ${short(u.address)} ${where || 'found'} couldn't be checked (${u.why})`, source: 'On-chain' });
-    else await steps.step({ status: 'info', text: where ? `No contract found ${where}` : 'No contract to check' });
+    else if (m) {
+      const chains = listOf(m.chains.map(c => CHAINS[c].name), 'or');
+      await steps.step({ status: 'warn', text: `Contract ${short(m.address)} ${where || 'found'} is not on ${chains}`, source: 'On-chain' });
+    } else await steps.step({ status: 'info', text: where ? `No contract found ${where}` : 'No contract to check' });
   }
   run.steps.setProgress(0.85);
 }

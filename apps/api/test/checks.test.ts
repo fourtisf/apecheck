@@ -151,6 +151,30 @@ describe('POST /v1/checks', () => {
     expect(await h.prisma.check.count({ where: { targetId: t.id } })).toBe(2);
   });
 
+  it('serves a recent "Not enough to check" like a cached verdict (status failed, no credit); an outage, an old one or recheck:true runs again', async () => {
+    const NONE = "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.";
+    const t = await seedTarget(h.prisma, { kind: 'POST', handle: 'stridefun', key: 'x:stridefun', name: '@stridefun', domain: null });
+    await seedCheck(h.prisma, { targetId: t.id, shortId: 'none001', status: 'FAILED', error: NONE, isLatest: false, finishedAt: new Date(Date.now() - 2 * 3600_000) });
+    const c = new Client(h.app);
+    const hit = await c.post('/v1/checks', { target: 'https://x.com/stridefun' });
+    expect(hit.statusCode).toBe(200);
+    expect(hit.json()).toEqual({ id: 'none001', status: 'failed', cached: true, credits: 5 });
+    const re = await c.post('/v1/checks', { target: 'https://x.com/stridefun', recheck: true });
+    expect(re.statusCode).toBe(201);
+    expect(re.json<CreateCheckResponse>()).toMatchObject({ status: 'queued', cached: false, credits: 4 });
+
+    // an outage that left nothing tested is a failed run like any other: never served from the cache
+    const o = await seedTarget(h.prisma, { kind: 'POST', handle: 'escoeco', key: 'x:escoeco', name: '@escoeco', domain: null });
+    await seedCheck(h.prisma, { targetId: o.id, shortId: 'down001', status: 'FAILED', error: "Nothing about @escoeco could be checked: GitHub didn't answer", isLatest: false });
+    const outage = await c.post('/v1/checks', { target: 'https://x.com/escoeco' });
+    expect(outage.statusCode).toBe(201);
+    expect(outage.json<CreateCheckResponse>().id).not.toBe('down001');
+
+    const old = await seedTarget(h.prisma, { kind: 'POST', handle: 'oldnone', key: 'x:oldnone', name: '@oldnone', domain: null });
+    await seedCheck(h.prisma, { targetId: old.id, shortId: 'none002', status: 'FAILED', error: NONE, isLatest: false, finishedAt: new Date(Date.now() - 7 * 3600_000) });
+    expect((await c.post('/v1/checks', { target: 'https://x.com/oldnone' })).statusCode).toBe(201);
+  });
+
   it('runs again when the cached verdict is older than CACHE_HOURS, and ignores private checks', async () => {
     const t = await seedTarget(h.prisma, { kind: 'SITE', domain: 'old.xyz', key: 'site:old.xyz', name: 'old.xyz' });
     await seedCheck(h.prisma, { targetId: t.id, shortId: 'old0001', finishedAt: new Date(Date.now() - 7 * 3600_000) });
@@ -173,6 +197,31 @@ describe('POST /v1/checks', () => {
     expect(await h.prisma.target.count()).toBe(1);
     const check = await h.prisma.check.findUniqueOrThrow({ where: { shortId: re.json<CreateCheckResponse>().id } });
     expect(check.targetId).toBe(t.id);
+  });
+
+  it('a contract the worker moved to the website in its token info (on a chain ApeCheck can\'t read) is still matched by what was pasted', async () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const c = new Client(h.app);
+    const first = await c.post('/v1/checks', { target: SONIC });
+    expect(first.statusCode).toBe(201);
+    const id = first.json<CreateCheckResponse>().id;
+    // the worker: the contract trades only on Sonic, its token info links esco.example, which already has a Target
+    // (with its own coin): the check is re-pointed there and the preliminary "ca:evm:" row is dropped
+    const site = await seedTarget(h.prisma, { kind: 'SITE', domain: 'esco.example', key: 'site:esco.example', name: 'esco.example', chain: 'BASE', ca: EVM });
+    const pre = await h.prisma.check.findUniqueOrThrow({ where: { shortId: id } });
+    await h.prisma.check.update({ where: { id: pre.id }, data: { targetId: site.id, status: 'RUNNING', startedAt: new Date() } });
+    await h.prisma.target.delete({ where: { id: pre.targetId } });
+
+    // a second paste (any case) joins the run: no credit, no second check
+    const again = await new Client(h.app, '192.0.2.78').post('/v1/checks', { target: '0x' + SONIC.slice(2).toUpperCase() });
+    expect(again.json()).toEqual({ id, status: 'running', cached: false, credits: 5 });
+    // once it is done, the next one gets the cached verdict
+    await h.prisma.check.update({ where: { id: pre.id }, data: { status: 'DONE', finishedAt: new Date(), evidence: { otherChain: { chain: 'Sonic', address: SONIC, site: 'esco.example' } } } });
+    const hit = await c.post('/v1/checks', { target: SONIC });
+    expect(hit.json()).toEqual({ id, status: 'done', cached: true, credits: 4 });
+    expect(await h.prisma.check.count()).toBe(1);
+    // a paste of another contract (here the site's own coin on Base) is not answered by this check
+    expect((await c.post('/v1/checks', { target: EVM })).json()).toMatchObject({ cached: false, status: 'queued' });
   });
 
   it('matches posts by tweet id whatever the URL looks like', async () => {

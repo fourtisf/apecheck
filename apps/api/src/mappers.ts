@@ -61,6 +61,7 @@ import {
   type WebhookEvent,
   type CheckResult,
   checkResultOf,
+  otherChainOf,
   LOGO_PATH_RE,
 } from '@apecheck/core';
 import { num, type ApiKey, type DeployerCoinRow, type Prisma, type PrismaClient, type Webhook, type WebhookDelivery } from '@apecheck/db';
@@ -318,7 +319,14 @@ export function toSummary(c: CheckSummaryRow, ctx: MapCtx): CheckSummaryDTO {
     createdAt: c.createdAt.toISOString(),
     checkedAt: iso(c.finishedAt),
     deployer: depAddress && depChain ? { address: depAddress, chain: depChain } : null,
+    otherChain: otherCoinOf(c.evidence),
   };
+}
+
+/** Check.evidence.otherChain → the coin on a chain ApeCheck can't read (CheckSummaryDTO.otherChain); null when there is none. */
+function otherCoinOf(evidence: unknown): CheckSummaryDTO['otherChain'] {
+  const o = otherChainOf(evidence);
+  return o ? { chain: o.chain, address: o.address } : null;
 }
 
 /**

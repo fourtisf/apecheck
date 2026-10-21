@@ -37,6 +37,9 @@ selects another file, e.g. a staging config).
 - Claims come in `Claim.idx` order (the order the worker extracted them).
 - `post` is `Check.evidence.post` (`{ id, author, text, createdAt }`, `id` the X post id or null) for post checks whose post
   could be read, else `null`.
+- `otherChain` (report and every summary row) is `Check.evidence.otherChain` as `{ chain, address }` when the project's
+  coin is on a chain ApeCheck can't read yet (e.g. `{ chain: "Sonic" }`: a pasted contract whose check moved to the
+  website in its token info, or a contract a post or page named): not checked, no coin facts or score. Else `null`.
 - `botReply` (`{ mention: { author, text, createdAt, inReplyToId }, repliedAt, replyText }`) is present only once the bot's verdict reply
   about the check is on X: the first `BotMention` of the check with status `REPLIED`, `replyTweetId` and `repliedAt`
   (kind `check`; follow-up answers don't count). `mention.text` is what the author typed, `replyText` the words the bot
@@ -98,7 +101,7 @@ brings an API key to key/webhook management or the wallet session routes gets 40
 |---|---|---|
 | GET | `/health` | `{ ok: true }` (not rate limited) |
 | GET | `/v1/me` | `MeDTO` (no-store): credits left (`credits`/`max`/`resetsAt`, next 00:00 UTC) for the viewer (see Credits), `tier`, `tokenLive`, `proMinHold`/`maxMinHold` (null while the token isn't live), `user` (`UserDTO` with `holding`, `holder`; null signed out), `proChecksPerDay`, `maxChecksPerDay`, `token` (`{ usd, ch24 }` or null), `xLinkAvailable`, `notificationsUnread` |
-| POST | `/v1/checks` | body `{ target, recheck?, private? }` → `CreateCheckResponse`. **201** for a new check, **200** when an existing one is returned (running check, or `cached: true` for a finished one younger than `CACHE_HOURS`). 400 `bad_target`, 402 `no_credits`, 403 `max_required` for `private: true` unless the viewer is Max. Credits and job priority by tier |
+| POST | `/v1/checks` | body `{ target, recheck?, private? }` → `CreateCheckResponse`. **201** for a new check, **200** when an existing one is returned (running check, or `cached: true` for a finished one younger than `CACHE_HOURS`: a verdict, `status: 'done'`, or a "Not enough to check", `status: 'failed'` with that reason as the report's `error`; any other failed check runs again). 400 `bad_target`, 402 `no_credits`, 403 `max_required` for `private: true` unless the viewer is Max. Credits and job priority by tier |
 | GET | `/v1/checks/:id` | `CheckReportDTO` by short id, including the /api page's `narrative`, `coin.verdict`/`coin.score`, `claims[].result`, `report_url` (see Report notes), and `watching` for a signed-in viewer. Private checks only for the user who asked (any device they are signed in on; signing out ends a browser's access); `Cache-Control: private, no-store` on those |
 | GET | `/v1/checks/:id/events` | SSE, see below |
 | GET | `/v1/feed` | `FeedResponse`. `tab=latest\|checked\|real\|least\|vol\|watch`, `type=all\|coin\|post\|site`, `nar=<band>\|any`, `coin=<band>\|any`, `chain=<key>\|any`, `q`, `cursor`, `limit` (1–100, default 25), `ids=<shortId,…>`, `via=bot\|web\|api` (`bot`: checks the bot started, and checks it answered on X from cache). `tab=watch` without `ids` for a signed-in viewer: their account's watchlist (M3) |
@@ -151,7 +154,9 @@ brings an API key to key/webhook management or the wallet session routes gets 40
 The rules live in `@apecheck/db` (`packages/db/src/checks.ts`: `findReusableCheck()`, `createCheck()`, `withCreateLock()`),
 shared with the X bot, so a site submit and a bot tag of the same project see the same running check or cached verdict
 and never start two (both take the `lock:create:<target key>` lock). This file adds the credit and the job. Coins match on the contract address across every chain key (including the preliminary `ca:evm:` one, EVM
-case-insensitive), sites on the domain, posts on the tweet id, X profiles on `x:<handle>`. A queued/running check of
+case-insensitive), sites on the domain, posts on the tweet id, X profiles on `x:<handle>`. An EVM contract also matches
+checks whose `targetRaw` is that address (any case): the worker moves a contract that trades only on a chain ApeCheck
+can't read to the website in its token info, so its Target is the site's, not the contract's. A queued/running check of
 the same target is returned even with `recheck: true` (it is already fresh); `recheck` only skips the finished-check
 cache. A run older than 2 × `CHECK_BUDGET_SECONDS`, or a job queued for over 2 hours, counts as dead and does not
 block a new check.

@@ -1,5 +1,5 @@
 import type { CheckReportDTO } from '@apecheck/core';
-import { noVerdict } from './util';
+import { noVerdict, notEnough } from './util';
 
 /** renderTab('claims'): each claim with its result pill, where it was found and the evidence; then the narrative areas. */
 export function ClaimsTab({ report: r }: { report: CheckReportDTO }) {
@@ -17,6 +17,11 @@ export function ClaimsTab({ report: r }: { report: CheckReportDTO }) {
             </li>
           ))}
         </ul>
+      ) : notEnough(r) ? (
+        // the run did its work and found nothing to test: not "stopped", and not "no claims on the site"
+        <div className="empty" style={{ marginBottom: 28 }}>
+          <p>No claims were tested: there was nothing about the project to test them against. The Agent run tab shows what was looked for.</p>
+        </div>
       ) : noVerdict(r) ? (
         // the run never got to the claims: "found no claims" would be a conclusion it didn't reach
         <div className="empty" style={{ marginBottom: 28 }}>

@@ -1,7 +1,7 @@
 import Link from 'next/link';
-import { cap, coinBand, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
+import { cap, coinBand, fmtUsd, otherChainCoinText, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { cssVars } from '../css';
-import { Dot, Facts, NotChecked, Unknown, noVerdict, type FactRow } from './util';
+import { Dot, Facts, NotChecked, Unknown, noVerdict, notEnough, type FactRow } from './util';
 
 /** scoreBlock(): the coin score with its band and the 5-step meter. */
 function ScoreBlock({ n }: { n: number }) {
@@ -166,11 +166,35 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
 
 /** tabCoin(): coin score, who holds the supply, and the on-chain facts with their sources. */
 export function CoinTab({ report: r }: { report: CheckReportDTO }) {
+  if (!r.hasCoin && notEnough(r)) {
+    // nothing to test, the coin included. Never "no contract was found": an X profile's check looks for none (the
+    // reason in the verdict panel names only the lookups that ran)
+    return (
+      <div className="empty">
+        <p>This check had no coin it could test, so there is no coin score. The Agent run tab shows what was looked up.</p>
+      </div>
+    );
+  }
   if (!r.hasCoin && noVerdict(r)) {
     // the run stopped before it got to the coin: neither "no coin linked" nor "couldn't be read" is known
     return (
       <div className="empty">
         <p>The check stopped before the coin was looked at, so there is no coin score. The Agent run tab shows how far it got; re-check to try again.</p>
+      </div>
+    );
+  }
+  if (!r.hasCoin && r.otherChain) {
+    // the coin trades only on a chain ApeCheck has no on-chain reads for: named, never "no coin linked" or "paste it"
+    const o = r.otherChain;
+    return (
+      <div className="empty">
+        <p>{otherChainCoinText(o.chain)}, so this check has no coin facts and no coin score.</p>
+        <p className="muted" style={{ margin: 0 }}>
+          Contract on {o.chain}:{' '}
+          <span className="mono" title={o.address}>
+            {short(o.address)}
+          </span>
+        </p>
       </div>
     );
   }

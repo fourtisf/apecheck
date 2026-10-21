@@ -208,6 +208,12 @@ export interface CheckSummaryDTO {
   checkedAt: string | null;
   /** the coin's deployer wallet, when it is known (CoinFactsDTO.deployerAddress) */
   deployer: { address: string; chain: ChainKey } | null;
+  /**
+   * The project's coin is on a chain ApeCheck can't read yet (Check.evidence.otherChain): `chain` is its name
+   * ("Sonic"), `address` the contract. Not checked and not scored ("Coin on Sonic: not checked"), so never "No coin
+   * linked". Absent or null otherwise.
+   */
+  otherChain?: { chain: string; address: string } | null;
 }
 
 export interface CheckReportDTO extends CheckSummaryDTO {
@@ -240,6 +246,10 @@ export interface CheckReportDTO extends CheckSummaryDTO {
   durationMs: number | null;
   startedAt: string | null;
   finishedAt: string | null;
+  /**
+   * Why a failed check has no verdict, in plain words. "Not enough to check: …" (isNotEnough) is a check that could
+   * test nothing about the project: an answer, not an outage.
+   */
   error: string | null;
   isPrivate: boolean;
   /** M3: the signed-in viewer watches this target */
@@ -419,7 +429,10 @@ export interface CreateCheckBody { target: string; recheck?: boolean; private?: 
 export interface CreateCheckResponse {
   id: string;
   status: CheckStatusS;
-  /** true when a finished check younger than CACHE_HOURS was returned instead of a new run */
+  /**
+   * true when a finished check younger than CACHE_HOURS was returned instead of a new run: a verdict (`done`), or a
+   * "Not enough to check" (`failed`, isNotEnough)
+   */
   cached: boolean;
   credits: number;
 }

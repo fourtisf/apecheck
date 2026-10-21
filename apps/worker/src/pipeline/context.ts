@@ -120,8 +120,20 @@ export class CheckRun {
   links: Links = { site: null, x: null, github: [], docs: null, telegram: null, discord: null };
   /** the contract was announced in a step already (Stage A or D) */
   coinAnnounced = false;
-  /** an address seen on the page / in the post that couldn't be vetted because DexScreener or the RPCs were down */
+  /**
+   * an address (the target, or one seen on the page / in the post) that couldn't be vetted because DexScreener or the
+   * RPCs were down; `why` is "<source> unavailable", or why no chain could be asked
+   */
   unconfirmedCoin: { address: string; why: string } | null = null;
+  /** a contract (the target, or the one the post or page names) that every supported chain asked answered it doesn't have */
+  missingCoin: { address: string; chains: ChainKey[] } | null = null;
+  /**
+   * a contract DexScreener lists only on a chain ApeCheck has no reads for (Sonic, Polygon…; `chain` is its name):
+   * named in the log, never scored, and not looked up again on the page or in the post. `site`: the domain from its
+   * token info that a pasted contract's check moved to (the verdict is for that site); null when it didn't move.
+   * Saved as Check.evidence.otherChain (the report and the bot reply say the coin wasn't checked).
+   */
+  otherChain: { address: string; chain: string; site: string | null } | null = null;
 
   /* Stage B */
   session: BrowseSession | null = null;
@@ -142,10 +154,19 @@ export class CheckRun {
   claims: ExtractedClaim[] = [];
 
   /* Stage D */
-  /** `unknown`: why the code is unknown when `signal` is null (null too when Stage D didn't get to it) */
-  git: { facts: GitFacts | null; signal: SignalEvidence | null; plain: string | null; found: boolean; unknown?: 'unavailable' | 'nothing-to-look-up' | null } = {
-    facts: null, signal: null, plain: null, found: false, unknown: null,
-  };
+  /**
+   * `unknown`: why the code is unknown when `signal` is null (null too when Stage D didn't get to it). `asked`: the
+   * GitHub lookup that answered: the repo links found (`links`, how many), else a search by the project's name
+   * (`search`, the name searched); "Not enough to check" names only that one.
+   */
+  git: {
+    facts: GitFacts | null;
+    signal: SignalEvidence | null;
+    plain: string | null;
+    found: boolean;
+    unknown?: 'unavailable' | 'nothing-to-look-up' | null;
+    asked?: { links: number; search: string | null } | null;
+  } = { facts: null, signal: null, plain: null, found: false, unknown: null, asked: null };
   acct: { signal: SignalEvidence | null; plain: string | null; renamed?: number | null } = { signal: null, plain: null };
   coin: { raw: CoinRawFacts; signals: CoinSignals; evidence: { deployer?: SignalEvidence; bundle?: SignalEvidence; holders?: SignalEvidence } } | null = null;
   /** the coinFacts request for chain/ca (started once, shared by Stage D and the after-timeout path) */

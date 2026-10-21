@@ -4,7 +4,7 @@
  */
 import { z } from 'zod';
 import { CHAINS, chainFromDex, type ChainKey, type Env } from '@apecheck/core';
-import type { DexScreenerSource, DexTokenInfo, Http } from '../types';
+import type { DexOtherChainToken, DexScreenerSource, DexTokenInfo, Http } from '../types';
 import { ErrorState, isoFromMs, num } from '../util';
 
 const TIMEOUT_MS = 8_000;
@@ -68,9 +68,8 @@ function socialUrl(type: string, handle: string): string | null {
   return null;
 }
 
-export function mapPair(p: Pair): DexTokenInfo | null {
-  const chain = chainFromDex(p.chainId);
-  if (!chain) return null;
+/** Websites, socials and logo from a pair's token info. */
+function infoOf(p: Pair): Pick<DexTokenInfo, 'websites' | 'socials' | 'imageUrl'> {
   const websites = (p.info?.websites ?? []).map(w => w.url).filter((u): u is string => !!u);
   const socials: { type: string; url: string }[] = [];
   for (const s of p.info?.socials ?? []) {
@@ -78,6 +77,12 @@ export function mapPair(p: Pair): DexTokenInfo | null {
     const url = s.url ?? (s.handle ? socialUrl(type, s.handle) : null);
     if (type && url) socials.push({ type, url });
   }
+  return { websites, socials, imageUrl: p.info?.imageUrl ?? null };
+}
+
+export function mapPair(p: Pair): DexTokenInfo | null {
+  const chain = chainFromDex(p.chainId);
+  if (!chain) return null;
   const fdv = num(p.fdv);
   return {
     chain,
@@ -95,9 +100,37 @@ export function mapPair(p: Pair): DexTokenInfo | null {
     pairUrl: p.url ?? null,
     dex: p.dexId ?? null,
     pairCreatedAt: isoFromMs(p.pairCreatedAt),
-    websites,
-    socials,
-    imageUrl: p.info?.imageUrl ?? null,
+    ...infoOf(p),
+  };
+}
+
+/** DexScreener ids of chains ApeCheck has no reads for, with their names (the log says which chain a token is on). */
+const OTHER_CHAIN_NAMES: Record<string, string> = {
+  sonic: 'Sonic', polygon: 'Polygon', avalanche: 'Avalanche', optimism: 'Optimism', fantom: 'Fantom', cronos: 'Cronos',
+  linea: 'Linea', blast: 'Blast', zksync: 'zkSync', scroll: 'Scroll', mantle: 'Mantle', manta: 'Manta', metis: 'Metis',
+  celo: 'Celo', pulsechain: 'PulseChain', abstract: 'Abstract', berachain: 'Berachain', hyperevm: 'HyperEVM', hyperliquid: 'Hyperliquid',
+  unichain: 'Unichain', apechain: 'ApeChain', ink: 'Ink', soneium: 'Soneium', worldchain: 'World Chain', zora: 'Zora',
+  mode: 'Mode', taiko: 'Taiko', gnosischain: 'Gnosis', moonbeam: 'Moonbeam', kava: 'Kava', core: 'Core', flare: 'Flare',
+  sei: 'Sei', seiv2: 'Sei', xlayer: 'X Layer', katana: 'Katana', plasma: 'Plasma', monad: 'Monad', ton: 'TON', sui: 'Sui',
+  aptos: 'Aptos', near: 'NEAR', starknet: 'Starknet', injective: 'Injective', osmosis: 'Osmosis', hedera: 'Hedera',
+};
+
+/** "Sonic" for DexScreener's "sonic"; an unlisted plain id is title-cased; anything else is "another chain". */
+export function dexChainName(id: string): string {
+  if (Object.hasOwn(OTHER_CHAIN_NAMES, id)) return OTHER_CHAIN_NAMES[id];
+  if (!/^[a-z][a-z0-9-]{1,23}$/.test(id)) return 'another chain';
+  return id.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function mapOtherPair(p: Pair): DexOtherChainToken {
+  return {
+    dexChain: p.chainId,
+    chainName: dexChainName(p.chainId),
+    address: p.baseToken.address,
+    name: p.baseToken.name ?? null,
+    symbol: p.baseToken.symbol ?? null,
+    pairUrl: p.url ?? null,
+    ...infoOf(p),
   };
 }
 
@@ -169,6 +202,22 @@ export class DexScreenerAdapter implements DexScreenerSource {
       }
     }
     return out;
+  }
+
+  async otherChain(address: string): Promise<DexOtherChainToken | null> {
+    const a = address.trim();
+    if (!a) return null;
+    try {
+      const pairs = parsePairs(await this.get(`/latest/dex/tokens/${encodeURIComponent(a)}`)).filter(p => sameAddress(p.baseToken.address, a));
+      // listed on a chain ApeCheck reads too: that is the coin to check (token())
+      if (pairs.some(p => chainFromDex(p.chainId))) return null;
+      let best: Pair | null = null;
+      for (const p of pairs) if (!best || liq(p) > liq(best)) best = p;
+      return best ? mapOtherPair(best) : null;
+    } catch (e) {
+      this.errors.fail('otherChain', e);
+      return null;
+    }
   }
 
   async search(query: string): Promise<DexTokenInfo[]> {

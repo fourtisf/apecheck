@@ -29,7 +29,7 @@ export function VerdictCard({ item: it, fresh }: VerdictItemProps) {
       </div>
       <p>{it.summary}</p>
       <div className="gc-ft">
-        <span>{it.mc ? `MC ${fmtUsd(it.mc)}` : it.hasCoin ? 'MC —' : 'No coin'}</span>
+        <span>{it.mc ? `MC ${fmtUsd(it.mc)}` : it.hasCoin || it.otherChain ? 'MC —' : 'No coin'}</span>
         <span>
           {it.spark ? (
             <>

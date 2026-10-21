@@ -6,6 +6,9 @@
  * X's free embed endpoints (x.getPost: never the paid X API; X profiles are not read). runCheck then gives the
  * Target row its canonical key and display fields (saveTarget).
  *
+ * A contract DexScreener lists only on a chain ApeCheck has no reads for (Sonic, Polygon, Avalanche…) is named as
+ * such and never scored; a pasted one whose token info links the project's website becomes a check of that site.
+ *
  * The stage can be abandoned at its timeout while a lookup is still running: every step goes through the
  * stage's scoped sink and nothing is written to the run once ctx.signal has aborted, so late work can't
  * change a check that has moved on (or already finished).
@@ -27,7 +30,17 @@ import {
   type ChainKey,
 } from '@apecheck/core';
 import type { Prisma } from '@apecheck/db';
-import { captureErrors, linksFromDex, mergeTokenLinks, reportError, type DexTokenInfo, type LinkSource, type TokenLinks, type XUser } from '@apecheck/sources';
+import {
+  captureErrors,
+  linksFromDex,
+  mergeTokenLinks,
+  reportError,
+  type DexOtherChainToken,
+  type DexTokenInfo,
+  type LinkSource,
+  type TokenLinks,
+  type XUser,
+} from '@apecheck/sources';
 import type { CheckRun, LinkReads } from './context';
 import type { StageCtx } from './stage';
 import { within } from './stage';
@@ -89,14 +102,32 @@ export interface FoundCoin {
   market: DexTokenInfo | null;
 }
 
+/** A contract DexScreener lists only on a chain ApeCheck has no reads for (see announceOtherChain). */
+export interface OtherChainCoin {
+  ca: string;
+  other: DexOtherChainToken;
+}
+
+/** DexScreener's listing of an address on chains ApeCheck has no reads for; `down` when DexScreener didn't answer. */
+async function otherChainOf(run: CheckRun, address: string): Promise<{ other: DexOtherChainToken | null; down: boolean }> {
+  const { dex } = run.sources;
+  if (!dex.otherChain) return { other: null, down: false };
+  const r = await within(captureErrors(() => dex.otherChain!(address)), 10_000, null);
+  return { other: r?.value ?? null, down: !r || r.errors.length > 0 };
+}
+
 /**
  * Pick the project's own token from addresses found in text. A page can mention other tokens (USDC,
  * routers), so an address only counts when DexScreener knows it as a token, or when it is the only
- * (or the explicitly labelled) address and exists on-chain.
+ * (or the explicitly labelled) address and exists on-chain. Such an address that is on none of ApeCheck's chains
+ * but that DexScreener lists on another one comes back as an OtherChainCoin.
  */
-export async function findCoin(run: CheckRun, text: string, signal: AbortSignal): Promise<FoundCoin | null> {
+export async function findCoin(run: CheckRun, text: string, signal: AbortSignal): Promise<FoundCoin | OtherChainCoin | null> {
   const refs = extractRefs(text);
   const { dex, sol } = run.sources;
+  // a contract already named as being on another chain is never looked up again, but it still counts: another
+  // unlabelled address next to it (a treasury, a router) is not "the only address" on the page or in the post
+  const named = run.otherChain?.address.toLowerCase() ?? null;
   // sources that failed while vetting the addresses: an address we couldn't vet is "unconfirmed", never "not found"
   const down = new Set<string>();
   const rank = (list: string[]) => [...list].sort((a, b) => Number(labelled(text, b)) - Number(labelled(text, a))).slice(0, 3);
@@ -108,6 +139,7 @@ export async function findCoin(run: CheckRun, text: string, signal: AbortSignal)
   const common = new Set<string>();
   for (const t of tries) {
     if (signal.aborted) return null;
+    if (t.addr === named) continue;
     const chain: ChainKey | null = t.family === 'sol' ? 'sol' : t.family === 'trx' ? 'trx' : null;
     const r = await within(captureErrors(() => dex.token(chain, t.addr)), 10_000, null);
     if (signal.aborted) return null;
@@ -127,12 +159,26 @@ export async function findCoin(run: CheckRun, text: string, signal: AbortSignal)
     return null;
   };
   if (signal.aborted) return null;
-  if (!sure) return unconfirmed(tries.find(t => !common.has(t.addr))?.addr);
+  if (!sure) return unconfirmed(tries.find(t => !common.has(t.addr) && t.addr !== named)?.addr);
+  // the project's coin is the one already named as being on another chain: nothing more to look up or say
+  if (sure.addr === named) return null;
+  // every source answered and none has the address: it is on no supported chain ("not enough to check" names it)
+  const missing = (addr: string, chains: ChainKey[]) => {
+    if (!down.size && chains.length && !run.missingCoin && !signal.aborted) run.missingCoin = { address: addr, chains };
+  };
   if (sure.family === 'evm') {
     const det = await detectEvmChain(run, sure.addr);
     if (signal.aborted) return null;
     if (det.chain) return { chain: det.chain, ca: sure.addr.toLowerCase(), market: null };
     if (det.failed.length) down.add(det.failed.length === det.asked.length ? 'the chain RPCs' : `the ${listOf(det.failed.map(chainName), 'and')} RPC`);
+    else if (!down.size) {
+      // every chain ApeCheck reads said "no code": it may trade on one ApeCheck has no reads for
+      const r = await otherChainOf(run, sure.addr);
+      if (signal.aborted) return null;
+      if (r.other) return { ca: sure.addr.toLowerCase(), other: r.other };
+      if (r.down) down.add('DexScreener');
+    }
+    missing(sure.addr.toLowerCase(), det.asked);
     return unconfirmed(sure.addr);
   }
   if (sure.family === 'sol') {
@@ -140,6 +186,7 @@ export async function findCoin(run: CheckRun, text: string, signal: AbortSignal)
     if (signal.aborted) return null;
     if (r?.value?.exists) return { chain: 'sol', ca: sure.addr, market: null };
     if (!r || r.errors.length) down.add('the Solana RPC');
+    missing(sure.addr, ['sol']);
     return unconfirmed(sure.addr);
   }
   return { chain: 'trx', ca: sure.addr, market: null };
@@ -153,8 +200,73 @@ function applyMarket(run: CheckRun, info: DexTokenInfo) {
 
 const chainName = (c: ChainKey) => CHAINS[c].name;
 
-export async function announceCoin(run: CheckRun, found: FoundCoin, where: 'page' | 'post', steps: StepSink, signal: AbortSignal) {
+/**
+ * A contract DexScreener lists only on a chain ApeCheck has no reads for (Sonic, Polygon, Avalanche…). The log names
+ * that chain and says the coin isn't checked: there are no on-chain reads there, so no coin facts or score exist. For
+ * a pasted contract or one in a post, its token info fills the project's website, X, Telegram and Discord that
+ * nothing else gave (what fromTokenLinks does for a coin on a supported chain); a pasted contract whose website is
+ * known then becomes a check of that site (saveTarget re-keys the Target to it). `failed`: chains whose RPC didn't
+ * answer during detection.
+ */
+async function announceOtherChain(run: CheckRun, found: OtherChainCoin, where: 'contract' | 'page' | 'post', steps: StepSink, signal: AbortSignal, failed: ChainKey[] = []) {
   if (signal.aborted) return;
+  const { ca, other } = found;
+  // every write first: the steps below are the only awaits
+  run.otherChain = { address: ca, chain: other.chainName, site: null };
+  run.coinAnnounced = true;
+  // the token's name only helps the GitHub search (never saved); its ticker is saved on the Target, see below
+  if (other.name && !run.tokenName) run.tokenName = other.name.slice(0, 80);
+  const parts: string[] = [];
+  let site: string | null = null;
+  if (where !== 'page') {
+    const links = mergeTokenLinks([{ source: 'DexScreener', links: linksFromDex(other) }]);
+    if (!run.siteUrl && links.website) {
+      site = run.siteUrl = links.website.url;
+      run.domain = normalizeDomain(new URL(site).hostname);
+      parts.push(`website ${run.domain}`);
+    }
+    if (!run.handle && links.x) {
+      run.handle = links.x.handle;
+      parts.push(`X @${links.x.handle}`);
+    }
+    if (!run.links.telegram && links.telegram) run.links.telegram = links.telegram.url;
+    if (!run.links.discord && links.discord) run.links.discord = links.discord.url;
+  }
+  const toSite = where === 'contract' && !!site;
+  if (toSite) {
+    // no coin to score: the check is of the project's site, and the contract isn't kept as the Target's coin
+    run.kind = 'site';
+    run.detected = { kind: 'site', label: 'Website', domain: run.domain!, url: site! };
+    run.ca = null;
+    run.otherChain.site = run.domain;
+  } else if (where === 'contract' && other.symbol && !run.ticker) {
+    // the check stays on the contract's own Target: the ticker is this token's. Never on a site or post Target, which
+    // may hold the ticker of its own coin on a chain ApeCheck reads (saveTarget would write over it).
+    run.ticker = other.symbol.replace(/^\$/, '').toUpperCase().slice(0, 20);
+  }
+
+  const lead = where === 'contract' ? `Contract on ${other.chainName}: ${short(ca)}` : `Contract found ${where === 'page' ? 'on page' : 'in post'}: ${short(ca)} on ${other.chainName}`;
+  const pair = other.pairUrl && /^https:\/\/dexscreener\.com\//i.test(other.pairUrl) ? other.pairUrl : null;
+  await steps.step({
+    status: 'warn',
+    text: `${lead} (on-chain reads aren't supported there yet, so the coin isn't checked)`,
+    source: 'DexScreener',
+    url: pair,
+    caption: where === 'page' ? 'Reading the contract address' : null,
+  });
+  if (failed.length) await steps.step({ status: 'warn', text: `${listOf(failed.map(chainName), 'and')} RPC unavailable; DexScreener lists the contract on ${other.chainName}`, source: 'On-chain' });
+  if (parts.length) await steps.step({ status: 'ok', text: `Token metadata: ${parts.join(', ')}`, source: 'DexScreener', url: site });
+  if (where !== 'contract') return;
+  if (toSite) await steps.step({ status: 'info', text: `Checking the project's website instead: ${run.domain}`, url: site });
+  else await steps.step({ status: 'info', text: 'No website in the token metadata', source: 'DexScreener' });
+}
+
+export async function announceCoin(run: CheckRun, found: FoundCoin | OtherChainCoin, where: 'page' | 'post', steps: StepSink, signal: AbortSignal) {
+  if (signal.aborted) return;
+  if ('other' in found) {
+    await announceOtherChain(run, found, where, steps, signal);
+    return;
+  }
   run.chain = found.chain;
   run.ca = found.ca;
   if (found.market) applyMarket(run, found.market);
@@ -318,8 +430,25 @@ async function resolveContract(run: CheckRun, kind: 'evm' | 'sol' | 'tron', addr
   if (!chain && info) chain = info.chain;
   run.ca = address;
   if (!chain) {
-    await steps.step({ status: 'warn', text: chainNotFoundText(address, detection ?? { chain: null, asked: [], failed: [] }), source: 'On-chain' });
-    if (dexDown) await steps.step({ status: 'warn', text: 'DexScreener unavailable, no market data', source: 'DexScreener' });
+    // on none of ApeCheck's chains: DexScreener may list it on one ApeCheck has no reads for (Sonic, Polygon…)
+    const elsewhere = kind === 'evm' && !dexDown ? await otherChainOf(run, address) : null;
+    if (ctx.signal.aborted) return;
+    if (elsewhere?.other) {
+      await announceOtherChain(run, { ca: address, other: elsewhere.other }, 'contract', steps, ctx.signal, detection?.failed ?? []);
+      return;
+    }
+    const d = detection ?? { chain: null, asked: [], failed: [] };
+    // on none of the chains that answered. A chain whose RPC didn't answer (or none to ask) leaves it unknown, and so
+    // does DexScreener not answering: it is what would list the contract on a chain no RPC was asked about
+    const down = [
+      ...(d.failed.length ? [d.failed.length === d.asked.length ? 'the chain RPCs' : `the ${listOf(d.failed.map(chainName), 'and')} RPC`] : []),
+      ...(dexDown || elsewhere?.down ? ['DexScreener'] : []),
+    ];
+    if (!d.asked.length) run.unconfirmedCoin = { address, why: 'no EVM RPC configured' };
+    else if (down.length) run.unconfirmedCoin = { address, why: `${listOf(down, 'and')} unavailable` };
+    else run.missingCoin = { address, chains: d.asked };
+    await steps.step({ status: 'warn', text: chainNotFoundText(address, d), source: 'On-chain' });
+    if (dexDown || elsewhere?.down) await steps.step({ status: 'warn', text: 'DexScreener unavailable, no market data', source: 'DexScreener' });
     return;
   }
   run.chain = chain;

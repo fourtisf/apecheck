@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { hueOf, progressKey, type CheckEvidence, type CheckReportDTO } from '@apecheck/core';
+import { hueOf, isNotEnough, progressKey, type CheckEvidence, type CheckReportDTO } from '@apecheck/core';
 import {
   Client, APP_URL, EvmWallet, makeHarness, parseSse, resetState, seedCheck, seedCoinFacts, seedTarget, signedIn, type Harness,
 } from './helpers';
@@ -195,6 +195,7 @@ describe('GET /v1/checks/:id', () => {
       createdAt: s.createdAt.toISOString(),
       checkedAt: s.finishedAt.toISOString(),
       deployer: { address: DEP, chain: 'sol' },
+      otherChain: null,
       targetRaw: MINT,
       signals: { launch: 'ok', flow: 'warn', docs: 'ok', acct: 'warn', git: 'warn' },
       evidence: {
@@ -472,6 +473,23 @@ describe('GET /v1/checks/:id', () => {
     expect((await new Client(h.app).get('/v1/checks/post003')).json<CheckReportDTO>().post).toEqual({ id: null, author: 'third', text: 'gm', createdAt: null });
   });
 
+  it("names a coin on a chain ApeCheck can't read (evidence.otherChain) in the report and in the feed", async () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const t = await seedTarget(h.prisma, { kind: 'SITE', domain: 'esco.example', name: 'esco.example', key: 'site:esco.example' });
+    const evidence: CheckEvidence = { otherChain: { chain: 'Sonic', address: SONIC, site: 'esco.example' } };
+    await seedCheck(h.prisma, { targetId: t.id, shortId: 'sonic01', status: 'DONE', isLatest: true, narScore: 64, totalScore: 64, narBand: 'likely', evidence: evidence as object, finishedAt: new Date() });
+    const c = new Client(h.app);
+    const r = (await c.get('/v1/checks/sonic01')).json<CheckReportDTO>();
+    expect(r).toMatchObject({ kind: 'site', hasCoin: false, coin: null, coinScore: null, otherChain: { chain: 'Sonic', address: SONIC } });
+    const feed = (await c.get('/v1/feed')).json<{ items: CheckReportDTO[] }>();
+    expect(feed.items.find(i => i.id === 'sonic01')?.otherChain).toEqual({ chain: 'Sonic', address: SONIC });
+
+    // nothing stored, or something that doesn't hold up: null
+    const t2 = await seedTarget(h.prisma, { kind: 'SITE', domain: 'plain.example', name: 'plain.example', key: 'site:plain.example' });
+    await seedCheck(h.prisma, { targetId: t2.id, shortId: 'sonic02', status: 'DONE', isLatest: true, narScore: 50, totalScore: 50, narBand: 'partly', evidence: { otherChain: { chain: 'Sonic', address: 'nope' } }, finishedAt: new Date() });
+    expect((await c.get('/v1/checks/sonic02')).json<CheckReportDTO>().otherChain).toBeNull();
+  });
+
   it('marks the requester\'s own check as mine and hides private checks from everyone else', async () => {
     const owner = new Client(h.app);
     await owner.get('/v1/me');
@@ -518,6 +536,17 @@ describe('GET /v1/checks/:id', () => {
     await h.redis.del(progressKey(c.id));
     const fallback = (await new Client(h.app).get('/v1/checks/run0001')).json<CheckReportDTO>();
     expect(fallback.progress).toBeCloseTo(1 / 9);
+  });
+
+  it('a check that could test nothing: failed, no verdict or card, and the whole "Not enough to check" reason as its error', async () => {
+    const NONE = "Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, and its token info lists no website.";
+    const t = await seedTarget(h.prisma, { kind: 'COIN', ca: '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc', key: 'ca:evm:0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc', name: '0x17c…d1fc', domain: null });
+    const c = await seedCheck(h.prisma, { targetId: t.id, shortId: 'none001', status: 'FAILED', error: NONE, isLatest: false });
+    await h.prisma.checkStep.create({ data: { checkId: c.id, idx: 0, tMs: 900, status: 'WARN', text: NONE } });
+    const r = (await new Client(h.app).get('/v1/checks/none001')).json<CheckReportDTO>();
+    expect(r).toMatchObject({ status: 'failed', error: NONE, narScore: null, narrative: null, coin: null, cardUrl: null, hasCoin: false });
+    expect(isNotEnough(r.error)).toBe(true);
+    expect(r.steps.at(-1)).toMatchObject({ status: 'warn', text: NONE });
   });
 
   it('404s unknown and malformed ids', async () => {
