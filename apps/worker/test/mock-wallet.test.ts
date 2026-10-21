@@ -152,6 +152,12 @@ describe("the wallet's read RPC", () => {
     await readRpcFor(run)('0x2105', 'eth_blockNumber', []);
     expect(calls.map(c => c.url)).toEqual(['https://base.example/KEY']);
   });
+
+  it('ALCHEMY_API_KEY: the wallet reads through the same Alchemy endpoint as the EVM adapter', async () => {
+    const { run, calls } = readsVia({ ALCHEMY_API_KEY: 'alc_KEY' });
+    await readRpcFor(run)('0x2105', 'eth_blockNumber', []);
+    expect(calls.map(c => c.url)).toEqual(['https://base-mainnet.g.alchemy.com/v2/alc_KEY']);
+  });
 });
 
 describe('browser isolation', () => {

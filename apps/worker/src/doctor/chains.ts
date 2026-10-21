@@ -5,7 +5,7 @@
  */
 import { CHAINS, type ChainKey, type Env } from '@apecheck/core';
 import {
-  COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, EVM_READ_METHODS, PUBLIC_EVM_RPC, TRONGRID_BASE, captureErrors, jsonRpc, solanaRpcUrl,
+  COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, EVM_READ_METHODS, TRONGRID_BASE, captureErrors, jsonRpc, resolveEvmRpc, solanaRpcUrl,
   type EvmSource, type Http, type SolanaSource, type TronSource,
 } from '@apecheck/sources';
 import { hostOf } from './redact';
@@ -40,11 +40,12 @@ export const EVM_PROBE_TOKENS: Record<EvmProbeChain, { address: string; symbol: 
 };
 
 const PROVIDERS = 'Alchemy, Infura, QuickNode, Ankr, dRPC or Chainstack; free tiers exist';
+const ALCHEMY_HINT = 'set ALCHEMY_API_KEY (alchemy.com, free tier: one key covers Ethereum, Base and Arbitrum)';
 export const EVM_REMEDY: Record<EvmProbeChain | 'rh', string> = {
-  base: `set RPC_BASE to your own Base mainnet HTTPS endpoint (Coinbase Developer Platform, ${PROVIDERS})`,
-  eth: `set RPC_ETH to your own Ethereum mainnet HTTPS endpoint (${PROVIDERS})`,
+  base: `${ALCHEMY_HINT}, or set RPC_BASE to your own Base mainnet HTTPS endpoint (Coinbase Developer Platform, ${PROVIDERS})`,
+  eth: `${ALCHEMY_HINT}, or set RPC_ETH to your own Ethereum mainnet HTTPS endpoint (${PROVIDERS})`,
   bnb: 'set RPC_BSC (not RPC_BNB) to your own BNB Chain mainnet endpoint (NodeReal MegaNode, Ankr, QuickNode, Alchemy or Chainstack; free tiers exist)',
-  arb: `set RPC_ARB to your own Arbitrum One HTTPS endpoint (${PROVIDERS})`,
+  arb: `${ALCHEMY_HINT}, or set RPC_ARB to your own Arbitrum One HTTPS endpoint (${PROVIDERS})`,
   rh: 'set RPC_ROBINHOOD to a Robinhood Chain mainnet RPC URL (Robinhood Chain developer docs, or a node provider that lists it)',
 };
 
@@ -54,11 +55,15 @@ const KNOWN_CHAIN_IDS: Record<number, string> = {
   11155111: 'Sepolia', 17000: 'Holesky', 84532: 'Base Sepolia', 97: 'BNB Chain testnet', 421614: 'Arbitrum Sepolia',
 };
 
-/** The URL the EvmAdapter uses for `chain`: its RPC_* variable, else the public fallback (none for Robinhood Chain). */
-export function evmRpc(env: Env, chain: ChainKey): { url: string | null; envVar: string; fromEnv: boolean } {
+/**
+ * The URL the EvmAdapter uses for `chain` (resolveEvmRpc: its RPC_* variable, else Alchemy, else the public fallback;
+ * none for Robinhood Chain) and the variable that keys it, when one does.
+ */
+export function evmRpc(env: Env, chain: ChainKey): { url: string | null; envVar: string; keyVar: string; keyed: boolean } {
   const envVar = CHAINS[chain].rpcEnv;
-  const fromEnv = (env as unknown as Record<string, string | undefined>)[envVar];
-  return { url: fromEnv || PUBLIC_EVM_RPC[chain] || null, envVar, fromEnv: !!fromEnv };
+  const rpc = resolveEvmRpc(env, chain);
+  const keyed = rpc?.source === 'env' || rpc?.source === 'alchemy';
+  return { url: rpc?.url ?? null, envVar, keyVar: rpc?.source === 'alchemy' ? 'ALCHEMY_API_KEY' : envVar, keyed };
 }
 
 const hexNum = (v: unknown): bigint | null => (typeof v === 'string' && /^0x[0-9a-f]+$/i.test(v) ? BigInt(v) : null);
@@ -91,25 +96,25 @@ export interface EvmProbeDeps {
 export async function probeEvm(chain: EvmProbeChain, deps: EvmProbeDeps): Promise<ProbeOutcome> {
   const { env, http, evm } = deps;
   const now = deps.now ?? Date.now;
-  const { url, envVar, fromEnv } = evmRpc(env, chain);
+  const { url, envVar, keyVar, keyed } = evmRpc(env, chain);
   const remedy = EVM_REMEDY[chain];
   if (!url) return fail(`no RPC URL for ${CHAINS[chain].name}`, remedy);
-  const where = fromEnv ? `${hostOf(url)} (${envVar})` : `${hostOf(url)} (public fallback, ${envVar} empty)`;
-  const f = { configured: fromEnv, importance: 'recommended' as const };
+  const where = keyed ? `${hostOf(url)} (${keyVar})` : `${hostOf(url)} (public fallback, ${envVar} empty)`;
+  const f = { configured: keyed, importance: 'recommended' as const };
 
   let head: { chainId: bigint; block: bigint };
   try {
     head = await chainHead(http, url);
   } catch (e) {
     const msg = errorText(e);
-    return outcome({ ...f, ok: false }, `${where}: ${msg}`, networkRemedy(msg, hostOf(url)) ?? (fromEnv ? `${envVar} does not answer: check the URL and its key; ${remedy}` : remedy));
+    return outcome({ ...f, ok: false }, `${where}: ${msg}`, networkRemedy(msg, hostOf(url)) ?? (keyed ? `${keyVar} does not answer: check the URL and its key; ${remedy}` : remedy));
   }
   const expected = BigInt(CHAINS[chain].chainId ?? 0);
   if (head.chainId !== expected) {
     const name = KNOWN_CHAIN_IDS[Number(head.chainId)] ?? 'unknown chain';
     return fail(
       `${where}: wrong network, chainId ${hex(head.chainId)} (${name}), expected ${hex(expected)} (${CHAINS[chain].name})`,
-      `${envVar} must be a ${CHAINS[chain].name} mainnet endpoint: contracts are looked up on this chain through it`,
+      `${keyVar} must give a ${CHAINS[chain].name} mainnet endpoint: contracts are looked up on this chain through it`,
     );
   }
 
@@ -126,15 +131,15 @@ export async function probeEvm(chain: EvmProbeChain, deps: EvmProbeDeps): Promis
     // null: the node did not run eth_call (the adapter keeps no reason for these reads); a value: it answered wrongly
     const unread = value.symbol == null || value.decimals == null;
     const fix = unread
-      ? (fromEnv ? `${envVar} did not run eth_call (rate limit or plan): check the provider's dashboard` : remedy)
-      : `${envVar} answers eth_call unexpectedly: try another provider`;
+      ? (keyed ? `${keyVar} did not run eth_call (rate limit or plan): check the provider's dashboard` : remedy)
+      : `${keyVar} answers eth_call unexpectedly: try another provider`;
     return fail(`${headText}; ${t.symbol} decoded as symbol=${value.symbol} decimals=${value.decimals}${errors.length ? ` (${errors[0]})` : ''}`, fix);
   }
   const notes: string[] = [];
   if (errors.length) notes.push(`${errors.length} read(s) failed: ${errors[0]}`);
   if (ms > TOKEN_BASICS_BUDGET_MS) notes.push(`token read took ${ms} ms, over the ${TOKEN_BASICS_BUDGET_MS / 1000} s a check gives it`);
   const detail = `${headText}, ${t.symbol} symbol=${value.symbol} decimals=${value.decimals} in ${ms} ms${notes.length ? `; ${notes.join('; ')}` : ''}`;
-  return outcome({ ...f, ok: true, degraded: notes.length > 0 }, detail, fromEnv ? `${envVar} is slow or rate limited: use a faster plan or provider` : remedy);
+  return outcome({ ...f, ok: true, degraded: notes.length > 0 }, detail, keyed ? `${keyVar} is slow or rate limited: use a faster plan or provider` : remedy);
 }
 
 /** Robinhood Chain: no public fallback and no expected chain id in the code, so liveness only. */
@@ -306,8 +311,8 @@ export async function probeTron(deps: { env: Env; http: Http; tron: Pick<TronSou
 export function endpointRows(env: Env): [label: string, host: string, source: string][] {
   const rows: [string, string, string][] = [];
   for (const chain of [...EVM_PROBE_CHAINS, 'rh'] as ChainKey[]) {
-    const { url, envVar, fromEnv } = evmRpc(env, chain);
-    rows.push([CHAINS[chain].name, url ? hostOf(url) : '-', fromEnv ? envVar : url ? `public fallback (${envVar} empty)` : `not configured (${envVar} empty)`]);
+    const { url, envVar, keyVar, keyed } = evmRpc(env, chain);
+    rows.push([CHAINS[chain].name, url ? hostOf(url) : '-', keyed ? keyVar : url ? `public fallback (${envVar} empty)` : `not configured (${envVar} empty)`]);
   }
   const sol = solanaRpc(env);
   rows.push(['Solana', sol.host, sol.source]);

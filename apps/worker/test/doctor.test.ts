@@ -229,7 +229,7 @@ describe('EVM probes', () => {
     const r = await probeEvm('base', { env: prodEnv(), http, evm });
     expect(r.status).toBe('WARN');
     expect(r.detail).toContain('mainnet.base.org (public fallback, RPC_BASE empty), chainId 0x2105, block 23,456,789, USDC symbol=USDC decimals=6');
-    expect(r.remedy).toMatch(/^set RPC_BASE/);
+    expect(r.remedy).toMatch(/^set ALCHEMY_API_KEY .*, or set RPC_BASE /);
     expect(evm.tokenBasics).toHaveBeenCalledWith('base', '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913');
     // only read methods, to the fallback host
     expect(http.calls.map(c => [new URL(c.url).host, JSON.parse(String(c.req.body)).method]).sort()).toEqual([
@@ -244,13 +244,19 @@ describe('EVM probes', () => {
     expect(r.detail).toMatch(/^eth-mainnet\.g\.alchemy\.com \(RPC_ETH\), chainId 0x1, block 16/);
     expect(r.detail).not.toContain('KEY123');
   });
+  it('PASS through ALCHEMY_API_KEY alone, named as the source', async () => {
+    const env = prodEnv({ ALCHEMY_API_KEY: 'alcKEY999' });
+    const r = await probeEvm('base', { env, http: fakeHttp(rpcNode({ eth_chainId: '0x2105', eth_blockNumber: '0x10' })), evm: { tokenBasics: async () => usdc } });
+    expect(r.status).toBe('PASS');
+    expect(r.detail).toMatch(/^base-mainnet\.g\.alchemy\.com \(ALCHEMY_API_KEY\), chainId 0x2105/);
+  });
   it('an RPC on the wrong network is a FAIL naming the network it is on', async () => {
     const env = prodEnv({ RPC_BASE: 'https://eth.example/v2/KEY' });
     const evm = { tokenBasics: vi.fn(async () => usdc) };
     const r = await probeEvm('base', { env, http: fakeHttp(rpcNode({ eth_chainId: '0x1', eth_blockNumber: '0x10' })), evm });
     expect(r.status).toBe('FAIL');
     expect(r.detail).toContain('wrong network, chainId 0x1 (Ethereum), expected 0x2105 (Base)');
-    expect(r.remedy).toMatch(/RPC_BASE must be a Base mainnet endpoint/);
+    expect(r.remedy).toMatch(/RPC_BASE must give a Base mainnet endpoint/);
     expect(evm.tokenBasics).not.toHaveBeenCalled();
   });
   it('a token the node would not read (eth_call refused) is a FAIL with the fix for that endpoint', async () => {
@@ -259,7 +265,7 @@ describe('EVM probes', () => {
     const keyless = await probeEvm('base', { env: prodEnv(), http, evm });
     expect(keyless).toMatchObject({ status: 'FAIL' });
     expect(keyless.detail).toContain('USDC decoded as symbol=null decimals=null');
-    expect(keyless.remedy).toMatch(/^set RPC_BASE/);
+    expect(keyless.remedy).toMatch(/^set ALCHEMY_API_KEY .*, or set RPC_BASE /);
     const keyed = await probeEvm('base', { env: prodEnv({ RPC_BASE: 'https://base.example/KEY' }), http, evm });
     expect(keyed.remedy).toMatch(/RPC_BASE did not run eth_call/);
   });
@@ -545,5 +551,15 @@ describe('header', () => {
     expect(text).toMatch(/Robinhood Chain +- +not configured \(RPC_ROBINHOOD empty\)/);
     expect(text).not.toContain('KEY123');
     expect(text).not.toContain('h'.repeat(20));
+  });
+  it('ALCHEMY_API_KEY keys Ethereum, Base and Arbitrum (host only, key redacted); BNB stays on its public node', () => {
+    const env = prodEnv({ ALCHEMY_API_KEY: 'alcKEYsecret123' });
+    const text = headerLines(env, { envFile: '/srv/apecheck/app/.env', envFileExists: true, user: 'apecheck', now: new Date(0) }).join('\n');
+    expect(text).toMatch(/Base +base-mainnet\.g\.alchemy\.com +ALCHEMY_API_KEY/);
+    expect(text).toMatch(/Ethereum +eth-mainnet\.g\.alchemy\.com +ALCHEMY_API_KEY/);
+    expect(text).toMatch(/Arbitrum +arb-mainnet\.g\.alchemy\.com +ALCHEMY_API_KEY/);
+    expect(text).toMatch(/BNB Chain +bsc-dataseed\.binance\.org +public fallback \(RPC_BSC empty\)/);
+    expect(text).not.toContain('alcKEYsecret123');
+    expect(new Redactor(env).text('GET https://eth-mainnet.g.alchemy.com/v2/alcKEYsecret123 failed')).not.toContain('alcKEYsecret123');
   });
 });

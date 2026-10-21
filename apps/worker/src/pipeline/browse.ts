@@ -5,7 +5,7 @@
  * answered throws BrowserUnavailable: the check ends FAILED, without a verdict.
  */
 import { CHAINS, normalizeDomain, type ChainKey } from '@apecheck/core';
-import { PUBLIC_EVM_RPC } from '@apecheck/sources';
+import { resolveEvmRpc } from '@apecheck/sources';
 import { Explorer, type ExploreResult, type SimOutcome } from '../browser/agent';
 import { COMING_SOON_RE, CONNECT_RE, NEEDS_FUNDS_RE, SIM_INFRA_RE, WAITLIST_RE, isAppUrl, launchRank, AUDIT_RE } from '../browser/keywords';
 import { chainFromHex, evmChainIdHex, type CapturedTx } from '../browser/mock-wallet';
@@ -35,12 +35,11 @@ export class BrowserUnavailable extends Error {
   }
 }
 
-/** The mock wallet's reads (a dApp's eth_call / eth_getCode / eth_blockNumber): RPC_* or the chain's public RPC, as the EVM adapter. */
+/** The mock wallet's reads (a dApp's eth_call / eth_getCode / eth_blockNumber): the same RPC as the EVM adapter. */
 export function readRpcFor(run: CheckRun) {
-  const env = run.env as unknown as Record<string, string | undefined>;
   return async (chainIdHex: string, method: string, params: unknown[]) => {
     const chain = chainFromHex(chainIdHex);
-    const url = chain ? env[CHAINS[chain].rpcEnv] || PUBLIC_EVM_RPC[chain] : undefined;
+    const url = chain ? resolveEvmRpc(run.env, chain)?.url : undefined;
     if (!url) throw new Error('no RPC for this chain');
     const res = await run.sources.http.json<{ result?: unknown; error?: { message?: string } }>(url, {
       method: 'POST',

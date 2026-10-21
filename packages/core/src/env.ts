@@ -69,6 +69,8 @@ export const EnvZ = z.object({
   BOT_INCLUDE_LINK: bool(false),
 
   HELIUS_API_KEY: optStr(),
+  /** one key for Ethereum, Base and Arbitrum RPCs (RPC_ETH / RPC_BASE / RPC_ARB override it) */
+  ALCHEMY_API_KEY: optStr(),
   ETHERSCAN_API_KEY: optStr(),
   TRONGRID_API_KEY: optStr(),
   RPC_SOLANA: optStr(),

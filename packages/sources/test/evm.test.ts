@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEvm, EVM_READ_METHODS, PUBLIC_EVM_RPC } from '../src/adapters/evm';
+import { createEvm, EVM_READ_METHODS, PUBLIC_EVM_RPC, resolveEvmRpc } from '../src/adapters/evm';
 import {
   bytecodeSelectors, decodeAbiString, decodeRevert, EIP1822_PROXIABLE_SLOT, EIP1967_BEACON_SLOT, EIP1967_IMPL_SLOT, MINT_SELECTORS,
   ownerlessRenounced, looksLikeProxy, ZEPPELINOS_IMPL_SLOT,
@@ -63,6 +63,22 @@ describe('EVM adapter: RPC selection', () => {
     expect(await evm.getCode('base', TOKEN)).toBe('0x60');
     expect(http.calls[0].url).toBe('https://base.rpc.example/key');
     expect(http.calls[0].body).toMatchObject({ jsonrpc: '2.0', method: 'eth_getCode', params: [TOKEN, 'latest'] });
+  });
+
+  it('one ALCHEMY_API_KEY keys Ethereum, Base and Arbitrum; RPC_* still wins; BNB and Robinhood Chain are not covered', () => {
+    const env = testEnv({ ALCHEMY_API_KEY: 'alc_KEY', RPC_ARB: 'https://arb.own.example/k' });
+    expect(resolveEvmRpc(env, 'eth')).toEqual({ url: 'https://eth-mainnet.g.alchemy.com/v2/alc_KEY', source: 'alchemy' });
+    expect(resolveEvmRpc(env, 'base')).toEqual({ url: 'https://base-mainnet.g.alchemy.com/v2/alc_KEY', source: 'alchemy' });
+    expect(resolveEvmRpc(env, 'arb')).toEqual({ url: 'https://arb.own.example/k', source: 'env' });
+    expect(resolveEvmRpc(env, 'bnb')).toEqual({ url: PUBLIC_EVM_RPC.bnb, source: 'public' });
+    expect(resolveEvmRpc(env, 'rh')).toBeNull();
+    expect(resolveEvmRpc(testEnv(), 'eth')).toEqual({ url: PUBLIC_EVM_RPC.eth, source: 'public' });
+  });
+
+  it('the adapter reads through Alchemy when ALCHEMY_API_KEY is set', async () => {
+    const http = fakeHttp(rpcHandler('eth-mainnet.g.alchemy.com', { eth_getCode: () => '0x60' }));
+    expect(await createEvm(testEnv({ ALCHEMY_API_KEY: 'alc_KEY' }), http).getCode('eth', TOKEN)).toBe('0x60');
+    expect(http.calls[0].url).toBe('https://eth-mainnet.g.alchemy.com/v2/alc_KEY');
   });
 
   it('stubs(): etherscan without a key, rpc-rh without RPC_ROBINHOOD', () => {

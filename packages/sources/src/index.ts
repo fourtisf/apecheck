@@ -29,7 +29,7 @@ export {
 } from './coin-facts';
 export { createDexScreener, DexScreenerAdapter } from './adapters/dexscreener';
 export {
-  createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, DETECT_RETRY_DELAY_MS, ERC1271_MAGIC, ERC1271_MAGIC_WORD, ERC1271_TIMEOUT_MS, encodeIsValidSignature,
+  createEvm, EvmAdapter, EVM_READ_METHODS, PUBLIC_EVM_RPC, ALCHEMY_NETWORKS, resolveEvmRpc, type EvmRpcSource, DETECT_RETRY_DELAY_MS, ERC1271_MAGIC, ERC1271_MAGIC_WORD, ERC1271_TIMEOUT_MS, encodeIsValidSignature,
   type EvmOptions,
 } from './adapters/evm';
 export { createSolana, SolanaAdapter, SOL_READ_METHODS, SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM, solanaRpcUrl } from './adapters/solana';

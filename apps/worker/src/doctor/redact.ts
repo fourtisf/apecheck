@@ -12,7 +12,7 @@ export const WS_PATH_LABEL = '/<BROWSER_WS_PATH>';
 /** values that are secrets as a whole */
 const SECRET_VARS = [
   'SESSION_SECRET', 'ANTHROPIC_API_KEY', 'X_API_KEY', 'X_API_SECRET', 'X_ACCESS_TOKEN', 'X_ACCESS_SECRET', 'X_BEARER_TOKEN',
-  'X_OAUTH2_CLIENT_SECRET', 'HELIUS_API_KEY', 'ETHERSCAN_API_KEY', 'TRONGRID_API_KEY', 'FOURTIS_API_KEY', 'GITHUB_TOKEN',
+  'X_OAUTH2_CLIENT_SECRET', 'HELIUS_API_KEY', 'ALCHEMY_API_KEY', 'ETHERSCAN_API_KEY', 'TRONGRID_API_KEY', 'FOURTIS_API_KEY', 'GITHUB_TOKEN',
 ] as const;
 /** URLs whose user info, path or query may carry a key (provider RPC URLs, the Fourtis base, a proxy with credentials) */
 const KEYED_URL_VARS = ['RPC_SOLANA', 'RPC_ETH', 'RPC_BASE', 'RPC_BSC', 'RPC_ARB', 'RPC_ROBINHOOD', 'FOURTIS_API_URL', 'AI_BASE_URL', 'OUTBOUND_PROXY'] as const;

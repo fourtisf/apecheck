@@ -48,7 +48,7 @@ through the real queue), deploy checks. `pnpm -r typecheck` and `next build` are
 ## Empty `.env` values
 
 `ANTHROPIC_API_KEY` · `X_API_KEY` `X_API_SECRET` `X_ACCESS_TOKEN` `X_ACCESS_SECRET` `X_BEARER_TOKEN` `X_BOT_USER_ID` ·
-`X_OAUTH2_CLIENT_ID` `X_OAUTH2_CLIENT_SECRET` (X account linking) · `HELIUS_API_KEY` `ETHERSCAN_API_KEY` `TRONGRID_API_KEY` ·
+`X_OAUTH2_CLIENT_ID` `X_OAUTH2_CLIENT_SECRET` (X account linking) · `HELIUS_API_KEY` `ALCHEMY_API_KEY` (Ethereum, Base and Arbitrum in one key) `ETHERSCAN_API_KEY` `TRONGRID_API_KEY` ·
 `RPC_ROBINHOOD` (other RPCs fall back to public endpoints) · `FOURTIS_API_URL` `FOURTIS_API_KEY` · `GITHUB_TOKEN` (works
 unauthenticated at 60 requests/hour) · `TOKEN_ADDRESS` · production `SESSION_SECRET`, database password, `BACKUP_REMOTE`;
 `BROWSER_WS_ENDPOINT` is filled in by `deploy/browser/install.sh`.

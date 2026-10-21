@@ -50,9 +50,30 @@ export const PUBLIC_EVM_RPC: Partial<Record<ChainKey, string>> = {
   arb: 'https://arb1.arbitrum.io/rpc',
 };
 
+/**
+ * Alchemy's network names: one ALCHEMY_API_KEY gives these chains a keyed RPC, the way HELIUS_API_KEY does for Solana.
+ * BNB Chain and Robinhood Chain keep RPC_BSC / RPC_ROBINHOOD.
+ */
+export const ALCHEMY_NETWORKS: Partial<Record<ChainKey, string>> = { eth: 'eth-mainnet', base: 'base-mainnet', arb: 'arb-mainnet' };
+
 export const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
 
-type EvmEnv = Pick<Env, 'RPC_BASE' | 'RPC_ETH' | 'RPC_BSC' | 'RPC_ARB' | 'RPC_ROBINHOOD' | 'ETHERSCAN_API_KEY'>;
+type EvmEnv = Pick<Env, 'RPC_BASE' | 'RPC_ETH' | 'RPC_BSC' | 'RPC_ARB' | 'RPC_ROBINHOOD' | 'ALCHEMY_API_KEY' | 'ETHERSCAN_API_KEY'>;
+
+export type EvmRpcSource = 'env' | 'alchemy' | 'public';
+
+/**
+ * The RPC every EVM read for `chain` uses (the adapter, the mock wallet, the doctor): its RPC_* variable, else Alchemy
+ * when ALCHEMY_API_KEY is set, else the chain's public endpoint; null when there is none (Robinhood Chain).
+ */
+export function resolveEvmRpc(env: Partial<EvmEnv>, chain: ChainKey): { url: string; source: EvmRpcSource } | null {
+  const fromEnv = (env as Record<string, string | undefined>)[CHAINS[chain].rpcEnv];
+  if (fromEnv) return { url: fromEnv, source: 'env' };
+  const network = ALCHEMY_NETWORKS[chain];
+  if (network && env.ALCHEMY_API_KEY) return { url: `https://${network}.g.alchemy.com/v2/${encodeURIComponent(env.ALCHEMY_API_KEY)}`, source: 'alchemy' };
+  const pub = PUBLIC_EVM_RPC[chain];
+  return pub ? { url: pub, source: 'public' } : null;
+}
 
 const EVM_CHAINS = (Object.keys(CHAINS) as ChainKey[]).filter(c => CHAINS[c].family === 'evm');
 
@@ -123,9 +144,8 @@ export class EvmAdapter implements EvmWalletSource {
 
   constructor(private readonly env: EvmEnv, private readonly http: Http, private readonly opts: EvmOptions = {}) {
     for (const c of EVM_CHAINS) {
-      const fromEnv = (env as Record<string, string | undefined>)[CHAINS[c].rpcEnv];
-      const url = fromEnv || PUBLIC_EVM_RPC[c];
-      if (url) this.rpcUrls[c] = url;
+      const rpc = resolveEvmRpc(env, c);
+      if (rpc) this.rpcUrls[c] = rpc.url;
     }
     if (!this.rpcUrls.rh) {
       warnOnce('rpc-rh', 'Robinhood Chain RPC not configured (RPC_ROBINHOOD empty): Robinhood Chain contracts are skipped');
