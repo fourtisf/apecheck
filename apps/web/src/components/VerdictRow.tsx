@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { KIND_LABEL, fmtUsd, type CheckSummaryDTO } from '@apecheck/core';
+import { KIND_LABEL, fmtUsd, otherChainCoinText, type CheckSummaryDTO } from '@apecheck/core';
 import { reportPath } from '@/lib/env';
 import { Avatar } from './Avatar';
 import { Pct, ScoreChip } from './Badges';
@@ -16,6 +16,14 @@ export interface VerdictItemProps {
 
 /** Coin cell shared by the row and the grid card. */
 export function CoinCell({ item }: { item: CheckSummaryDTO }) {
+  // a coin on a chain ApeCheck can't read is named (the full sentence on hover), never "No coin linked"
+  if (!item.hasCoin && item.otherChain) {
+    return (
+      <span className="mm-nil" title={otherChainCoinText(item.otherChain.chain)}>
+        Coin on {item.otherChain.chain}: not checked
+      </span>
+    );
+  }
   // a pasted contract that couldn't be read still is a coin: "—", never "No coin linked"
   if (!item.hasCoin) return <span className="mm-nil">{item.kind === 'coin' ? '—' : 'No coin linked'}</span>;
   if (item.coinScore == null) return <span className="mm-nil">—</span>;

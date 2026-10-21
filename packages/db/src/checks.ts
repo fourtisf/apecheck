@@ -33,9 +33,15 @@ export function sameTargetWhere(d: CheckTarget): Prisma.TargetWhereInput {
   }
 }
 
-/** Checks of the same project: the target rule above, plus any check of the same X post id. */
+/**
+ * Checks of the same project: the target rule above, plus any check of the same X post id, plus any check of the same
+ * pasted or tagged EVM contract (Check.targetRaw, any case). The worker moves a contract that trades only on a chain
+ * ApeCheck can't read (Sonic, Polygon…) to the website in its token info, so that check's Target is the site, not
+ * the contract: without the targetRaw match every paste of the same contract would run (and spend) a new check.
+ */
 export function sameCheckWhere(d: CheckTarget): Prisma.CheckWhereInput {
   if (d.kind === 'xpost' && d.postId) return { OR: [{ postId: d.postId }, { target: { key: targetKey(d) } }] };
+  if (d.kind === 'evm') return { OR: [{ target: sameTargetWhere(d) }, { targetRaw: { equals: d.address, mode: 'insensitive' } }] };
   return { target: sameTargetWhere(d) };
 }
 

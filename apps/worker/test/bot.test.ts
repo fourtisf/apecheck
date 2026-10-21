@@ -15,7 +15,7 @@ import type { PipelineDeps } from '../src/pipeline/context';
 import { LOCK_KEY, SINCE_KEY, currentSinceId, pollOnce, startBotWorker } from '../src/bot/index';
 import { handleMention, type BotDeps } from '../src/bot/handle';
 import { RetryReplyError, isRetryable, processReply, replyBackoff } from '../src/bot/reply';
-import { FAILED_TEXT, HELP_TEXT, PRO_POINTER_TEXT } from '../src/bot/compose';
+import { FAILED_TEXT, HELP_TEXT, PRO_POINTER_TEXT, fitsX } from '../src/bot/compose';
 import { FakeX, post, replyTo, tweetId } from './fake-x';
 import { createCheck, heuristicAi, prisma, resetDb, testEnv } from './helpers';
 import { fakeSources, xUser } from './fakes';
@@ -330,6 +330,27 @@ describe('checks', () => {
     // no card saved under SCREENSHOT_DIR: fetched from the web's /card route
     expect(fetched).toEqual([web.shortId]);
     expect(x.replies[0]).toMatchObject({ text: `REAL (82/100)\nThe app works end to end.\n${BOT_DISCLAIMER}`, media: PNG });
+  });
+
+  it("a Sonic contract tagged again after its check moved to the site in its token info: cached, and the reply says what the verdict is for", async () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const { deps, x, checks, replies } = harness();
+    const first = await createCheck(SONIC);
+    // the worker: no reads on Sonic, so the check is of esco.example (the Target re-keyed to the site)
+    await prisma.target.update({ where: { id: first.targetId }, data: { key: 'site:esco.example', kind: 'SITE', domain: 'esco.example', name: 'esco.example' } });
+    await finish(first.id, { narScore: 64, narBand: 'likely', summary: 'The app loads and the swap reaches a transaction.' });
+    await prisma.check.update({ where: { id: first.id }, data: { evidence: { otherChain: { chain: 'Sonic', address: SONIC, site: 'esco.example' } } } });
+
+    const m = post({ text: `@ApeCheckBot CA: ${SONIC} legit?` });
+    expect(await handleMention(deps, m)).toMatchObject({ action: 'check', checkId: first.id, reuse: 'cached', replyNow: true });
+    expect(checks).toEqual([]);
+    expect(await processReply(deps, replies[0])).toBe('replied');
+    const text = x.replies[0].text;
+    expect(text).toBe(
+      "LIKELY REAL (64/100)\nThis verdict is for esco[.]example, the website in the token's info; the coin on Sonic wasn't checked.\n" +
+        `The app loads and the swap reaches a transaction.\n${BOT_DISCLAIMER}`,
+    );
+    expect(fitsX(text)).toBe(true);
   });
 
   it('an old verdict starts a new check; a running one is joined and answered by Stage F', async () => {

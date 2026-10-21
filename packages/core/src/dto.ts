@@ -208,6 +208,12 @@ export interface CheckSummaryDTO {
   checkedAt: string | null;
   /** the coin's deployer wallet, when it is known (CoinFactsDTO.deployerAddress) */
   deployer: { address: string; chain: ChainKey } | null;
+  /**
+   * The project's coin is on a chain ApeCheck can't read yet (Check.evidence.otherChain): `chain` is its name
+   * ("Sonic"), `address` the contract. Not checked and not scored ("Coin on Sonic: not checked"), so never "No coin
+   * linked". Absent or null otherwise.
+   */
+  otherChain?: { chain: string; address: string } | null;
 }
 
 export interface CheckReportDTO extends CheckSummaryDTO {

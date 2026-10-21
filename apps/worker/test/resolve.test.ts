@@ -1,12 +1,12 @@
 /** Stage A: target detection and gap filling with FakeSources, Target re-keying in the test database. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createX, reportError, type Http, type Sources } from '@apecheck/sources';
+import { createX, reportError, type DexOtherChainToken, type Http, type Sources } from '@apecheck/sources';
 import { memoryLogger } from '../src/log';
 import { CheckRun, type PipelineDeps } from '../src/pipeline/context';
 import { findCoin, finishResolve, projectSite, resolveStage, saveTarget, xHandleFromLinks } from '../src/pipeline/resolve';
 import { StepLogger } from '../src/pipeline/steps';
-import { serveFixture, type FixtureSite } from './fixture-server';
-import { dexInfo, fakeSources, xUser, type FakeData, type FakeSources } from './fakes';
+import { serveFixture, serveHandler, type FixtureSite } from './fixture-server';
+import { dexInfo, dexOther, fakeSources, xUser, type FakeData, type FakeSources } from './fakes';
 import { createCheck, heuristicAi, memoryStepDeps, prisma, resetDb, testEnv } from './helpers';
 
 let coinSite: FixtureSite;
@@ -216,6 +216,127 @@ describe('Stage A — resolve', () => {
       expect(run.market).toBeNull();
     });
   });
+
+  describe('a contract DexScreener lists only on a chain ApeCheck has no reads for (Sonic)', () => {
+    // the production case: an ESCO-ecosystem token on Sonic, tagged as "CA: 0x17c6…"
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const ON_SONIC = "warn|DexScreener|Contract on Sonic: 0x17c…d1fc (on-chain reads aren't supported there yet, so the coin isn't checked)";
+    const listed = (p: Partial<DexOtherChainToken> = {}): FakeData => ({ dexOther: { [SONIC]: dexOther({ address: SONIC, ...p }) } });
+    const withSite = listed({
+      websites: ['https://dexscreener.com/sonic/0xpair', 'https://esco.example'],
+      socials: [{ type: 'twitter', url: 'https://x.com/escofinance' }, { type: 'telegram', url: 'https://t.me/escofi' }],
+    });
+
+    it('names the chain, scores no coin, and checks the website from its token info instead (the Target becomes the site)', async () => {
+      const { texts, target, run } = await resolve(SONIC, withSite);
+      expect(texts).toEqual([ON_SONIC, 'ok|DexScreener|Token metadata: website esco.example, X @escofinance', "info||Checking the project's website instead: esco.example"]);
+      expect(run).toMatchObject({
+        kind: 'site', chain: null, ca: null, market: null, siteUrl: 'https://esco.example/', handle: 'escofinance',
+        otherChain: { address: SONIC, chain: 'Sonic', site: 'esco.example' },
+      });
+      expect(run.hasCoin()).toBe(false);
+      expect(run.links).toMatchObject({ site: 'https://esco.example/', x: 'https://x.com/escofinance', telegram: 'https://t.me/escofi' });
+      // the Sonic token's ticker is not the site's: a site Target's ticker is that of its own coin (see below)
+      expect(run.ticker).toBeNull();
+      expect(target).toMatchObject({ key: 'site:esco.example', kind: 'SITE', name: 'esco.example', domain: 'esco.example', handle: 'escofinance', ticker: null, chain: null });
+      expect(await prisma.target.count({ where: { key: `ca:evm:${SONIC}` } })).toBe(0);
+      // no on-chain reads anywhere for it: never the coin facts, never "not found on the chains searched"
+      expect((run.sources as FakeSources).calls.filter(c => c.startsWith('coinFacts'))).toEqual([]);
+      expect(texts.some(t => /not found/i.test(t))).toBe(false);
+    });
+
+    it("a site that already has a Target keeps its own coin and ticker: the Sonic contract and its ticker aren't written over them", async () => {
+      const BASE_COIN = '0x7777777777777777777777777777777777777777';
+      const owner = await prisma.target.create({
+        data: { key: 'site:esco.example', kind: 'SITE', domain: 'esco.example', chain: 'BASE', ca: BASE_COIN, ticker: 'BASEY', name: 'esco.example', checkCount: 1 },
+      });
+      const { run, target } = await resolve(SONIC, withSite);
+      expect(run.targetId).toBe(owner.id);
+      expect(target).toMatchObject({ id: owner.id, chain: 'BASE', ca: BASE_COIN, ticker: 'BASEY', checkCount: 2 });
+    });
+
+    it('without a website in its token info: names the chain and claims nothing else (no site, no coin, no "not found")', async () => {
+      const { texts, target, run } = await resolve(SONIC, listed());
+      expect(texts).toEqual([ON_SONIC, 'info|DexScreener|No website in the token metadata']);
+      expect(run).toMatchObject({ kind: 'coin', chain: null, market: null, siteUrl: null, handle: null, coinAnnounced: true, otherChain: { address: SONIC, chain: 'Sonic', site: null } });
+      expect(run.hasCoin()).toBe(false);
+      // the contract's own Target: its ticker is this token's
+      expect(target).toMatchObject({ key: `ca:evm:${SONIC}`, kind: 'COIN', chain: null, domain: null, ticker: 'ESCO' });
+    });
+
+    // a treasury multisig with code on Ethereum next to the Sonic contract on the project's site: it is not "the only
+    // address" there just because the Sonic one was named already, so it is never scored as the project's coin
+    const TREASURY = '0x9999999999999999999999999999999999999999';
+    for (const [what, sonicLine] of [
+      ['unlabelled', `Trade ESCO on Sonic ${SONIC}`],
+      ['labelled "CA:"', `CA: ${SONIC}`],
+    ] as const) {
+      it(`the site's HTML (scanSiteHtml): the Sonic contract ${what} next to a treasury multisig is not read as a coin on Ethereum`, async () => {
+        const site = await serveHandler('esco-site', (_req, res) => {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          res.end(`<!doctype html><title>Esco</title><h1>Esco on Sonic</h1><p>${sonicLine}</p><p>Treasury multisig: ${TREASURY}</p>`);
+        });
+        try {
+          const { texts, target, run } = await resolve(SONIC, {
+            ...listed({ websites: [site.url] }),
+            allowHosts: [site.host],
+            evmChains: { [TREASURY]: 'eth' },
+          });
+          expect(texts).toEqual([ON_SONIC, `ok|DexScreener|Token metadata: website ${site.host.split(':')[0]}`, `info||Checking the project's website instead: ${site.host.split(':')[0]}`]);
+          expect(run).toMatchObject({ kind: 'site', chain: null, ca: null, otherChain: { address: SONIC, site: site.host.split(':')[0] } });
+          expect(run.hasCoin()).toBe(false);
+          expect(target).toMatchObject({ kind: 'SITE', chain: null });
+          const calls = (run.sources as FakeSources).calls;
+          // the Sonic contract is not looked up again, and the multisig is never taken for the coin
+          expect(calls.filter(c => c.includes(SONIC))).toEqual([`evm.detectChain ${SONIC}`, `dex.token ${SONIC}`, `dex.otherChain ${SONIC}`]);
+          expect(calls).not.toContain(`evm.detectChain ${TREASURY}`);
+        } finally {
+          await site.close();
+        }
+      });
+    }
+
+    it('an X account but no website: the account is named, nothing else is taken', async () => {
+      const { texts, run } = await resolve(SONIC, listed({ socials: [{ type: 'twitter', url: 'https://x.com/escofinance' }] }));
+      expect(texts).toEqual([ON_SONIC, 'ok|DexScreener|Token metadata: X @escofinance', 'info|DexScreener|No website in the token metadata']);
+      expect(run).toMatchObject({ kind: 'coin', siteUrl: null, handle: 'escofinance' });
+    });
+
+    it('an RPC that did not answer is said, next to the chain DexScreener lists it on', async () => {
+      const { texts } = await resolve(SONIC, withSite, s => {
+        s.evm.detectChain = async () => {
+          reportError('evm.getCode bnb: HTTP 429 from bsc-dataseed.bnbchain.org');
+          return null;
+        };
+      });
+      expect(texts.slice(0, 2)).toEqual([ON_SONIC, 'warn|On-chain|BNB Chain RPC unavailable; DexScreener lists the contract on Sonic']);
+    });
+
+    it('DexScreener not answering for other chains: "not found" on the chains asked, and DexScreener named as unavailable', async () => {
+      const { texts } = await resolve(SONIC, withSite, s => {
+        s.dex.otherChain = async () => {
+          reportError('dexscreener.otherChain: HTTP 503 from api.dexscreener.com');
+          return null;
+        };
+      });
+      expect(texts).toEqual(['warn|On-chain|Contract 0x17c…d1fc not found on Base, Ethereum, BNB Chain or Arbitrum', 'warn|DexScreener|DexScreener unavailable, no market data']);
+    });
+
+    it('in an X post without a link: named in the post, and its website is the one checked', async () => {
+      const post = {
+        id: '1849010', text: `Dex paid.\nCA: ${SONIC}`, authorId: '7', authorHandle: 'escofinance', authorName: 'Esco',
+        createdAt: null, conversationId: null, urls: [], mentions: [], cashtags: [], replyToId: null, quotedId: null, author: null,
+      };
+      const { texts, target, run } = await resolve('https://x.com/escofinance/status/1849010', { ...withSite, posts: { '1849010': post } });
+      expect(texts).toEqual([
+        'info|X|Reading post by @escofinance',
+        "warn|DexScreener|Contract found in post: 0x17c…d1fc on Sonic (on-chain reads aren't supported there yet, so the coin isn't checked)",
+        'ok|DexScreener|Token metadata: website esco.example',
+      ]);
+      expect(run).toMatchObject({ kind: 'post', chain: null, siteUrl: 'https://esco.example/', coinAnnounced: true, otherChain: { address: SONIC, chain: 'Sonic', site: null } });
+      expect(target).toMatchObject({ key: 'post:1849010', kind: 'POST', domain: 'esco.example', chain: null, ca: null });
+    });
+  });
 });
 
 describe('resolve helpers', () => {
@@ -233,6 +354,30 @@ describe('resolve helpers', () => {
     const sig = new AbortController().signal;
     expect(await findCoin(run, `see ${PEPE} and ${USDC}`, sig)).toBeNull();
     expect(await findCoin(run, `pool ${USDC}. Contract address: ${PEPE}`, sig)).toMatchObject({ chain: 'base', ca: PEPE });
+  });
+  it("findCoin: a labelled address on none of ApeCheck's chains but listed on Sonic comes back as that, and is never looked up twice", async () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const sources = fakeSources(testEnv(), { dexOther: { [SONIC]: dexOther({ address: SONIC }) } });
+    const run = { sources, otherChain: null } as unknown as CheckRun;
+    const sig = new AbortController().signal;
+    expect(await findCoin(run, `Dex paid. CA: ${SONIC}`, sig)).toMatchObject({ ca: SONIC, other: { dexChain: 'sonic', chainName: 'Sonic' } });
+    run.otherChain = { address: SONIC, chain: 'Sonic', site: null };
+    sources.calls.length = 0;
+    expect(await findCoin(run, `Dex paid. CA: ${SONIC.toUpperCase().replace('0X', '0x')}`, sig)).toBeNull();
+    expect(sources.calls).toEqual([]);
+  });
+  it('findCoin: the contract already named on another chain still counts, so a second unlabelled address is never "the only one"', async () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const TREASURY = '0x9999999999999999999999999999999999999999';
+    const sources = fakeSources(testEnv(), { dexOther: { [SONIC]: dexOther({ address: SONIC }) }, evmChains: { [TREASURY]: 'eth' } });
+    const run = { sources, otherChain: { address: SONIC, chain: 'Sonic', site: null }, unconfirmedCoin: null } as unknown as CheckRun;
+    const sig = new AbortController().signal;
+    expect(await findCoin(run, `ESCO ${SONIC}\nTreasury ${TREASURY}`, sig)).toBeNull();
+    expect(await findCoin(run, `Token address: ${SONIC}\nTreasury ${TREASURY}`, sig)).toBeNull();
+    // only the treasury is looked up on DexScreener; nothing is taken as the coin, so no chain is asked for it
+    expect(sources.calls).toEqual([`dex.token ${TREASURY}`, `dex.token ${TREASURY}`]);
+    // alone, a labelled treasury would still be the page's coin (the rule for every page)
+    expect(await findCoin(run, `Contract: ${TREASURY}`, sig)).toMatchObject({ chain: 'eth', ca: TREASURY });
   });
   it('findCoin never takes a stablecoin the page mentions for its pool', async () => {
     const env2 = testEnv();

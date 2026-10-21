@@ -146,6 +146,14 @@ export function lpLabel(lpStatus: string | null | undefined): string {
   return lpStatus;
 }
 
+/**
+ * A coin on a chain ApeCheck has no on-chain reads for (CheckEvidence.otherChain), as the report and the feed say it:
+ * "Coin on Sonic: not checked (ApeCheck can't read that chain yet)".
+ */
+export function otherChainCoinText(chain: string): string {
+  return `Coin on ${chain}: not checked (ApeCheck can't read that chain yet)`;
+}
+
 export const BOT_DISCLAIMER = 'Checks the claims, not the team. DYOR.';
 export const REPORT_DISCLAIMER = "Checks the claims and the coin, not anyone's intentions. Real products can still rug. DYOR.";
 export const FOOTER_DISCLAIMER = 'Verdicts are automated opinions based on what the agent could see at the time of the check. Not financial advice.';

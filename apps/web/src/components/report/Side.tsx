@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { cap, fmtPct, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
+import { cap, fmtPct, fmtUsd, otherChainCoinText, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { VCard } from '../VCard';
 import { SinceChart } from './SinceChart';
 import { isRunning, noVerdict, notEnough } from './util';
@@ -24,6 +24,17 @@ function PriceCard({ r }: { r: CheckReportDTO }) {
           {notEnough(r)
             ? 'No contract on a supported chain was found, so there is no price to track.'
             : 'The check stopped before a verdict, so there is no price to track.'}
+        </p>
+      </div>
+    );
+  }
+  if (!r.hasCoin && r.otherChain) {
+    // a coin on a chain ApeCheck can't read: no price was read (and never "paste its contract": it may be the one pasted)
+    return (
+      <div className="scard">
+        <h3>Price since check</h3>
+        <p className="sub" style={{ margin: 0 }}>
+          {otherChainCoinText(r.otherChain.chain)}, so there is no price to track.
         </p>
       </div>
     );

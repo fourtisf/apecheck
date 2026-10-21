@@ -199,6 +199,31 @@ describe('POST /v1/checks', () => {
     expect(check.targetId).toBe(t.id);
   });
 
+  it('a contract the worker moved to the website in its token info (on a chain ApeCheck can\'t read) is still matched by what was pasted', async () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const c = new Client(h.app);
+    const first = await c.post('/v1/checks', { target: SONIC });
+    expect(first.statusCode).toBe(201);
+    const id = first.json<CreateCheckResponse>().id;
+    // the worker: the contract trades only on Sonic, its token info links esco.example, which already has a Target
+    // (with its own coin): the check is re-pointed there and the preliminary "ca:evm:" row is dropped
+    const site = await seedTarget(h.prisma, { kind: 'SITE', domain: 'esco.example', key: 'site:esco.example', name: 'esco.example', chain: 'BASE', ca: EVM });
+    const pre = await h.prisma.check.findUniqueOrThrow({ where: { shortId: id } });
+    await h.prisma.check.update({ where: { id: pre.id }, data: { targetId: site.id, status: 'RUNNING', startedAt: new Date() } });
+    await h.prisma.target.delete({ where: { id: pre.targetId } });
+
+    // a second paste (any case) joins the run: no credit, no second check
+    const again = await new Client(h.app, '192.0.2.78').post('/v1/checks', { target: '0x' + SONIC.slice(2).toUpperCase() });
+    expect(again.json()).toEqual({ id, status: 'running', cached: false, credits: 5 });
+    // once it is done, the next one gets the cached verdict
+    await h.prisma.check.update({ where: { id: pre.id }, data: { status: 'DONE', finishedAt: new Date(), evidence: { otherChain: { chain: 'Sonic', address: SONIC, site: 'esco.example' } } } });
+    const hit = await c.post('/v1/checks', { target: SONIC });
+    expect(hit.json()).toEqual({ id, status: 'done', cached: true, credits: 4 });
+    expect(await h.prisma.check.count()).toBe(1);
+    // a paste of another contract (here the site's own coin on Base) is not answered by this check
+    expect((await c.post('/v1/checks', { target: EVM })).json()).toMatchObject({ cached: false, status: 'queued' });
+  });
+
   it('matches posts by tweet id whatever the URL looks like', async () => {
     const c = new Client(h.app);
     const first = (await c.post('/v1/checks', { target: 'https://x.com/kairolabs/status/1849000000000000002' })).json<CreateCheckResponse>();

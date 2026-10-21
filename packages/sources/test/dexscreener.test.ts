@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDexScreener, DEX_BATCH } from '../src/adapters/dexscreener';
+import { createDexScreener, DEX_BATCH, dexChainName } from '../src/adapters/dexscreener';
 import { captureErrors } from '../src/util';
 import { fakeHttp, fixture, testEnv } from './helpers';
 
@@ -109,6 +109,69 @@ describe('DexScreener adapter', () => {
     const map = await dex.tokens('sol', addrs);
     expect(map.size).toBe(1);
     expect(dex.lastError).toMatch(/^dexscreener\.tokens: HTTP 500/);
+  });
+
+  describe('a token listed only on chains ApeCheck has no reads for', () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const pair = (chainId: string, liq: number, extra: Record<string, unknown> = {}) => ({
+      chainId, dexId: 'shadow', url: `https://dexscreener.com/${chainId}/0xpair${liq}`, pairAddress: `0xpair${liq}`,
+      baseToken: { address: '0x17C63A297A76BED7E96A96BCF5F566DE1EFDD1FC', name: 'Esco', symbol: 'ESCO' }, priceUsd: '0.02', liquidity: { usd: liq }, ...extra,
+    });
+    const sonicOnly = {
+      schemaVersion: '1.0.0',
+      pairs: [
+        pair('sonic', 500),
+        pair('sonic', 42_000, { info: { imageUrl: 'https://dd.dexscreener.com/esco.png', websites: [{ url: 'https://esco.example' }], socials: [{ type: 'twitter', url: 'https://x.com/escofinance' }, { platform: 'telegram', handle: 'escofi' }] } }),
+        // the token as the quote side of someone else's pair is not its listing
+        { ...pair('base', 9_000_000), baseToken: { address: '0x4200000000000000000000000000000000000006', symbol: 'WETH' }, quoteToken: { address: SONIC } },
+      ],
+    };
+
+    it('token(null, address) still finds nothing: the check never invents a coin on an unsupported chain', async () => {
+      const dex = createDexScreener(testEnv(), fakeHttp(() => ({ json: sonicOnly })));
+      expect(await dex.token(null, SONIC)).toBeNull();
+    });
+
+    it('otherChain(address): the most liquid pair there, its chain named, links from its token info, no market numbers', async () => {
+      const http = fakeHttp(url => (url.pathname === `/latest/dex/tokens/${SONIC}` ? { json: sonicOnly } : undefined));
+      const t = await createDexScreener(testEnv(), http).otherChain(SONIC);
+      expect(http.calls).toHaveLength(1);
+      expect(t).toEqual({
+        dexChain: 'sonic',
+        chainName: 'Sonic',
+        address: '0x17C63A297A76BED7E96A96BCF5F566DE1EFDD1FC',
+        name: 'Esco',
+        symbol: 'ESCO',
+        pairUrl: 'https://dexscreener.com/sonic/0xpair42000',
+        websites: ['https://esco.example'],
+        socials: [
+          { type: 'twitter', url: 'https://x.com/escofinance' },
+          { type: 'telegram', url: 'https://t.me/escofi' },
+        ],
+        imageUrl: 'https://dd.dexscreener.com/esco.png',
+      });
+    });
+
+    it('otherChain(address) is null when a supported chain lists the token too (token() answers then), or nothing does', async () => {
+      const both = createDexScreener(testEnv(), fakeHttp(() => ({ json: fixture('dexscreener-latest-evm.json') })));
+      expect(await both.otherChain(BASE_TOKEN)).toBeNull();
+      const none = createDexScreener(testEnv(), fakeHttp(() => ({ json: { schemaVersion: '1.0.0', pairs: null } })));
+      expect(await none.otherChain(SONIC)).toBeNull();
+      expect(none.lastError).toBeNull();
+    });
+
+    it('otherChain(address): an HTTP error is null with the reason (also reported to the capture scope)', async () => {
+      const dex = createDexScreener(testEnv(), fakeHttp(() => ({ status: 503, text: 'down' })));
+      const { value, errors } = await captureErrors(() => dex.otherChain(SONIC));
+      expect(value).toBeNull();
+      expect(errors).toEqual(['dexscreener.otherChain: HTTP 503 from api.dexscreener.com']);
+    });
+
+    it('dexChainName: known ids by name, other plain ids title-cased, anything odd is "another chain"', () => {
+      expect(['sonic', 'polygon', 'avalanche', 'hyperevm', 'new-chain', 'ab', '__proto__', 'constructor', 'Sonic<script>', ''].map(dexChainName)).toEqual([
+        'Sonic', 'Polygon', 'Avalanche', 'HyperEVM', 'New Chain', 'Ab', 'another chain', 'Constructor', 'another chain', 'another chain',
+      ]);
+    });
   });
 
   it('search(): one entry per token (its most liquid pair), sorted by liquidity, unsupported chains dropped', async () => {

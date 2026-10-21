@@ -144,6 +144,12 @@ export interface JudgeInput {
   /** `unchecked`: GitHub was unavailable or timed out, so nothing is known about the code */
   git: { found: boolean; burst: boolean; totalCommits: number; stale: boolean; thin: boolean; onlyForks: boolean; unchecked?: boolean };
   coin: CoinJudgeFacts | null;
+  /**
+   * The project's coin is on a chain ApeCheck can't read yet (Sonic, Polygon…): it was not checked, so there are no
+   * coin facts and no coin score (never "no coin"). `site`: the website from its token info that the check is of
+   * instead, null when the check stayed on what was pasted. Absent or null otherwise.
+   */
+  coinNotChecked?: { chain: string; site: string | null } | null;
   auditLink: { url: string; stepIdx: number | null } | null;
   steps: { idx: number; status: string; text: string }[];
   evidence: CheckEvidence;

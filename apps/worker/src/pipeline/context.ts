@@ -127,6 +127,13 @@ export class CheckRun {
   unconfirmedCoin: { address: string; why: string } | null = null;
   /** a contract (the target, or the one the post or page names) that every supported chain asked answered it doesn't have */
   missingCoin: { address: string; chains: ChainKey[] } | null = null;
+  /**
+   * a contract DexScreener lists only on a chain ApeCheck has no reads for (Sonic, Polygon…; `chain` is its name):
+   * named in the log, never scored, and not looked up again on the page or in the post. `site`: the domain from its
+   * token info that a pasted contract's check moved to (the verdict is for that site); null when it didn't move.
+   * Saved as Check.evidence.otherChain (the report and the bot reply say the coin wasn't checked).
+   */
+  otherChain: { address: string; chain: string; site: string | null } | null = null;
 
   /* Stage B */
   session: BrowseSession | null = null;

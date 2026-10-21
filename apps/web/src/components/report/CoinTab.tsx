@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { cap, coinBand, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
+import { cap, coinBand, fmtUsd, otherChainCoinText, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { cssVars } from '../css';
 import { Dot, Facts, NotChecked, Unknown, noVerdict, notEnough, type FactRow } from './util';
 
@@ -179,6 +179,21 @@ export function CoinTab({ report: r }: { report: CheckReportDTO }) {
     return (
       <div className="empty">
         <p>The check stopped before the coin was looked at, so there is no coin score. The Agent run tab shows how far it got; re-check to try again.</p>
+      </div>
+    );
+  }
+  if (!r.hasCoin && r.otherChain) {
+    // the coin trades only on a chain ApeCheck has no on-chain reads for: named, never "no coin linked" or "paste it"
+    const o = r.otherChain;
+    return (
+      <div className="empty">
+        <p>{otherChainCoinText(o.chain)}, so this check has no coin facts and no coin score.</p>
+        <p className="muted" style={{ margin: 0 }}>
+          Contract on {o.chain}:{' '}
+          <span className="mono" title={o.address}>
+            {short(o.address)}
+          </span>
+        </p>
       </div>
     );
   }

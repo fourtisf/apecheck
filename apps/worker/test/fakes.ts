@@ -6,6 +6,7 @@ import http from 'node:http';
 import { SsrfError, reportError } from '@apecheck/sources';
 import type {
   CoinRawFacts,
+  DexOtherChainToken,
   DexTokenInfo,
   EvmTokenBasics,
   EvmTxRequest,
@@ -64,6 +65,8 @@ export function fakeHttp(allowHosts: string[]): Http {
 export interface FakeData {
   allowHosts?: string[];
   dexTokens?: Record<string, DexTokenInfo>;
+  /** DexScreener listings on chains ApeCheck has no reads for (dex.otherChain), by lowercase address */
+  dexOther?: Record<string, DexOtherChainToken>;
   evmChains?: Record<string, ChainKey>;
   posts?: Record<string, XPost>;
   users?: Record<string, XUser>;
@@ -119,6 +122,12 @@ export function fakeSources(env: Env, data: FakeData = {}): FakeSources {
       },
       async search() {
         return [];
+      },
+      async otherChain(address) {
+        calls.push(`dex.otherChain ${address}`);
+        const a = address.toLowerCase();
+        // like the adapter: a token listed on a supported chain too is token()'s answer
+        return data.dexTokens?.[a] ? null : data.dexOther?.[a] ?? null;
       },
     },
     evm: {
@@ -230,6 +239,15 @@ export function dexInfo(p: Partial<DexTokenInfo> & { chain: ChainKey; address: s
   return {
     name: 'Orbit', symbol: 'ORBIT', priceUsd: 0.0123, mc: 1_230_000, fdv: 1_300_000, liquidityUsd: 210_000, vol5m: 4_200, vol24h: 380_000, ch24: 6.1,
     pairAddress: '0x' + 'ab'.repeat(20), pairUrl: 'https://dexscreener.com/base/0xpair', dex: 'uniswap', pairCreatedAt: new Date(Date.now() - 20 * 86_400_000).toISOString(),
+    websites: [], socials: [], imageUrl: null,
+    ...p,
+  };
+}
+
+/** A token DexScreener lists only on a chain ApeCheck has no reads for (default: Sonic). */
+export function dexOther(p: Partial<DexOtherChainToken> & { address: string }): DexOtherChainToken {
+  return {
+    dexChain: 'sonic', chainName: 'Sonic', name: 'Esco', symbol: 'ESCO', pairUrl: `https://dexscreener.com/sonic/${p.address}`,
     websites: [], socials: [], imageUrl: null,
     ...p,
   };

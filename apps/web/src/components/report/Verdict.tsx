@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { NOT_ENOUGH_LABEL, REPORT_DISCLAIMER, coinBand, fmtDur, narBand, notEnoughReason, type CheckReportDTO } from '@apecheck/core';
+import { NOT_ENOUGH_LABEL, REPORT_DISCLAIMER, coinBand, fmtDur, narBand, notEnoughReason, otherChainCoinText, type CheckReportDTO } from '@apecheck/core';
 import { cssVars } from '../css';
 import { Age } from '../Now';
 import { Ring } from '../Ring';
@@ -163,8 +163,13 @@ function Finished({ r, just }: { r: CheckReportDTO; just: boolean }) {
   const total = r.total ?? nar;
   const b = narBand(nar);
   const t = narBand(total);
+  // a coin on a chain ApeCheck can't read was never checked: neither "couldn't be scored" nor "no coin linked"
   const coinText =
-    (r.hasCoin && r.coinScore == null) || r.kind === 'coin' ? "The coin couldn't be scored this time" : `No coin linked to this ${r.kind}`;
+    !r.hasCoin && r.otherChain
+      ? otherChainCoinText(r.otherChain.chain)
+      : (r.hasCoin && r.coinScore == null) || r.kind === 'coin'
+        ? "The coin couldn't be scored this time"
+        : `No coin linked to this ${r.kind}`;
   return (
     <>
       <div className={`rv-ring n-${t.key}`}>
