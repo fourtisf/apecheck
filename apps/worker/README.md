@@ -51,6 +51,32 @@ fails, the worker's `failed` handler ends the check (`FAILED`, final step, `done
 (> 10 min) or `RUNNING` (> 2 min) checks whose job is gone, failed or completed (e.g. a job that stalled past its
 limit). SIGTERM stops taking jobs, gives running checks 15 s, then interrupts them (they mark themselves `FAILED`).
 
+### Not enough to check (`pipeline/enough.ts`)
+
+A check that could test nothing about the project gets no score: every signal would be unknown (`warn`), and unknowns
+add up to the neutral middle, so an X profile with no links and a contract on a chain ApeCheck doesn't support would
+both read "PARTLY REAL (50/100)". Nothing was tested when, from the run's own evidence, all of these hold: no site
+loaded (none found, it didn't load, or it blocks automated browsers), no docs were read, no GitHub repo was found (none
+linked, and a name search found none; forks count as found), no coin facts were read (no contract on a supported chain:
+a coin on one is always assessed), and no claim was confirmed or contradicted (every claim, if any, is `not_seen`).
+Anything tested is scored as before: a site that loaded but has no repo, a repo without a site, a coin, a claim
+contradicted because the site that calls itself live didn't load. With no claims the decision comes right after
+Stage D and the judge is not called; with claims, after the judge.
+
+Such a check ends `FAILED`, never `DONE`, so it never takes `isLatest`, a feed slot or a share card:
+- every lookup answered: `Check.error` (and a final `warn` step) says what was looked for, for this target, from core's
+  `NOT_ENOUGH_PREFIX` — "Not enough to check: no website, GitHub repo or contract on a supported chain was found for
+  @stridefun.", "Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB Chain or Arbitrum, and no website or
+  GitHub repo was found for it.", "Not enough to check: foo.xyz didn't load, and no GitHub repo or contract on a supported
+  chain was found for it." (a contract the post names that no chain asked has is `run.missingCoin`). It is an answer,
+  not an outage (`isNotEnough`): the bot posts the reason, a recent one is reused like a cached verdict
+  (`findReusableCheck`: no second credit for the same answer; Re-check still runs it again), and a re-tag in the thread
+  is not a retry;
+- a lookup that could have found something didn't answer (Stage A or D cut short, GitHub down, the post unreadable, an
+  address the RPCs or DexScreener couldn't vet, our browser failing on the site): "Nothing about @stridefun could be
+  checked: GitHub didn't answer", a final `fail` step, and from there on a failed run like any other ("Couldn't finish
+  this check. Try again in a few minutes.", never cached).
+
 ### Signal rules (`pipeline/signals.ts`)
 
 Product (Stage B):
@@ -150,12 +176,14 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
      `quotedId` = some `BotMention.replyTweetId`) is a question about that check (`kind: 'followup'`, `isFollowUp`) —
      unless the author typed the bot's handle with a new link, contract or X post of another target (or a bare
      "@ApeCheckBot @project"): that is a check of it (rules 4–5). An @handle inside a question ("is the @orbitxyz team
-     doxxed?") stays a question. Tagging the bot under its "Couldn't finish" post runs that check's target again. A Pro/Max author
+     doxxed?") stays a question. Tagging the bot under its "Couldn't finish" post runs that check's target again (not
+     under a "Not enough to check" one: the same lookups would give the same answer and cost another reply). A Pro/Max author
      (`User.tier` through `User.xUserId`, linked in M3) gets an answer from that check's stored data only
      (`answerFromCheck`: `loadAnswerData` + `ai.answer`, `AI_MODEL_JUDGE`, the same as site asks), saved as an `Ask` (via `BOT`, `askerHandle`) with
      `Check.asksCount + 1`. Anyone else gets one line pointing to the site ("Follow-up answers here are for Pro holders.
      The full report is on the ApeCheck site."), once per person per thread (`pointer_already_sent`), no URL unless
-     `BOT_INCLUDE_LINK`. Empty questions (`empty_question`) and replies to a "Couldn't finish" post (`no_report`) get none;
+     `BOT_INCLUDE_LINK`. Empty questions (`empty_question`) and replies to a "Couldn't finish" or "Not enough to check"
+     post (`no_report`) get none;
   3. the author has to have **typed** the bot's handle: X's `display_text_range` (`XPost.displayTextRange`); when X sent
      none, the leading @handles X carries into a reply (the parent's author and its mentions) are its prefix. A bot
      handle only in that prefix is someone chatting further down a thread the bot is in (`not_tagged`) — except a direct
@@ -171,15 +199,16 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
      `getPost`). When only a post's author (or nothing) is found and the thread already has a public check, that check
      (a tag under the project's own "2/" post). Nothing → the help line "Tag me under a project's post, or include its
      link or contract." (`kind: 'help'`), at most once per thread (`help_already_sent`);
-  5. **one check per target**: the same target already checked in this thread (running, or done at any age), else the
-     shared `findReusableCheck()` of `@apecheck/db` (same rules as `POST /v1/checks`: the same target running, or a verdict
-     younger than `CACHE_HOURS`), else `createCheck()` (via `BOT`, `requesterHandle`, `postId` for an X post, the linked
+  5. **one check per target**: the same target already checked in this thread (running, or answered at any age: a
+     verdict or "Not enough to check"), else the shared `findReusableCheck()` of `@apecheck/db` (same rules as
+     `POST /v1/checks`: the same target running, or a verdict or "Not enough to check" younger than `CACHE_HOURS`), else `createCheck()` (via `BOT`, `requesterHandle`, `postId` for an X post, the linked
      `User` as requester) + a `checks` job with `PRIORITY.bot`, all under the API's `lock:create:<key>` lock. The mention is
      linked (`checkId`, `targetKey`, `kind: 'check'`, `QUEUED`) before the job is queued. A finished check (a cached
      verdict) is answered at once; a running one when Stage F queues the reply of **every** `QUEUED` mention linked to it.
      **Tagging twice in the same thread never makes a second check.** Another account's tag in the thread gets its own reply
      with the same verdict; the same account re-tagging for the same check is linked to it and not answered again
-     (`answered_in_thread`: the thread already has, or will get, their answer, and X refuses a repeated post).
+     (`answered_in_thread`: the thread already has, or will get, their answer, and X refuses a repeated post), unless
+     that check failed for an outage: then the re-tag is the retry.
   Rules 2, 4 and 5 count against the hourly limits before anything starts (`bot/limits.ts`): `BOT_USER_HOURLY` per free
   account, `BOT_PRO_USER_HOURLY` for Pro/Max, `BOT_HOURLY_CAP` for the bot (`user_limit` / `global_limit`). A mention
   is counted when it is accepted (each accepted mention gets exactly one reply), so a burst can't overshoot while checks
@@ -194,7 +223,10 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
   'Launch app' does nothing; GitHub pushed in one burst at launch.
   Checks the claims, not the team. DYOR.
   ```
-  No "· Coin: …" without a coin; a FAILED check: "Couldn't finish this check. Try again in a few minutes." Max 280
+  No "· Coin: …" without a coin; a check that could test nothing about the project: its own reason, made safe like
+  model text and followed by the opt-in report link ("Not enough to check: no website, GitHub repo or contract on a
+  supported chain was found for stridefun."); any other FAILED check: "Couldn't finish this check. Try again in a few
+  minutes." Max 280
   counted the way X counts (`bot/xtext.ts`: URL = 23, CJK and other wide characters = 2, any emoji = 2, NFC); the summary is
   cut at a word boundary with "…". `xLength` is an upper bound: a domain under a TLD the list in `xtext.ts` doesn't know
   counts max(its length, 23), since X links every gTLD. `BOT_INCLUDE_LINK=true` appends `apecheck.io/c/<id>`
@@ -574,13 +606,18 @@ with a working Connect wallet button, a main button that only opens a dialog, U+
 Cloudflare challenge, error text; coins with ApeCheck's own facts only: the deployer history from earlier public checks of
 the wallet, never a private one, and Solana / EVM / Tron coins whose every step says "not checked" in ApeCheck's words); `test/pipeline-timing.test.ts` covers late and repeated work (an abandoned Stage A, a
 coin whose Stage D ran short, model fallbacks in the log, re-runs, a run that lost its check, stuck-check recovery, the
-browser pool relaunch).
+browser pool relaunch). `test/not-enough.test.ts` covers checks that could test nothing (the @stridefun X profile and the
+contract on an unsupported chain from production, a post naming such a contract, claims nothing could settle): FAILED
+with what was looked for, no score, no judge call without claims; GitHub, an RPC or the post not answering makes it an
+outage instead; a repo found by name, or a claim contradicted, is still scored. A dead or bot-walled site with nothing
+else is "Not enough to check" too, scored once a repo is found (`test/pipeline.test.ts`).
 
 The bot: `test/bot-resolve.test.ts` (target resolution table: links, contracts, handles, reply prefix, quotes, the bot's own
 links, several candidates, non-Latin and empty text), `test/bot-compose.test.ts` (reply format, X lengths with URLs / CJK /
-emoji, link on/off, no coin, failed), `test/bot.test.ts` (with a `FakeX`, `test/fake-x.ts`: ignore rules, limits,
-idempotency, one check per thread, cache hits, follow-ups Pro / non-Pro, posting retries and refusals, since_id, the lock
-and the idle mode) and `test/bot-flow.test.ts` (M2 acceptance through the real queues and pipeline: a tag under a project
+emoji, link on/off, no coin, failed, "Not enough to check" made safe), `test/bot.test.ts` (with a `FakeX`,
+`test/fake-x.ts`: ignore rules, limits, idempotency, one check per thread, cache hits, "Not enough to check" answered with
+its reason, reused and never retried, follow-ups Pro / non-Pro, posting retries and refusals, since_id, the lock and the
+idle mode) and `test/bot-flow.test.ts` (M2 acceptance through the real queues and pipeline: a tag under a project
 post whose link is the local working-app fixture gets one reply with the verdict and the card PNG, and a second tag in the
 thread makes no second check). The same on the real X adapter: `test/bot-adapter.test.ts` (the adapter's recorded API
 fixtures over a fake Http) and `test/bot-x-e2e.test.ts`, where `createSources()` builds the X adapter over `test/x-api.ts`,

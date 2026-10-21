@@ -76,7 +76,8 @@ describe('Stage A abandoned at its timeout', () => {
       return detect(a);
     });
     d.limits = { resolve: 2000 };
-    expect((await runCheck(check.id, d)).status).toBe('done');
+    // with Stage A cut short nothing about the project was tested: no score, and an outage, not "Not enough to check"
+    expect(await runCheck(check.id, d)).toMatchObject({ status: 'failed', error: 'Nothing about 0x333…3333 could be checked: looking it up ran out of time' });
     const before = await stored(check.id);
     expect(before.steps.some(s => s.status === 'WARN' && /^Resolving the target timed out/.test(s.text))).toBe(true);
     // the late answer arrives after the check is done
@@ -87,7 +88,8 @@ describe('Stage A abandoned at its timeout', () => {
     expect(after.targetId).toBe(before.targetId);
     expect(after.target.key).toBe(`ca:evm:${COIN}`);
     expect((await prisma.target.findUniqueOrThrow({ where: { id: owner.id } })).checkCount).toBe(1);
-    expect(await prisma.check.count({ where: { targetId: after.targetId, isLatest: true } })).toBe(1);
+    expect(after).toMatchObject({ status: 'FAILED', narScore: null, isLatest: false });
+    expect(after.error).toBe(before.error);
   }, 60_000);
 });
 

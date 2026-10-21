@@ -120,8 +120,13 @@ export class CheckRun {
   links: Links = { site: null, x: null, github: [], docs: null, telegram: null, discord: null };
   /** the contract was announced in a step already (Stage A or D) */
   coinAnnounced = false;
-  /** an address seen on the page / in the post that couldn't be vetted because DexScreener or the RPCs were down */
+  /**
+   * an address (the target, or one seen on the page / in the post) that couldn't be vetted because DexScreener or the
+   * RPCs were down; `why` is "<source> unavailable", or why no chain could be asked
+   */
   unconfirmedCoin: { address: string; why: string } | null = null;
+  /** a contract (the target, or the one the post or page names) that every supported chain asked answered it doesn't have */
+  missingCoin: { address: string; chains: ChainKey[] } | null = null;
 
   /* Stage B */
   session: BrowseSession | null = null;

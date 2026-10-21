@@ -1,10 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { REPORT_DISCLAIMER, coinBand, fmtDur, narBand, type CheckReportDTO } from '@apecheck/core';
+import { NOT_ENOUGH_LABEL, REPORT_DISCLAIMER, coinBand, fmtDur, narBand, notEnoughReason, type CheckReportDTO } from '@apecheck/core';
 import { cssVars } from '../css';
 import { Age } from '../Now';
 import { Ring } from '../Ring';
-import { isRunning, noVerdict, runSeconds } from './util';
+import { isRunning, noVerdict, notEnough, runSeconds } from './util';
 
 /** ", requested by @x via @ApeCheckBot" and friends, as the prototype's v-meta line says it. */
 function requestedBy(r: CheckReportDTO): string {
@@ -84,6 +84,32 @@ function Running({ r }: { r: CheckReportDTO }) {
         </div>
         <p className="v-meta" id="rvStep">
           {stepText}
+        </p>
+      </div>
+    </>
+  );
+}
+
+/** A check that could test nothing about the project: what was looked for, and no score (never the middle of unknowns). */
+function NotEnough({ r }: { r: CheckReportDTO }) {
+  return (
+    <>
+      <div className="rv-ring">
+        <Ring value={0} size={140} color="transparent" id="rvTot" />
+        <div className="rv-ring-in">
+          <b style={{ color: 'var(--dim)' }}>—</b>
+          <span>Total score</span>
+        </div>
+      </div>
+      <div className="rv-l">
+        <span className="vlabel" style={cssVars({ '--vc': 'var(--dim)' })}>
+          {NOT_ENOUGH_LABEL}
+        </span>
+        <p className="v-sum">{notEnoughReason(r.error ?? '')}</p>
+        <p className="v-note">There was nothing about the project to test, so there is no score. If it has a website or a contract, paste that to check it.</p>
+        <p className="v-meta">
+          Checked {r.finishedAt ? <Age ts={r.finishedAt} long /> : null}
+          {requestedBy(r)} · {stepsLine(r)}
         </p>
       </div>
     </>
@@ -173,6 +199,7 @@ function Finished({ r, just }: { r: CheckReportDTO; just: boolean }) {
 export function Verdict({ report: r, just }: { report: CheckReportDTO; just: boolean }) {
   let body;
   if (isRunning(r)) body = <Running r={r} />;
+  else if (notEnough(r)) body = <NotEnough r={r} />;
   else if (noVerdict(r)) body = <Failed r={r} />;
   else body = <Finished r={r} just={just} />;
   return (

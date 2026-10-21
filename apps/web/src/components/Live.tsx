@@ -1,7 +1,7 @@
 'use client';
 import { usePathname } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { NAR_LABEL, narBand, type CheckReportDTO, type LiveCheckDTO } from '@apecheck/core';
+import { NAR_LABEL, isNotEnough, narBand, type CheckReportDTO, type LiveCheckDTO } from '@apecheck/core';
 import { live as fetchLive, report as fetchReport, isApiError } from '@/lib/api';
 import { reportPath } from '@/lib/env';
 import { useToast } from './Toast';
@@ -64,7 +64,7 @@ function writeMine(m: Map<string, number>) {
 }
 
 function doneText(r: CheckReportDTO): string {
-  if (r.status === 'failed') return `Your check on ${r.name} stopped before a verdict.`;
+  if (r.status === 'failed') return isNotEnough(r.error) ? `Your check on ${r.name} found nothing to test.` : `Your check on ${r.name} stopped before a verdict.`;
   if (r.narScore == null) return `Your check on ${r.name} is done.`;
   const key = r.narBand ?? narBand(r.narScore).key;
   return `Your check on ${r.name} is done: ${NAR_LABEL[key]} ${r.narScore}`;

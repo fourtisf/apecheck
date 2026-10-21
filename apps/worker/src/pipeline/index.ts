@@ -1,7 +1,8 @@
 /**
  * run(checkId): the whole check (HANDOFF §4). Stage A..E run under the CHECK_BUDGET_SECONDS budget,
  * each with its own timeout; Stage F always runs so every check ends DONE (or FAILED on an
- * unrecoverable error, or when our own browser failed before the site answered) with a final step and a `done` message.
+ * unrecoverable error, when our own browser failed before the site answered, or when nothing about the project could
+ * be tested: enough.ts) with a final step and a `done` message.
  */
 import {
   LIVE_CHANNEL,
@@ -18,6 +19,7 @@ import { heuristicClaims } from '../ai/heuristic';
 import { BrowserUnavailable, browseStage } from './browse';
 import { claimsInput, claimsStage } from './claims';
 import { CheckRun, type PipelineDeps } from './context';
+import { claimStatuses, nothingTested } from './enough';
 import { coinAfterStage, coinFactsFor, evidenceStage } from './evidence';
 import { judgeStage, scoringStep } from './judge';
 import { UnrecoverableError, finishResolve, resolveStage, saveTarget } from './resolve';
@@ -196,17 +198,31 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
     steps.setProgress(0.85);
     interrupted();
 
-    // E — judge
-    await scoringStep(run);
-    const j = await runStage(run, 'judge', run.limits.judge, ctx => judgeStage(run, ctx));
-    if (!j.ok) {
-      log.warn(`judge ${j.reason}: the stand-in judged the claims`);
-      await steps.step({ status: 'warn', text: `Claim review ${j.reason === 'timeout' ? 'timed out' : j.reason === 'skipped' ? 'ran out of time' : 'failed'}; used the simple rules` });
-    } else if (modelUsed && run.aiFallbacks.has('judge')) {
-      await steps.step({ status: 'warn', text: 'The AI model could not review the claims; used the simple rules' });
+    // nothing about the project could be tested and there is no claim to judge: no verdict, so no judge call either
+    let none = run.claims.length ? null : nothingTested(run, []);
+    if (!none) {
+      // E — judge
+      await scoringStep(run);
+      const j = await runStage(run, 'judge', run.limits.judge, ctx => judgeStage(run, ctx));
+      if (!j.ok) {
+        log.warn(`judge ${j.reason}: the stand-in judged the claims`);
+        await steps.step({ status: 'warn', text: `Claim review ${j.reason === 'timeout' ? 'timed out' : j.reason === 'skipped' ? 'ran out of time' : 'failed'}; used the simple rules` });
+      } else if (modelUsed && run.aiFallbacks.has('judge')) {
+        await steps.step({ status: 'warn', text: 'The AI model could not review the claims; used the simple rules' });
+      }
+      steps.setProgress(0.95);
+      interrupted();
+      none = nothingTested(run, claimStatuses(run));
     }
-    steps.setProgress(0.95);
-    interrupted();
+
+    if (none) {
+      // F — nothing about the project was tested: FAILED with the reason, never the neutral middle of unknowns as a
+      // score ("Not enough to check" is an answer, so its last step is a warning; an outage's is a failure)
+      log.info(`no verdict, nothing was tested: ${none.message}`);
+      const marked = await failCheck(deps, row, steps, startedAt, none.message, owner, none.final ? 'warn' : 'fail');
+      if (marked) await afterFinish(deps, checkId);
+      return { status: 'failed', checkId, error: none.message };
+    }
 
     // F — score, save, notify
     await steps.flush();
@@ -238,14 +254,22 @@ export async function runCheck(checkId: string, deps: PipelineDeps, opts: RunOpt
 }
 
 /**
- * Mark the check FAILED with a final fail step and announce it. `message` is the public sentence (shown by
- * the API as Check.error); no exception text is ever stored. With `owner`, only while this run still owns the
- * check. Resolves to false when another run had taken it over (nothing was written or announced).
+ * Mark the check FAILED with a final step (a fail step, or `stepStatus`) and announce it. `message` is the public
+ * sentence (shown by the API as Check.error); no exception text is ever stored. With `owner`, only while this run
+ * still owns the check. Resolves to false when another run had taken it over (nothing was written or announced).
  */
-async function failCheck(deps: PipelineDeps, row: { id: string; shortId: string }, steps: StepLogger, startedAt: number, message: string, owner: Date | null): Promise<boolean> {
+async function failCheck(
+  deps: PipelineDeps,
+  row: { id: string; shortId: string },
+  steps: StepLogger,
+  startedAt: number,
+  message: string,
+  owner: Date | null,
+  stepStatus: 'fail' | 'warn' = 'fail',
+): Promise<boolean> {
   await steps.flush().catch(() => undefined);
   if (steps.superseded) return false;
-  await steps.step({ status: 'fail', text: message }).catch(e => deps.log.warn('could not log the final step', e));
+  await steps.step({ status: stepStatus, text: message }).catch(e => deps.log.warn('could not log the final step', e));
   if (steps.superseded) return false;
   const finishedAt = new Date();
   const res = await deps.prisma.check

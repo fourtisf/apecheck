@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { cap, fmtPct, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { VCard } from '../VCard';
 import { SinceChart } from './SinceChart';
-import { isRunning, noVerdict } from './util';
+import { isRunning, noVerdict, notEnough } from './util';
 
 function PriceCard({ r }: { r: CheckReportDTO }) {
   if (isRunning(r)) {
@@ -21,7 +21,9 @@ function PriceCard({ r }: { r: CheckReportDTO }) {
       <div className="scard">
         <h3>Price since check</h3>
         <p className="sub" style={{ margin: 0 }}>
-          The check stopped before a verdict, so there is no price to track.
+          {notEnough(r)
+            ? 'No contract on a supported chain was found, so there is no price to track.'
+            : 'The check stopped before a verdict, so there is no price to track.'}
         </p>
       </div>
     );

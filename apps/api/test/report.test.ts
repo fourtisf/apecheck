@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { hueOf, progressKey, type CheckEvidence, type CheckReportDTO } from '@apecheck/core';
+import { hueOf, isNotEnough, progressKey, type CheckEvidence, type CheckReportDTO } from '@apecheck/core';
 import {
   Client, APP_URL, EvmWallet, makeHarness, parseSse, resetState, seedCheck, seedCoinFacts, seedTarget, signedIn, type Harness,
 } from './helpers';
@@ -518,6 +518,17 @@ describe('GET /v1/checks/:id', () => {
     await h.redis.del(progressKey(c.id));
     const fallback = (await new Client(h.app).get('/v1/checks/run0001')).json<CheckReportDTO>();
     expect(fallback.progress).toBeCloseTo(1 / 9);
+  });
+
+  it('a check that could test nothing: failed, no verdict or card, and the whole "Not enough to check" reason as its error', async () => {
+    const NONE = 'Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB Chain or Arbitrum, and no website or GitHub repo was found for it.';
+    const t = await seedTarget(h.prisma, { kind: 'COIN', ca: '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc', key: 'ca:evm:0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc', name: '0x17c…d1fc', domain: null });
+    const c = await seedCheck(h.prisma, { targetId: t.id, shortId: 'none001', status: 'FAILED', error: NONE, isLatest: false });
+    await h.prisma.checkStep.create({ data: { checkId: c.id, idx: 0, tMs: 900, status: 'WARN', text: NONE } });
+    const r = (await new Client(h.app).get('/v1/checks/none001')).json<CheckReportDTO>();
+    expect(r).toMatchObject({ status: 'failed', error: NONE, narScore: null, narrative: null, coin: null, cardUrl: null, hasCoin: false });
+    expect(isNotEnough(r.error)).toBe(true);
+    expect(r.steps.at(-1)).toMatchObject({ status: 'warn', text: NONE });
   });
 
   it('404s unknown and malformed ids', async () => {

@@ -376,6 +376,91 @@ describe('checks', () => {
     expect(await prisma.check.count()).toBe(2);
   });
 
+  describe('a check that could test nothing about the project ("Not enough to check")', () => {
+    const STRIDE = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found for @stridefun.';
+    const ESCO = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const notEnough = (checkId: string, error = STRIDE, finishedAt = new Date()) =>
+      prisma.check.update({ where: { id: checkId }, data: { status: 'FAILED', finishedAt, error } });
+    // the incident: "@ApeCheckBot" alone under @stridefun's "Dex paid." (an image, no link or contract)
+    const stridePost = () => post({ text: 'Dex paid.', authorHandle: 'stridefun', authorId: '880' });
+
+    it('is answered with its reason, never "try again" or a score: no card, no mention, no link but the report link', async () => {
+      for (const links of ['false', 'true']) {
+        await resetDb();
+        const { deps, x } = harness({ fetchCard: async () => PNG, env: { BOT_INCLUDE_LINK: links } });
+        const m = replyTo(stridePost(), '@ApeCheckBot');
+        expect(await handleMention(deps, m)).toMatchObject({ action: 'check', target: 'https://x.com/stridefun' });
+        const check = await prisma.check.findFirstOrThrow();
+        await notEnough(check.id);
+        const [id] = await stageFReplies(check.id);
+        expect(await processReply(deps, id)).toBe('replied');
+        const reason = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found for stridefun.';
+        expect(x.replies[0]).toMatchObject({ text: links === 'true' ? `${reason}\napecheck.io/c/${check.shortId}` : reason, media: null });
+        expect(x.replies[0].text).not.toMatch(/try again|PARTLY REAL|\/100|@/i);
+      }
+    });
+
+    it('the same person re-tagging in the thread is not a retry; another person gets the same answer; a tag under the reply is no retry either', async () => {
+      const { deps, x } = harness();
+      const parent = stridePost();
+      const first = replyTo(parent, '@ApeCheckBot');
+      await handleMention(deps, first);
+      const check = await prisma.check.findFirstOrThrow();
+      await notEnough(check.id);
+      await processReply(deps, (await stageFReplies(check.id))[0]);
+
+      expect(await handleMention(deps, replyTo(parent, '@ApeCheckBot try again'))).toEqual({ action: 'ignored', reason: 'answered_in_thread' });
+      const other = replyTo(parent, '@ApeCheckBot', { authorId: '602', authorHandle: 'other_user' });
+      expect(await handleMention(deps, other)).toMatchObject({ action: 'check', checkId: check.id, reuse: 'thread', replyNow: true });
+      expect(await processReply(deps, (await mentionRow(other.id)).id)).toBe('replied');
+      expect(x.replies[1]).toMatchObject({ inReplyToId: other.id, text: x.replies[0].text });
+
+      // under the bot's own "Not enough to check" reply: an answer to ask about, not a check to run again
+      const reply = post({
+        id: x.replies[0].id,
+        text: `@degen_rina ${x.replies[0].text}`,
+        authorHandle: 'ApeCheckBot',
+        authorId: '1000',
+        conversationId: parent.id,
+        replyToId: first.id,
+        displayTextRange: [12, 12 + x.replies[0].text.length],
+      });
+      expect(await handleMention(deps, replyTo(reply, '@ApeCheckBot', { authorId: '603', authorHandle: 'third' }))).toEqual({ action: 'ignored', reason: 'empty_question' });
+      expect(await handleMention(deps, replyTo(reply, '@ApeCheckBot why?', { authorId: '604', authorHandle: 'fourth' }))).toEqual({ action: 'ignored', reason: 'no_report' });
+      expect(await prisma.check.count()).toBe(1);
+      expect(x.replies).toHaveLength(2);
+    });
+
+    it('a recent one is reused like a cached verdict (no new check); an old one, or an outage, runs again', async () => {
+      const { deps, checks, replies } = harness();
+      const recent = await createCheck(ESCO);
+      await notEnough(recent.id, `Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB Chain or Arbitrum, and no website or GitHub repo was found for it.`);
+      const m = post({ text: `@ApeCheckBot ${ESCO}` });
+      expect(await handleMention(deps, m)).toMatchObject({ action: 'check', checkId: recent.id, reuse: 'cached', replyNow: true });
+      expect(checks).toEqual([]);
+      expect(await processReply(deps, replies[0])).toBe('replied');
+
+      await prisma.check.update({ where: { id: recent.id }, data: { finishedAt: new Date(Date.now() - 7 * 3600_000) } });
+      expect(await handleMention(deps, post({ text: `@ApeCheckBot ${ESCO}`, authorId: '610', authorHandle: 'b2' }))).toMatchObject({ action: 'check', reuse: null });
+      const outage = await prisma.check.findFirstOrThrow({ where: { id: { not: recent.id } } });
+      await notEnough(outage.id, "Nothing about 0x17c…d1fc could be checked: the Base RPC didn't answer");
+      expect(await handleMention(deps, post({ text: `@ApeCheckBot ${ESCO}`, authorId: '611', authorHandle: 'b3' }))).toMatchObject({ action: 'check', reuse: null });
+      expect(checks).toHaveLength(2);
+    });
+
+    it('an outage is not "Not enough to check": the "try again" line, and a re-tag in the thread is the retry', async () => {
+      const { deps, x } = harness();
+      const parent = stridePost();
+      await handleMention(deps, replyTo(parent, '@ApeCheckBot'));
+      const check = await prisma.check.findFirstOrThrow();
+      await notEnough(check.id, "Nothing about @stridefun could be checked: GitHub didn't answer");
+      await processReply(deps, (await stageFReplies(check.id))[0]);
+      expect(x.replies[0].text).toBe(FAILED_TEXT);
+      expect(await handleMention(deps, replyTo(parent, '@ApeCheckBot try again'))).toMatchObject({ action: 'check', reuse: null });
+      expect(await prisma.check.count()).toBe(2);
+    });
+  });
+
   it('a check whose job could not be queued ends FAILED and is answered at once', async () => {
     const { deps, replies } = harness();
     deps.enqueueCheck = async () => {

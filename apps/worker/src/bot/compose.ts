@@ -9,17 +9,23 @@
  * go over 280. BOT_INCLUDE_LINK appends "apecheck.io/c/<id>" (APP_URL's host); off by default because X bills posts
  * with a URL at a much higher rate.
  *
+ * A check that could test nothing about the project has no verdict: its reply is the check's own reason, never "try
+ * again" ("Not enough to check: no website, GitHub repo or contract on a supported chain was found for stridefun.").
+ * Any other failed check gets FAILED_TEXT.
+ *
  * Model-written text (the judge's summary, a follow-up answer) is built from untrusted page, docs and post content,
  * so it is made safe before it is posted (sanitizeModelText, HANDOFF §11): it never mentions anyone (its @handles
  * lose their "@") and never carries a link (scheme URLs are dropped, every other domain is defanged to
  * "orbit[.]xyz"). A model line in which xtext still finds anything X might link is left out of the reply. The only
  * link a reply can hold is the opt-in report link (onlyReportLink checks the final text).
  */
-import { BOT_DISCLAIMER, COIN_BANDS, COIN_LABEL, NAR_BANDS, NAR_LABEL, coinBand, narBand, scrubRetired } from '@apecheck/core';
+import { BOT_DISCLAIMER, COIN_BANDS, COIN_LABEL, NAR_BANDS, NAR_LABEL, NOT_ENOUGH_PREFIX, coinBand, isNotEnough, narBand, scrubRetired } from '@apecheck/core';
 import { X_MAX_LENGTH, fitPart, hasLink, urlSpans, xLength } from './xtext';
 
 export const HELP_TEXT = "Tag me under a project's post, or include its link or contract.";
 export const FAILED_TEXT = "Couldn't finish this check. Try again in a few minutes.";
+/** A "Not enough to check" reason that can't be posted as it is (it would still hold a link): the general one. */
+export const NOT_ENOUGH_TEXT = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found.';
 export const PRO_POINTER_TEXT = 'Follow-up answers here are for Pro holders. The full report is on the ApeCheck site.';
 export const NO_ANSWER_TEXT = 'This check has no answer for that.';
 
@@ -38,6 +44,8 @@ export interface ReplyCheck {
   coinScore: number | null;
   coinBand: string | null;
   summary: string | null;
+  /** Check.error: why a FAILED check has no verdict ("Not enough to check: …" is posted, core isNotEnough) */
+  error?: string | null;
 }
 
 const NAR_KEYS = new Set<string>(NAR_BANDS.map(b => b.key));
@@ -108,8 +116,25 @@ function fitLines(lines: (string | null)[], fitIdx: number | null): string {
   return keep(part === '…' ? null : part);
 }
 
-/** The verdict reply for a finished check, or the failure line for a check that didn't finish. */
+/**
+ * The reply for a check that could test nothing about the project: its reason, which names the target ("for
+ * @stridefun", "orbitswap.xyz didn't load"), so it is made safe like model text (no mention, no link), and the opt-in
+ * report link.
+ */
+function notEnoughReply(check: ReplyCheck, error: string, opts: ComposeOpts): string {
+  let line = sanitizeModelText(error);
+  // nothing after the prefix, or something X could still link: the general line
+  if (!line.slice(NOT_ENOUGH_PREFIX.length).trim() || hasLink(line)) line = NOT_ENOUGH_TEXT;
+  const link = opts.includeLink ? reportLink(opts.appUrl, check.shortId) : null;
+  return fitLines([line, link], 0);
+}
+
+/**
+ * The verdict reply for a finished check; for a check that could test nothing about the project, its reason; for any
+ * other check that didn't finish, the failure line.
+ */
 export function composeReply(check: ReplyCheck, opts: ComposeOpts): string {
+  if (check.status === 'FAILED' && isNotEnough(check.error)) return notEnoughReply(check, check.error, opts);
   if (check.status !== 'DONE' || check.narScore == null || !Number.isFinite(check.narScore)) return FAILED_TEXT;
   const nar = Math.round(check.narScore);
   const narKey = (check.narBand && NAR_KEYS.has(check.narBand) ? check.narBand : narBand(Math.max(0, nar)).key) as keyof typeof NAR_LABEL;

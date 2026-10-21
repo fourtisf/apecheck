@@ -128,11 +128,16 @@ export async function findCoin(run: CheckRun, text: string, signal: AbortSignal)
   };
   if (signal.aborted) return null;
   if (!sure) return unconfirmed(tries.find(t => !common.has(t.addr))?.addr);
+  // every source answered and none has the address: it is on no supported chain ("not enough to check" names it)
+  const missing = (addr: string, chains: ChainKey[]) => {
+    if (!down.size && chains.length && !run.missingCoin && !signal.aborted) run.missingCoin = { address: addr, chains };
+  };
   if (sure.family === 'evm') {
     const det = await detectEvmChain(run, sure.addr);
     if (signal.aborted) return null;
     if (det.chain) return { chain: det.chain, ca: sure.addr.toLowerCase(), market: null };
     if (det.failed.length) down.add(det.failed.length === det.asked.length ? 'the chain RPCs' : `the ${listOf(det.failed.map(chainName), 'and')} RPC`);
+    missing(sure.addr.toLowerCase(), det.asked);
     return unconfirmed(sure.addr);
   }
   if (sure.family === 'sol') {
@@ -140,6 +145,7 @@ export async function findCoin(run: CheckRun, text: string, signal: AbortSignal)
     if (signal.aborted) return null;
     if (r?.value?.exists) return { chain: 'sol', ca: sure.addr, market: null };
     if (!r || r.errors.length) down.add('the Solana RPC');
+    missing(sure.addr, ['sol']);
     return unconfirmed(sure.addr);
   }
   return { chain: 'trx', ca: sure.addr, market: null };
@@ -318,7 +324,12 @@ async function resolveContract(run: CheckRun, kind: 'evm' | 'sol' | 'tron', addr
   if (!chain && info) chain = info.chain;
   run.ca = address;
   if (!chain) {
-    await steps.step({ status: 'warn', text: chainNotFoundText(address, detection ?? { chain: null, asked: [], failed: [] }), source: 'On-chain' });
+    const d = detection ?? { chain: null, asked: [], failed: [] };
+    // on none of the chains that answered; a chain whose RPC didn't answer (or none to ask) leaves it unknown
+    if (!d.asked.length) run.unconfirmedCoin = { address, why: 'no EVM RPC configured' };
+    else if (d.failed.length) run.unconfirmedCoin = { address, why: `${d.failed.length === d.asked.length ? 'the chain RPCs' : `the ${listOf(d.failed.map(chainName), 'and')} RPC`} unavailable` };
+    else run.missingCoin = { address, chains: d.asked };
+    await steps.step({ status: 'warn', text: chainNotFoundText(address, d), source: 'On-chain' });
     if (dexDown) await steps.step({ status: 'warn', text: 'DexScreener unavailable, no market data', source: 'DexScreener' });
     return;
   }

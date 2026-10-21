@@ -66,9 +66,10 @@ async function recordJoiner(deps: Pick<AppDeps, 'redis'>, checkId: string, userI
 }
 
 /**
- * Same target already running → that check; a public verdict younger than CACHE_HOURS (unless Re-check) → that
- * one (both free); else spend a credit, create Target + Check (shared with the bot) and enqueue the job. A Max user
- * who joins a running check gets its check.completed webhooks too (recordJoiner); a cached verdict sends none.
+ * Same target already running → that check; a public verdict (or "Not enough to check") younger than CACHE_HOURS
+ * (unless Re-check) → that one (both free); else spend a credit, create Target + Check (shared with the bot) and
+ * enqueue the job. A Max user who joins a running check gets its check.completed webhooks too (recordJoiner); a cached
+ * verdict sends none.
  */
 export async function createCheck(deps: AppDeps, input: CreateInput, subject: CreditSubject, log?: FastifyBaseLogger): Promise<CreateResult> {
   const { env, prisma, redis, queue } = deps;
@@ -89,9 +90,8 @@ export async function createCheck(deps: AppDeps, input: CreateInput, subject: Cr
     if (reuse) {
       if (reuse.reason === 'running' && subject.userId && subject.tier === 'max') await recordJoiner(deps, reuse.id, subject.userId, log);
       const c = await getCredits(redis, env, subject);
-      return reuse.reason === 'running'
-        ? { statusCode: 200, body: { id: reuse.shortId, status: statusFromDb(reuse.status), cached: false, credits: c.credits } }
-        : { statusCode: 200, body: { id: reuse.shortId, status: 'done', cached: true, credits: c.credits } };
+      // cached: a verdict (done), or a recent "Not enough to check" (failed): the same answer without spending a credit
+      return { statusCode: 200, body: { id: reuse.shortId, status: statusFromDb(reuse.status), cached: reuse.reason === 'cached', credits: c.credits } };
     }
 
     const spent = await consumeCredit(redis, env, subject);

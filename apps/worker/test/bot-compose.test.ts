@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { BOT_DISCLAIMER } from '@apecheck/core';
 import {
   FAILED_TEXT,
+  NOT_ENOUGH_TEXT,
   NO_ANSWER_TEXT,
   PRO_POINTER_TEXT,
   composeFollowUp,
@@ -116,6 +117,29 @@ describe('composeReply', () => {
     expect(composeReply(check({ status: 'FAILED' }), OFF)).toBe(FAILED_TEXT);
     expect(composeReply(check({ status: 'FAILED' }), ON)).toBe("Couldn't finish this check. Try again in a few minutes.");
     expect(composeReply(check({ narScore: null }), OFF)).toBe(FAILED_TEXT);
+    // an outage that left nothing tested is still "couldn't finish", never "not enough"
+    expect(composeReply(check({ status: 'FAILED', error: "Nothing about @stridefun could be checked: GitHub didn't answer" }), OFF)).toBe(FAILED_TEXT);
+  });
+
+  it('a check that could test nothing about the project: its reason, never "try again" or a score', () => {
+    const failed = (error: string) => check({ status: 'FAILED', narScore: null, narBand: null, coinScore: null, coinBand: null, summary: null, error });
+    // the incidents: an X profile with no links, and a contract on a chain ApeCheck doesn't support
+    const stride = failed('Not enough to check: no website, GitHub repo or contract on a supported chain was found for @stridefun.');
+    expect(composeReply(stride, OFF)).toBe('Not enough to check: no website, GitHub repo or contract on a supported chain was found for stridefun.');
+    expect(composeReply(stride, ON)).toBe('Not enough to check: no website, GitHub repo or contract on a supported chain was found for stridefun.\napecheck.io/c/k3x9a2q');
+    const esco = failed('Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB Chain or Arbitrum, and no website or GitHub repo was found for it.');
+    expect(composeReply(esco, OFF)).toBe(esco.error);
+    // a site the reason names is not a link in the reply (nobody is mentioned, nothing but the report link is linked)
+    const site = composeReply(failed("Not enough to check: orbitswap.xyz didn't load, and no GitHub repo or contract on a supported chain was found for it."), ON);
+    expect(site).toBe("Not enough to check: orbitswap[.]xyz didn't load, and no GitHub repo or contract on a supported chain was found for it.\napecheck.io/c/k3x9a2q");
+    expect(onlyReportLink(site, 'apecheck.io/c/k3x9a2q')).toBe(true);
+    for (const t of [composeReply(stride, ON), composeReply(esco, ON), site]) {
+      expect(t).not.toMatch(/try again|\/100|PARTLY|@/i);
+      expect(xLength(t)).toBeLessThanOrEqual(280);
+    }
+    // a reason with nothing after the prefix: the general line
+    expect(composeReply(failed('Not enough to check: '), OFF)).toBe(NOT_ENOUGH_TEXT);
+    expect(composeReply(failed('Not enough to check: @'), ON)).toBe(`${NOT_ENOUGH_TEXT}\napecheck.io/c/k3x9a2q`);
   });
 
   it('appends the report link only with BOT_INCLUDE_LINK, on the APP_URL host', () => {

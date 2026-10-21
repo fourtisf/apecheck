@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { currentStubs, deployerHistoryLine, displayStep, scrubRetired } from '../src/labels';
+import { NOT_ENOUGH_LABEL, NOT_ENOUGH_PREFIX, currentStubs, deployerHistoryLine, displayStep, isNotEnough, notEnoughReason, scrubRetired } from '../src/labels';
 
 describe('displayStep: steps stored before ApeCheck dropped its third-party coin sources', () => {
   it('reads their "unavailable" lines as "not checked", without the retired source tag, keeping the suffix', () => {
@@ -75,5 +75,20 @@ describe('free text and stub lists stored about old checks', () => {
   it('currentStubs drops the retired adapter only', () => {
     expect(currentStubs(['x', 'fourtis', 'etherscan', 'ai'])).toEqual(['x', 'etherscan', 'ai']);
     expect(currentStubs(undefined)).toEqual([]);
+  });
+});
+
+describe('"Not enough to check": a check that could test nothing about the project', () => {
+  const STRIDE = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found for @stridefun.';
+  it('isNotEnough tells it from an outage or any other failure by its prefix', () => {
+    expect(isNotEnough(STRIDE)).toBe(true);
+    expect(STRIDE.startsWith(NOT_ENOUGH_PREFIX)).toBe(true);
+    for (const e of ["Nothing about @stridefun could be checked: GitHub didn't answer", 'The check hit an error and could not finish', 'not enough to check: lower case', '', null, undefined]) {
+      expect(isNotEnough(e)).toBe(false);
+    }
+  });
+  it('notEnoughReason is the reason as a sentence of its own', () => {
+    expect(notEnoughReason(STRIDE)).toBe('No website, GitHub repo or contract on a supported chain was found for @stridefun.');
+    expect(NOT_ENOUGH_LABEL).toBe('Not enough to check');
   });
 });

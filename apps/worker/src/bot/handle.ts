@@ -12,7 +12,8 @@
  *     site, once per thread. The bot is in X's reply prefix there, so this comes before rule 3. Tagging the bot there
  *     together with a new link, contract or X post (or a bare "@ApeCheckBot @project") asks for a check of that
  *     instead (rules 4–5); an @handle inside a question does not. Tagging the bot under its "Couldn't finish this
- *     check" line runs that check's target again;
+ *     check" line runs that check's target again; under a "Not enough to check" reply it does not (the same lookups
+ *     would give the same answer and cost another reply), it is a follow-up with no report to ask about;
  *  3. ignored: the author didn't type the bot's handle (it is only in X's reply prefix: someone chatting further down
  *     a thread the bot is in) — unless the post answers the bot's help line directly;
  *  4. what to check: a link / contract / X post written in the mention; else, for a reply to an earlier tag that got a
@@ -20,16 +21,27 @@
  *     resolveBotTarget() (resolve.ts), reading the parent post (and, when the parent is a tag that names nothing,
  *     the post above it) when X didn't include it. When only a post's author (or nothing) is found and the thread
  *     already has a check, that check. Nothing to check → the help line, at most once per thread;
- *  5. a target → one check: the same target in this thread (running, or done at any age), else the shared
- *     findReusableCheck (running, or a verdict younger than CACHE_HOURS), else a new check (via BOT, PRIORITY.bot).
- *     A finished check is answered at once; a running one is answered when Stage F enqueues the reply of every
- *     QUEUED mention linked to it. The same person tagging again in the same thread for the same check gets no second
- *     reply (the thread already has, or will get, theirs; X also refuses a repeated post); another person's tag in
- *     the thread gets its own reply with the same verdict.
+ *  5. a target → one check: the same target in this thread (running, or answered at any age: a verdict, or "Not
+ *     enough to check"), else the shared findReusableCheck (running, or an answer younger than CACHE_HOURS), else a
+ *     new check (via BOT, PRIORITY.bot). A finished check is answered at once; a running one is answered when Stage F
+ *     enqueues the reply of every QUEUED mention linked to it. The same person tagging again in the same thread for
+ *     the same check gets no second reply (the thread already has, or will get, theirs; X also refuses a repeated
+ *     post) unless that check failed for an outage (the re-tag is the retry); another person's tag in the thread gets
+ *     its own reply with the same answer.
  * Rules 2, 4 and 5 count against the hourly limits (limits.ts) before anything is started.
  */
-import { TUNING, detect, targetKey, type Env } from '@apecheck/core';
-import { activeCheckWhere, createCheck, createLockKey, failUnqueuedCheck, findReusableCheck, withCreateLock, type BotMention, type PrismaClient } from '@apecheck/db';
+import { TUNING, detect, isNotEnough, targetKey, type Env } from '@apecheck/core';
+import {
+  activeCheckWhere,
+  createCheck,
+  createLockKey,
+  failUnqueuedCheck,
+  findReusableCheck,
+  notEnoughWhere,
+  withCreateLock,
+  type BotMention,
+  type PrismaClient,
+} from '@apecheck/db';
 import type { XPost, XSource } from '@apecheck/sources';
 import type { Redis } from 'ioredis';
 import type { AiAdapter } from '../ai/types';
@@ -217,7 +229,7 @@ async function reserve(deps: BotDeps, row: Row, pro: boolean, now: number): Prom
 function botPostOf(deps: BotDeps, tweetId: string) {
   return deps.prisma.botMention.findFirst({
     where: { replyTweetId: tweetId },
-    select: { kind: true, checkId: true, targetKey: true, check: { select: { shortId: true, status: true, targetRaw: true } } },
+    select: { kind: true, checkId: true, targetKey: true, check: { select: { shortId: true, status: true, error: true, targetRaw: true } } },
   });
 }
 
@@ -246,8 +258,9 @@ function isNewTarget(r: BotResolution, own: string, bot: BotIdentity, parentKey:
 }
 
 /**
- * The public check this conversation already has (running, or done at any age): the one a tag directly under the
- * thread's first post got, else the oldest — a thread is about its first post's project.
+ * The public check this conversation already has (running, or answered at any age: a verdict or "Not enough to
+ * check"): the one a tag directly under the thread's first post got, else the oldest — a thread is about its first
+ * post's project.
  */
 async function threadCheck(deps: BotDeps, row: Row, now: number): Promise<{ targetRaw: string; targetKey: string } | null> {
   const rows = await deps.prisma.botMention.findMany({
@@ -256,7 +269,7 @@ async function threadCheck(deps: BotDeps, row: Row, now: number): Promise<{ targ
       conversationId: row.conversationId,
       checkId: { not: null },
       targetKey: { not: null },
-      check: { is: { isPrivate: false, OR: [{ status: 'DONE' }, activeCheckWhere(deps.env, now)] } },
+      check: { is: { isPrivate: false, OR: [{ status: 'DONE' }, notEnoughWhere, activeCheckWhere(deps.env, now)] } },
     },
     orderBy: { createdAt: 'asc' },
     take: 20,
@@ -301,8 +314,9 @@ export async function processMention(deps: BotDeps, row: Row, post: XPost): Prom
   let retry: BotResolution | null = null;
   if (botPost?.checkId && botPost.check && (botPost.kind === 'check' || botPost.kind === 'followup')) {
     if (!(tagged && isNewTarget(mine, own, bot, botPost.targetKey))) {
-      // the bot's "Couldn't finish this check. Try again in a few minutes.": tagging it there is the retry
-      if (botPost.check.status !== 'DONE' && tagged) {
+      // the bot's "Couldn't finish this check. Try again in a few minutes.": tagging it there is the retry (not under a
+      // "Not enough to check": that is an answer, and running it again would only repeat it)
+      if (botPost.check.status !== 'DONE' && !isNotEnough(botPost.check.error) && tagged) {
         retry = { kind: 'target', target: botPost.check.targetRaw, type: typeOf(botPost.check.targetRaw), from: 'replied', reason: 'a retry of the check that could not finish' };
       } else {
         return followUp(deps, row, post, { checkId: botPost.checkId, targetKey: botPost.targetKey, ...botPost.check }, pro, now);
@@ -375,8 +389,9 @@ export async function processMention(deps: BotDeps, row: Row, post: XPost): Prom
         targetKey: key,
         kind: 'check',
         status: { in: ['QUEUED', 'REPLIED'] },
-        // "Couldn't finish this check. Try again in a few minutes.": a re-tag after that is the retry
-        check: { is: { status: { not: 'FAILED' } } },
+        // "Couldn't finish this check. Try again in a few minutes.": a re-tag after that is the retry ("Not enough to
+        // check" is an answer: a re-tag after it is not)
+        check: { is: { OR: [{ status: { not: 'FAILED' } }, notEnoughWhere] } },
       },
       select: { checkId: true },
     });
@@ -388,13 +403,13 @@ export async function processMention(deps: BotDeps, row: Row, post: XPost): Prom
   const linked = await withCreateLock(deps.redis, createLockKey(d), async () => {
     let reuse: { id: string; reason: 'thread' | 'running' | 'cached' } | null = null;
     if (row.conversationId) {
-      // this thread already has a check of the same target: running, or done (at any age)
+      // this thread already has a check of the same target: running, or answered (at any age)
       const prior = await prisma.botMention.findFirst({
         where: {
           id: { not: row.id },
           conversationId: row.conversationId,
           targetKey: key,
-          check: { is: { isPrivate: false, OR: [{ status: 'DONE' }, activeCheckWhere(env, now)] } },
+          check: { is: { isPrivate: false, OR: [{ status: 'DONE' }, notEnoughWhere, activeCheckWhere(env, now)] } },
         },
         orderBy: { createdAt: 'desc' },
         select: { checkId: true },
@@ -464,7 +479,7 @@ async function followUp(
   const link = { checkId: parent.checkId, targetKey: parent.targetKey, isFollowUp: true };
   const question = questionText(ownText(post, bot, post.repliedTo), bot);
   if (!question) return ignore(deps, row, 'empty_question', link);
-  // the bot's "Couldn't finish this check" has no report to ask about
+  // the bot's "Couldn't finish this check" (or "Not enough to check") has no report to ask about
   if (parent.status !== 'DONE') return ignore(deps, row, 'no_report', link);
   if (!pro) {
     // the pointer goes to the same person at most once per thread

@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
-import type { CheckReportDTO, Signal, StepDTO } from '@apecheck/core';
+import { isNotEnough, type CheckReportDTO, type Signal, type StepDTO } from '@apecheck/core';
 
 /** A check still in the queue or in the browser: the report shows the "Testing now" state. */
 export const isRunning = (r: Pick<CheckReportDTO, 'status'>) => r.status === 'queued' || r.status === 'running';
@@ -9,6 +9,12 @@ export const isRunning = (r: Pick<CheckReportDTO, 'status'>) => r.status === 'qu
  * "The check stopped before a verdict", so the tabs must not read as if the agent finished its work either.
  */
 export const noVerdict = (r: Pick<CheckReportDTO, 'status' | 'narScore'>) => !isRunning(r) && (r.status === 'failed' || r.narScore == null);
+
+/**
+ * A check that could test nothing about the project ("Not enough to check: …", core isNotEnough): no verdict either,
+ * but the run did its work, so the copy says what was looked for instead of "stopped" or "try again".
+ */
+export const notEnough = (r: Pick<CheckReportDTO, 'status' | 'error'>) => r.status === 'failed' && isNotEnough(r.error);
 
 /** Only plain http(s) links from scanned projects become hrefs; anything else (javascript:, data:, …) is dropped. */
 export function safeHttpUrl(raw: string | null | undefined): string | null {

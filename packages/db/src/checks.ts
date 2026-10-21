@@ -8,7 +8,7 @@
  * on both sides — so a site submit and a bot tag of the same project can't start two checks.
  */
 import { randomBytes, randomInt } from 'node:crypto';
-import { short, targetKey, type Detected } from '@apecheck/core';
+import { NOT_ENOUGH_PREFIX, short, targetKey, type Detected } from '@apecheck/core';
 import type { Prisma, PrismaClient, Via } from '@prisma/client';
 
 export type CheckTarget = Exclude<Detected, { kind: 'bad' }>;
@@ -73,12 +73,24 @@ export function activeCheckWhere(cfg: { CHECK_BUDGET_SECONDS: number }, now = Da
   };
 }
 
+/**
+ * A FAILED check that could test nothing about the project (Check.error "Not enough to check: …", core isNotEnough):
+ * an answer about the target, not an outage.
+ */
+export const notEnoughWhere: Prisma.CheckWhereInput = { status: 'FAILED', error: { startsWith: NOT_ENOUGH_PREFIX } };
+
+/** A finished check that answers its target: a verdict (DONE), or "Not enough to check". */
+export const answeredWhere: Prisma.CheckWhereInput = { OR: [{ status: 'DONE' }, notEnoughWhere] };
+
 export interface ReusableCheck {
   id: string;
   shortId: string;
   status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED';
   finishedAt: Date | null;
-  /** running: a public run of the same target is in progress; cached: a public verdict younger than CACHE_HOURS */
+  /**
+   * running: a public run of the same target is in progress; cached: a public verdict, or a "Not enough to check"
+   * (FAILED), younger than CACHE_HOURS
+   */
   reason: 'running' | 'cached';
 }
 
@@ -97,7 +109,9 @@ export interface ReuseOptions {
 /**
  * The check that already answers this target, or null when a new one has to run:
  *  1. a public check of the same target that is queued or running (also for Re-check), else
- *  2. unless `recheck`, the newest public DONE check of the same target that finished less than CACHE_HOURS ago.
+ *  2. unless `recheck`, the newest public check of the same target that answers it (a verdict, or "Not enough to
+ *     check": running it again would only spend another credit on the same answer) and finished less than
+ *     CACHE_HOURS ago. Any other FAILED check (an outage) is never reused: the next request runs it again.
  * Other people's private checks are never reused. A private request (`privateFor` = the requesting user, M3) also
  * reuses that user's own private checks by the same rules (a double submit doesn't start two); returning a public
  * check to it is harmless: it is public already.
@@ -117,7 +131,7 @@ export async function findReusableCheck(prisma: PrismaClient | Prisma.Transactio
   if (active) return { ...active, reason: 'running' };
   if (opts.recheck) return null;
   const fresh = await prisma.check.findFirst({
-    where: { AND: [same, visible, { status: 'DONE', finishedAt: { gte: new Date(now - opts.cacheHours * 3600_000) } }] },
+    where: { AND: [same, visible, answeredWhere, { finishedAt: { gte: new Date(now - opts.cacheHours * 3600_000) } }] },
     orderBy: { finishedAt: 'desc' },
     select,
   });

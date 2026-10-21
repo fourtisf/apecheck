@@ -13,7 +13,7 @@
  * user and check: a Postgres advisory lock per check plus an existence check make it idempotent). Durable (no Redis
  * state to lose) and cheap: two indexed reads when the target has no watchers, which is most checks.
  */
-import { NAR_BANDS, detect, targetKey, type Detected } from '@apecheck/core';
+import { NAR_BANDS, detect, isNotEnough, targetKey, type Detected } from '@apecheck/core';
 import type { Prisma, PrismaClient } from '@apecheck/db';
 import type { Logger } from '../log';
 import { pgText } from '../pipeline/pgsafe';
@@ -42,10 +42,11 @@ export function changedText(name: string, kind: FingerprintKind, rechecking: boo
 /** "Re-checked orbitswap.xyz: Likely real 72, was Partly real 48" — or why there is no new verdict. */
 export function recheckedText(
   name: string,
-  check: { status: string; narScore: number | null; narBand: string | null },
+  check: { status: string; narScore: number | null; narBand: string | null; error?: string | null },
   prev: { narScore: number | null; narBand: string | null } | null,
 ): string {
   const now = check.status === 'DONE' ? bandName(check.narBand, check.narScore) : null;
+  if (!now && isNotEnough(check.error)) return pgText(`The re-check of ${name} found nothing to test; the last verdict stands`).slice(0, 300);
   if (!now) return pgText(`The re-check of ${name} couldn't finish; the last verdict stands`).slice(0, 300);
   const was = prev ? bandName(prev.narBand, prev.narScore) : null;
   return pgText(was ? `Re-checked ${name}: ${now}, was ${was}` : `Re-checked ${name}: ${now}`).slice(0, 300);
@@ -79,7 +80,7 @@ export async function completeAutoRechecks(deps: { prisma: PrismaClient; log: Lo
   const { prisma } = deps;
   const c = await prisma.check.findUnique({
     where: { id: checkId },
-    select: { id: true, status: true, targetId: true, targetRaw: true, narScore: true, narBand: true, createdAt: true, target: { select: { name: true } } },
+    select: { id: true, status: true, error: true, targetId: true, targetRaw: true, narScore: true, narBand: true, createdAt: true, target: { select: { name: true } } },
   });
   if (!c || (c.status !== 'DONE' && c.status !== 'FAILED')) return 0;
   // the watched Target row, and any other row of the same project the run may have moved the check to (re-keying)

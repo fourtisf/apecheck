@@ -9,7 +9,7 @@ import { CHAINS, deployerHistoryLine, deployerLine, short, type ChainKey, type S
 import { coinsByDeployer } from '@apecheck/db';
 import { captureErrors, type CoinRawFacts, type RepoFacts, type XUser } from '@apecheck/sources';
 import type { CheckRun } from './context';
-import { announceCoin, findCoin } from './resolve';
+import { announceCoin, findCoin, listOf } from './resolve';
 import type { StepSink } from './steps';
 import { coinSignals, gitFacts, gitSignal, worst } from './signals';
 import type { StageCtx } from './stage';
@@ -252,8 +252,12 @@ export async function evidenceStage(run: CheckRun, ctx: StageCtx): Promise<void>
     // name only the places that were actually read
     const where = [run.site.loaded ? 'on the site' : null, run.post ? 'in the post' : null].filter(Boolean).join(' or ');
     const u = run.unconfirmedCoin;
+    const m = run.missingCoin;
     if (u) await steps.step({ status: 'warn', text: `Address ${short(u.address)} ${where || 'found'} couldn't be checked (${u.why})`, source: 'On-chain' });
-    else await steps.step({ status: 'info', text: where ? `No contract found ${where}` : 'No contract to check' });
+    else if (m) {
+      const chains = listOf(m.chains.map(c => CHAINS[c].name), 'or');
+      await steps.step({ status: 'warn', text: `Contract ${short(m.address)} ${where || 'found'} is not on ${chains}`, source: 'On-chain' });
+    } else await steps.step({ status: 'info', text: where ? `No contract found ${where}` : 'No contract to check' });
   }
   run.steps.setProgress(0.85);
 }

@@ -517,14 +517,25 @@ describe('pipeline run(checkId)', () => {
   });
 
   it('a site behind a bot challenge is "could not be checked", never "doesn\'t load" or Likely LARP', async () => {
+    // with nothing else to test it is "Not enough to check" (no score at all); with a repo it is scored
     const check = await createCheck(sites.get('cf-challenge')!.url);
-    expect((await runCheck(check.id, deps())).status).toBe('done');
-    const c = await stored(check.id);
-    expect([c.sigLaunch, c.sigFlow]).toEqual(['WARN', 'WARN']);
+    expect((await runCheck(check.id, deps())).status).toBe('failed');
+    const none = await stored(check.id);
+    expect(none).toMatchObject({ status: 'FAILED', narScore: null, narBand: null, isLatest: false });
+    expect(none.error).toBe('Not enough to check: cf-challenge.test blocks automated browsers, and no GitHub repo or contract on a supported chain was found for it.');
+    expect(none.steps.at(-1)).toMatchObject({ status: 'WARN', text: none.error });
+
+    await resetDb();
+    const scored = await createCheck(sites.get('cf-challenge')!.url);
+    expect((await runCheck(scored.id, deps({ search: [repoFacts({ fullName: 'cf-challenge/app' })] }))).status).toBe('done');
+    const c = await stored(scored.id);
+    expect([c.sigLaunch, c.sigFlow, c.sigGit]).toEqual(['WARN', 'WARN', 'OK']);
     expect(c.summary).toMatch(/^The site could not be checked this time/);
-    expect(c.steps.some(s => /didn't load/.test(s.text))).toBe(false);
-    expect(c.steps.some(s => s.text === 'No X account linked to the project')).toBe(false);
-    expect(c.steps.some(s => s.status === 'WARN' && s.text === "X account unknown (the site couldn't be read)")).toBe(true);
+    for (const x of [none, c]) {
+      expect(x.steps.some(s => /didn't load/.test(s.text))).toBe(false);
+      expect(x.steps.some(s => s.text === 'No X account linked to the project')).toBe(false);
+      expect(x.steps.some(s => s.status === 'WARN' && s.text === "X account unknown (the site couldn't be read)")).toBe(true);
+    }
     expect((c.evidence as CheckEvidence).acct).toBe("X account unknown (the site couldn't be read)");
     expect(['larp', 'llarp']).not.toContain(c.narBand);
   });
@@ -572,10 +583,18 @@ describe('pipeline run(checkId)', () => {
     expect(c.narScore).toBe(recomputed(c).narrative.score);
   });
 
-  it('a site that never loads still finishes, with launch = fail', async () => {
+  it('a site that never loads: "Not enough to check" with nothing else to test; scored with launch = fail once a repo is found', async () => {
     const check = await createCheck(`http://${neverHost}/`);
-    expect((await runCheck(check.id, deps())).status).toBe('done');
-    const c = await stored(check.id);
+    expect((await runCheck(check.id, deps())).status).toBe('failed');
+    const none = await stored(check.id);
+    expect(none).toMatchObject({ status: 'FAILED', narScore: null, sigLaunch: null, isLatest: false });
+    expect(none.error).toBe('Not enough to check: never-loads.test didn\'t load, and no GitHub repo or contract on a supported chain was found for it.');
+    expect(none.steps.some(s => s.status === 'FAIL' && /didn't load/.test(s.text))).toBe(true);
+
+    await resetDb();
+    const scored = await createCheck(`http://${neverHost}/`);
+    expect((await runCheck(scored.id, deps({ search: [repoFacts({ fullName: 'never-loads/app' })] }))).status).toBe('done');
+    const c = await stored(scored.id);
     expect(c.status).toBe('DONE');
     expect(c.sigLaunch).toBe('FAIL');
     expect(c.steps.some(s => s.status === 'FAIL' && /didn't load/.test(s.text))).toBe(true);
@@ -688,7 +707,8 @@ describe('our own browser failing is not a verdict', () => {
     const check = await createCheck(`https://${neverHost}/`);
     const asked = vi.spyOn(host, 'guardProblem');
     try {
-      expect((await runCheck(check.id, deps())).status).toBe('done');
+      // a repo was found, so the check is scored (with only the dead site it would be "Not enough to check")
+      expect((await runCheck(check.id, deps({ search: [repoFacts({ fullName: 'never-loads/app' })] }))).status).toBe('done');
       // the failure was at the proxy, so the guard was asked, and it answered: the site's failure, not ours
       expect(asked).toHaveBeenCalledTimes(1);
       await expect(asked.mock.results[0].value).resolves.toBeNull();

@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { cap, coinBand, fmtUsd, short, type CheckReportDTO, type CoinFactsDTO } from '@apecheck/core';
 import { cssVars } from '../css';
-import { Dot, Facts, NotChecked, Unknown, noVerdict, type FactRow } from './util';
+import { Dot, Facts, NotChecked, Unknown, noVerdict, notEnough, type FactRow } from './util';
 
 /** scoreBlock(): the coin score with its band and the 5-step meter. */
 function ScoreBlock({ n }: { n: number }) {
@@ -166,6 +166,14 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
 
 /** tabCoin(): coin score, who holds the supply, and the on-chain facts with their sources. */
 export function CoinTab({ report: r }: { report: CheckReportDTO }) {
+  if (!r.hasCoin && notEnough(r)) {
+    // nothing to test, the coin included: "Not enough to check" means no contract on a supported chain was found
+    return (
+      <div className="empty">
+        <p>No contract on a supported chain was found, so there is no coin score. The Agent run tab shows what was looked for.</p>
+      </div>
+    );
+  }
   if (!r.hasCoin && noVerdict(r)) {
     // the run stopped before it got to the coin: neither "no coin linked" nor "couldn't be read" is known
     return (
