@@ -9,6 +9,7 @@ import {
   TUNING,
   clipSentence,
   normaliseClaims,
+  otherChainOf,
   type ChainKey,
   type ClaimKind,
   type ClaimSource,
@@ -280,22 +281,25 @@ export function heuristicJudge(input: JudgeInput): Judged {
 export function heuristicAnswer(question: string, d: AnswerData): string {
   const q = question.toLowerCase();
   const ev = d.evidence;
+  // a coin on a chain ApeCheck can't read was never checked: it is not "no coin linked"
+  const other = otherChainOf(ev);
+  const unchecked = other ? `The coin is on ${other.chain}, which ApeCheck can't read yet, so it wasn't checked.` : null;
   if (/deploy|dev wallet|fund/.test(q)) {
-    if (!d.coin) return 'There is no coin linked to this one yet, so there is no deployer to trace.';
+    if (!d.coin) return unchecked ?? 'There is no coin linked to this one yet, so there is no deployer to trace.';
     return d.coin.deployerLine ? `${d.coin.deployerLine}.` : 'The deployer was not checked for this coin.';
   }
   if (/bundl|snip|launch block/.test(q)) {
-    if (!d.coin) return 'No coin linked, so there is no supply to check.';
+    if (!d.coin) return unchecked ?? 'No coin linked, so there is no supply to check.';
     return d.coin.bundlePct != null
       ? `${d.coin.bundlePct}% of supply went to ${d.coin.bundleWallets ?? 'several'} wallets in the launch block.`
       : 'Bundle share was not checked for this coin.';
   }
   if (/holder|whale|top ?10|concentrat/.test(q)) {
-    if (!d.coin) return 'No coin linked, so there are no holders to check.';
+    if (!d.coin) return unchecked ?? 'No coin linked, so there are no holders to check.';
     return d.coin.top10Pct != null ? `The top 10 holders own ${d.coin.top10Pct}%${d.coin.lp ? `; liquidity is ${d.coin.lp.toLowerCase()}` : ''}.` : 'Holder share was not checked for this coin.';
   }
   if (/liquidity|\blp\b|rug/.test(q)) {
-    if (!d.coin) return 'No coin linked, so there is no liquidity to check.';
+    if (!d.coin) return unchecked ?? 'No coin linked, so there is no liquidity to check.';
     return d.coin.lp ? `Liquidity: ${d.coin.lp}. Authorities: ${d.coin.authorities ?? 'unknown'}.` : 'LP status was not checked for this coin.';
   }
   if (/github|code|repo|open.?source/.test(q)) return ev.git ? `GitHub: ${ev.git}.` : 'The code was not checked.';

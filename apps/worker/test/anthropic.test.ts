@@ -180,6 +180,29 @@ describe('judge', () => {
     expect(parse.mock.calls[0][0].model).toBe('judge-model');
   });
 
+  it("a coin on a chain ApeCheck can't read: check_facts says it wasn't checked (and which site the check is of), the system prompt says not to judge it", async () => {
+    const parse = vi.fn<Parse>(async () =>
+      message({ parsed_output: { claims: [], acct: 'ok', git: 'warn', summary: 'The app loads.', coinSummary: '' } }),
+    );
+    const ai = new AnthropicAi(env, { client: client(parse) });
+    await ai.judge({ ...judgeInput(1), coinNotChecked: { chain: 'Sonic', site: 'esco.example' } });
+    await ai.judge({ ...judgeInput(1), coinNotChecked: { chain: 'Sonic', site: null } });
+    await ai.judge(judgeInput(1));
+    const facts = (call: number) => {
+      const content = parse.mock.calls[call][0].messages[0].content as Anthropic.ContentBlockParam[];
+      const text = content.map(b => (b.type === 'text' ? b.text : '')).join('\n');
+      const json = text.slice(text.indexOf('{', text.indexOf('check_facts')), text.lastIndexOf('}') + 1);
+      return JSON.parse(json) as { coinNotChecked: string | null; coin: unknown };
+    };
+    expect(facts(0)).toMatchObject({
+      coin: null,
+      coinNotChecked: "The project's coin is on Sonic, which ApeCheck can't read yet: no coin facts, no coin score. This check is of esco.example, the website in the coin's token info.",
+    });
+    expect(facts(1).coinNotChecked).toBe("The project's coin is on Sonic, which ApeCheck can't read yet: no coin facts, no coin score.");
+    expect(facts(2).coinNotChecked).toBeNull();
+    expect(String(parse.mock.calls[0][0].system)).toMatch(/coinNotChecked is set, the project's coin is on a chain ApeCheck can't read yet: it was not checked/);
+  });
+
   it('a refusal falls back to the heuristic judge', async () => {
     const parse = vi.fn<Parse>(async () => message({ stop_reason: 'refusal', parsed_output: null }));
     const fallbacks: string[] = [];

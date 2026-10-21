@@ -215,6 +215,8 @@ export function minimalEvidence(ev: CheckEvidence, degraded: string[]): CheckEvi
     acct: s(ev.acct),
     stubbed: ev.stubbed,
     degraded: [...degraded],
+    // short and checker-made: without it the report would say "no coin linked" for a coin that wasn't checked
+    otherChain: ev.otherChain,
   };
 }
 

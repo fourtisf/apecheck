@@ -119,6 +119,10 @@ export function buildEvidence(run: CheckRun): CheckEvidence {
     ? { id: run.post.id, author: run.post.authorHandle ?? '', authorId: run.post.authorId, text: run.post.text, createdAt: run.post.createdAt }
     : null;
 
+  // a coin on a chain ApeCheck can't read: the report and the bot reply say it wasn't checked (never "no coin linked")
+  const o = run.otherChain;
+  ev.otherChain = o ? { chain: o.chain, address: o.address, site: o.site } : null;
+
   const stubbed = new Set([...run.sources.stubbed(), ...run.stubbed]);
   if (run.deps.ai.mode === 'heuristic') stubbed.add('ai');
   ev.stubbed = [...stubbed];

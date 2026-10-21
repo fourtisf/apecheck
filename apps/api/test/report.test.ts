@@ -195,6 +195,7 @@ describe('GET /v1/checks/:id', () => {
       createdAt: s.createdAt.toISOString(),
       checkedAt: s.finishedAt.toISOString(),
       deployer: { address: DEP, chain: 'sol' },
+      otherChain: null,
       targetRaw: MINT,
       signals: { launch: 'ok', flow: 'warn', docs: 'ok', acct: 'warn', git: 'warn' },
       evidence: {
@@ -470,6 +471,23 @@ describe('GET /v1/checks/:id', () => {
     const t3 = await seedTarget(h.prisma, { kind: 'POST', handle: 'third', name: '@third', key: 'post:1851' });
     await seedCheck(h.prisma, { targetId: t3.id, shortId: 'post003', status: 'DONE', isLatest: true, narScore: 50, totalScore: 50, narBand: 'partly', evidence: { post: { id: 1851, author: 'third', text: 'gm' } }, finishedAt: new Date() });
     expect((await new Client(h.app).get('/v1/checks/post003')).json<CheckReportDTO>().post).toEqual({ id: null, author: 'third', text: 'gm', createdAt: null });
+  });
+
+  it("names a coin on a chain ApeCheck can't read (evidence.otherChain) in the report and in the feed", async () => {
+    const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+    const t = await seedTarget(h.prisma, { kind: 'SITE', domain: 'esco.example', name: 'esco.example', key: 'site:esco.example' });
+    const evidence: CheckEvidence = { otherChain: { chain: 'Sonic', address: SONIC, site: 'esco.example' } };
+    await seedCheck(h.prisma, { targetId: t.id, shortId: 'sonic01', status: 'DONE', isLatest: true, narScore: 64, totalScore: 64, narBand: 'likely', evidence: evidence as object, finishedAt: new Date() });
+    const c = new Client(h.app);
+    const r = (await c.get('/v1/checks/sonic01')).json<CheckReportDTO>();
+    expect(r).toMatchObject({ kind: 'site', hasCoin: false, coin: null, coinScore: null, otherChain: { chain: 'Sonic', address: SONIC } });
+    const feed = (await c.get('/v1/feed')).json<{ items: CheckReportDTO[] }>();
+    expect(feed.items.find(i => i.id === 'sonic01')?.otherChain).toEqual({ chain: 'Sonic', address: SONIC });
+
+    // nothing stored, or something that doesn't hold up: null
+    const t2 = await seedTarget(h.prisma, { kind: 'SITE', domain: 'plain.example', name: 'plain.example', key: 'site:plain.example' });
+    await seedCheck(h.prisma, { targetId: t2.id, shortId: 'sonic02', status: 'DONE', isLatest: true, narScore: 50, totalScore: 50, narBand: 'partly', evidence: { otherChain: { chain: 'Sonic', address: 'nope' } }, finishedAt: new Date() });
+    expect((await c.get('/v1/checks/sonic02')).json<CheckReportDTO>().otherChain).toBeNull();
   });
 
   it('marks the requester\'s own check as mine and hides private checks from everyone else', async () => {

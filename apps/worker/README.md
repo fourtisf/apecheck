@@ -194,7 +194,10 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
   'Launch app' does nothing; GitHub pushed in one burst at launch.
   Checks the claims, not the team. DYOR.
   ```
-  No "· Coin: …" without a coin; a FAILED check: "Couldn't finish this check. Try again in a few minutes." Max 280
+  No "· Coin: …" without a coin; a FAILED check: "Couldn't finish this check. Try again in a few minutes." A coin on a
+  chain ApeCheck can't read (`Check.evidence.otherChain`) adds one fixed line under the verdict: "This verdict is for
+  esco[.]example, the website in the token's info; the coin on Sonic wasn't checked." (a check that moved to that
+  site), else "The coin on Sonic wasn't checked: ApeCheck can't read that chain yet." Max 280
   counted the way X counts (`bot/xtext.ts`: URL = 23, CJK and other wide characters = 2, any emoji = 2, NFC); the summary is
   cut at a word boundary with "…". `xLength` is an upper bound: a domain under a TLD the list in `xtext.ts` doesn't know
   counts max(its length, 23), since X links every gTLD. `BOT_INCLUDE_LINK=true` appends `apecheck.io/c/<id>`

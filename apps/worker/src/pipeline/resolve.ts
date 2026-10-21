@@ -125,19 +125,21 @@ async function otherChainOf(run: CheckRun, address: string): Promise<{ other: De
 export async function findCoin(run: CheckRun, text: string, signal: AbortSignal): Promise<FoundCoin | OtherChainCoin | null> {
   const refs = extractRefs(text);
   const { dex, sol } = run.sources;
-  // a contract already named as being on another chain is not looked up again
-  const evm = refs.evm.filter(a => a !== run.otherChain?.address.toLowerCase());
+  // a contract already named as being on another chain is never looked up again, but it still counts: another
+  // unlabelled address next to it (a treasury, a router) is not "the only address" on the page or in the post
+  const named = run.otherChain?.address.toLowerCase() ?? null;
   // sources that failed while vetting the addresses: an address we couldn't vet is "unconfirmed", never "not found"
   const down = new Set<string>();
   const rank = (list: string[]) => [...list].sort((a, b) => Number(labelled(text, b)) - Number(labelled(text, a))).slice(0, 3);
   const tries: { family: 'evm' | 'sol' | 'trx'; addr: string }[] = [
-    ...rank(evm).map(addr => ({ family: 'evm' as const, addr })),
+    ...rank(refs.evm).map(addr => ({ family: 'evm' as const, addr })),
     ...rank(refs.sol).map(addr => ({ family: 'sol' as const, addr })),
     ...rank(refs.tron).map(addr => ({ family: 'trx' as const, addr })),
   ].slice(0, 4);
   const common = new Set<string>();
   for (const t of tries) {
     if (signal.aborted) return null;
+    if (t.addr === named) continue;
     const chain: ChainKey | null = t.family === 'sol' ? 'sol' : t.family === 'trx' ? 'trx' : null;
     const r = await within(captureErrors(() => dex.token(chain, t.addr)), 10_000, null);
     if (signal.aborted) return null;
@@ -150,14 +152,16 @@ export async function findCoin(run: CheckRun, text: string, signal: AbortSignal)
     }
     if (info) return { chain: info.chain, ca: t.family === 'evm' ? t.addr.toLowerCase() : t.addr, market: info };
   }
-  const total = evm.length + refs.sol.length + refs.tron.length;
+  const total = refs.evm.length + refs.sol.length + refs.tron.length;
   const sure = tries.find(t => !common.has(t.addr) && (total === 1 || labelled(text, t.addr)));
   const unconfirmed = (addr: string | undefined) => {
     if (addr && down.size && !run.unconfirmedCoin && !signal.aborted) run.unconfirmedCoin = { address: addr, why: `${listOf([...down], 'and')} unavailable` };
     return null;
   };
   if (signal.aborted) return null;
-  if (!sure) return unconfirmed(tries.find(t => !common.has(t.addr))?.addr);
+  if (!sure) return unconfirmed(tries.find(t => !common.has(t.addr) && t.addr !== named)?.addr);
+  // the project's coin is the one already named as being on another chain: nothing more to look up or say
+  if (sure.addr === named) return null;
   if (sure.family === 'evm') {
     const det = await detectEvmChain(run, sure.addr);
     if (signal.aborted) return null;
@@ -202,9 +206,9 @@ async function announceOtherChain(run: CheckRun, found: OtherChainCoin, where: '
   if (signal.aborted) return;
   const { ca, other } = found;
   // every write first: the steps below are the only awaits
-  run.otherChain = { address: ca, chain: other.chainName };
+  run.otherChain = { address: ca, chain: other.chainName, site: null };
   run.coinAnnounced = true;
-  if (other.symbol && !run.ticker) run.ticker = other.symbol.replace(/^\$/, '').toUpperCase().slice(0, 20);
+  // the token's name only helps the GitHub search (never saved); its ticker is saved on the Target, see below
   if (other.name && !run.tokenName) run.tokenName = other.name.slice(0, 80);
   const parts: string[] = [];
   let site: string | null = null;
@@ -228,6 +232,11 @@ async function announceOtherChain(run: CheckRun, found: OtherChainCoin, where: '
     run.kind = 'site';
     run.detected = { kind: 'site', label: 'Website', domain: run.domain!, url: site! };
     run.ca = null;
+    run.otherChain.site = run.domain;
+  } else if (where === 'contract' && other.symbol && !run.ticker) {
+    // the check stays on the contract's own Target: the ticker is this token's. Never on a site or post Target, which
+    // may hold the ticker of its own coin on a chain ApeCheck reads (saveTarget would write over it).
+    run.ticker = other.symbol.replace(/^\$/, '').toUpperCase().slice(0, 20);
   }
 
   const lead = where === 'contract' ? `Contract on ${other.chainName}: ${short(ca)}` : `Contract found ${where === 'page' ? 'on page' : 'in post'}: ${short(ca)} on ${other.chainName}`;

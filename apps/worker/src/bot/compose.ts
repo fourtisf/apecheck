@@ -38,6 +38,11 @@ export interface ReplyCheck {
   coinScore: number | null;
   coinBand: string | null;
   summary: string | null;
+  /**
+   * The coin is on a chain ApeCheck can't read yet (Check.evidence.otherChain, see otherChainOf): `chain` is its name,
+   * `site` the website from its token info that the check moved to (null when it didn't). The reply says so.
+   */
+  otherChain?: { chain: string; site?: string | null } | null;
 }
 
 const NAR_KEYS = new Set<string>(NAR_BANDS.map(b => b.key));
@@ -108,6 +113,27 @@ function fitLines(lines: (string | null)[], fitIdx: number | null): string {
   return keep(part === '…' ? null : part);
 }
 
+/**
+ * Longest site (defanged) and chain names the other-chain line names; longer ones are left out ("the website",
+ * "another chain"), so that line, a verdict head with a coin, the disclaimer and the report link always fit in 280.
+ */
+const OTHER_SITE_MAX = 60;
+const OTHER_CHAIN_MAX = 24;
+
+/**
+ * The fixed line of a check whose coin is on a chain ApeCheck can't read (ReplyCheck.otherChain): the verdict is for
+ * the website from the token's info (defanged: never a link) and the coin wasn't checked. At most 167 characters.
+ */
+export function otherChainLine(o: NonNullable<ReplyCheck['otherChain']>): string | null {
+  const named = stripLinks(stripMentions(o.chain));
+  const chain = named.length > OTHER_CHAIN_MAX ? 'another chain' : named;
+  if (!chain || hasLink(chain)) return null;
+  const site = o.site ? stripLinks(o.site) : '';
+  if (site && site.length <= OTHER_SITE_MAX && !hasLink(site)) return `This verdict is for ${site}, the website in the token's info; the coin on ${chain} wasn't checked.`;
+  if (o.site) return `This verdict is for the website in the token's info; the coin on ${chain} wasn't checked.`;
+  return `The coin on ${chain} wasn't checked: ApeCheck can't read that chain yet.`;
+}
+
 /** The verdict reply for a finished check, or the failure line for a check that didn't finish. */
 export function composeReply(check: ReplyCheck, opts: ComposeOpts): string {
   if (check.status !== 'DONE' || check.narScore == null || !Number.isFinite(check.narScore)) return FAILED_TEXT;
@@ -123,7 +149,9 @@ export function composeReply(check: ReplyCheck, opts: ComposeOpts): string {
   // last guard: a summary in which anything could still be a link is left out (the verdict stands without it)
   if (summary && hasLink(summary)) summary = '';
   const link = opts.includeLink ? reportLink(opts.appUrl, check.shortId) : null;
-  return fitLines([head, summary || null, BOT_DISCLAIMER, link], 1);
+  // a coin ApeCheck couldn't check: one fixed line right under the verdict (the summary is what gets cut to fit)
+  const other = check.otherChain ? otherChainLine(check.otherChain) : null;
+  return fitLines([head, other, summary || null, BOT_DISCLAIMER, link], 2);
 }
 
 /** A Pro follow-up: the model's answer (from the check's stored data only), made safe and cut to fit. */

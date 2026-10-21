@@ -51,6 +51,7 @@ export function judgeInput(run: CheckRun): JudgeInput {
       unchecked: !run.git.signal,
     },
     coin,
+    coinNotChecked: run.otherChain ? { chain: run.otherChain.chain, site: run.otherChain.site } : null,
     auditLink: run.auditLink,
     steps: run.steps.rows.map(r => ({ idx: r.idx, status: r.status, text: r.text })),
     evidence: buildEvidence(run),

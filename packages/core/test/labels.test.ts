@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { currentStubs, deployerHistoryLine, displayStep, scrubRetired } from '../src/labels';
+import { otherChainOf } from '../src/evidence';
+import { currentStubs, deployerHistoryLine, displayStep, otherChainCoinText, scrubRetired } from '../src/labels';
 
 describe('displayStep: steps stored before ApeCheck dropped its third-party coin sources', () => {
   it('reads their "unavailable" lines as "not checked", without the retired source tag, keeping the suffix', () => {
@@ -75,5 +76,20 @@ describe('free text and stub lists stored about old checks', () => {
   it('currentStubs drops the retired adapter only', () => {
     expect(currentStubs(['x', 'fourtis', 'etherscan', 'ai'])).toEqual(['x', 'etherscan', 'ai']);
     expect(currentStubs(undefined)).toEqual([]);
+  });
+});
+
+describe("a coin on a chain ApeCheck can't read (Check.evidence.otherChain)", () => {
+  const SONIC = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
+  it('reads what the worker stored, and nothing that does not hold up', () => {
+    expect(otherChainOf({ otherChain: { chain: 'Sonic', address: SONIC, site: 'esco.example' } })).toEqual({ chain: 'Sonic', address: SONIC, site: 'esco.example' });
+    expect(otherChainOf({ otherChain: { chain: 'Sonic', address: SONIC.toUpperCase().replace('0X', '0x') } })).toEqual({ chain: 'Sonic', address: SONIC, site: null });
+    expect(otherChainOf({ otherChain: { chain: 'Sonic', address: SONIC, site: 'https://evil.example/x' } })?.site).toBeNull();
+    for (const ev of [null, undefined, [], 'x', {}, { otherChain: null }, { otherChain: { chain: '', address: SONIC } }, { otherChain: { chain: 'Sonic', address: 'nope' } }, { otherChain: { chain: 'x'.repeat(41), address: SONIC } }]) {
+      expect(otherChainOf(ev)).toBeNull();
+    }
+  });
+  it('one sentence for the report and the feed', () => {
+    expect(otherChainCoinText('Sonic')).toBe("Coin on Sonic: not checked (ApeCheck can't read that chain yet)");
   });
 });

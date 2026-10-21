@@ -21,6 +21,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { otherChainOf } from '@apecheck/core';
 import { captureErrors } from '@apecheck/sources';
 import { answerFromCheck, cleanQuestion } from '../asks/answer';
 import { errText } from '../log';
@@ -139,7 +140,9 @@ function loadMention(deps: BotDeps, id: string) {
   return deps.prisma.botMention.findUnique({
     where: { id },
     include: {
-      check: { select: { id: true, shortId: true, status: true, narScore: true, narBand: true, coinScore: true, coinBand: true, summary: true, cardPath: true } },
+      check: {
+        select: { id: true, shortId: true, status: true, narScore: true, narBand: true, coinScore: true, coinBand: true, summary: true, cardPath: true, evidence: true },
+      },
     },
   });
 }
@@ -248,7 +251,9 @@ export async function processReply(deps: BotDeps, mentionId: string, attempt: Re
       if (!last) throw new RetryReplyError('the check is still running');
       return fail(deps, m, 'the check did not finish in time');
     }
-    text = composeReply(m.check as ReplyCheck, composeOpts(deps.env));
+    // a coin on a chain ApeCheck can't read: the reply says the coin wasn't checked (and which site the verdict is for)
+    const reply: ReplyCheck = { ...m.check, status: m.check.status as ReplyCheck['status'], otherChain: otherChainOf(m.check.evidence) };
+    text = composeReply(reply, composeOpts(deps.env));
     if (m.check.status === 'DONE' && text !== FAILED_TEXT) png = await cardPng(deps, m.check);
   }
   if (!fitsX(text)) return fail(deps, m, 'reply text over 280 characters');

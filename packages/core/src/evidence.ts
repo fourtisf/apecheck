@@ -101,6 +101,14 @@ export interface CheckEvidence {
 
   post?: { id: string; author: string; authorId?: string | null; text: string; createdAt?: string | null } | null;
 
+  /**
+   * The coin is a contract DexScreener lists only on a chain ApeCheck has no on-chain reads for (Sonic, Polygon…):
+   * named, never checked or scored. `chain` is that chain's name ("Sonic"), `address` the contract (lowercase).
+   * `site`: the domain from the token's info that the check moved to (a pasted or tagged contract whose token info
+   * links the project's website: the verdict is for that site); null when the check stayed on what was pasted.
+   */
+  otherChain?: { chain: string; address: string; site?: string | null } | null;
+
   /** step count estimate for progress ("Step 3 of 12") */
   stepsExpected?: number;
   /** which AI implementation ran: real model or the heuristic stub */
@@ -109,6 +117,20 @@ export interface CheckEvidence {
   stubbed?: string[];
   /** stages that timed out or errored, e.g. ["docs:timeout"] */
   degraded?: string[];
+}
+
+/**
+ * Check.evidence.otherChain as stored, or null when there is none or it doesn't hold up (a chain name, an EVM address
+ * and, when set, a plain domain): the API, the report and the bot reply read it through here.
+ */
+export function otherChainOf(evidence: unknown): { chain: string; address: string; site: string | null } | null {
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return null;
+  const o = (evidence as CheckEvidence).otherChain;
+  if (!o || typeof o !== 'object' || typeof o.chain !== 'string' || typeof o.address !== 'string') return null;
+  const chain = o.chain.trim();
+  if (!chain || chain.length > 40 || !/^0x[0-9a-fA-F]{40}$/.test(o.address)) return null;
+  const site = typeof o.site === 'string' && o.site.length <= 253 && /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(o.site) ? o.site.toLowerCase() : null;
+  return { chain, address: o.address.toLowerCase(), site };
 }
 
 /** Rough step counts per input kind, used until the real count is known. */
