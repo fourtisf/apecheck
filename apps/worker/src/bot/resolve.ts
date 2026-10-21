@@ -6,26 +6,29 @@
  *     entity URLs already expanded (never t.co). A post the mention quotes counts as a link written in it.
  *  2. Otherwise the post the mention replies to (`replied_to`): the links and contracts in its author's text (its
  *     @handles never count: "Audited by @CertiK" names an auditor, not the project; cashtags never count either: a
- *     ticker names many coins). When it names nothing ("Dex paid." under the project's own "CA: …" post), the posts
- *     above it in the thread (`opts.thread`: its parent, that one's parent, up to three, and the conversation root),
- *     their links and contracts only: the nearest one by the same author (the project's own thread).
+ *     ticker names many coins).
  *  3. Otherwise an @handle the author typed in the mention (a project handle; the weakest signal, since people tag
- *     friends next to the bot: it never beats a link or contract of the post they reply under or of its author's
- *     posts above it).
- *  4. Otherwise the nearest link or contract in a post above it by another account (handle.ts prefers the thread's
- *     own check to it), else the author of the post it replies to ("@author" as an X-profile target), or that post
- *     itself when it came without its author.
- *  5. Nothing → help ("Tag me under a project's post, or include its link or contract.").
+ *     friends next to the bot: it never beats a link or contract of the post they reply under) — unless it names that
+ *     post's own author: then rule 4 first.
+ *  4. Otherwise, when that post names nothing ("Dex paid." under the project's own "CA: …" post), the posts above it
+ *     in the thread (`opts.thread`: its parent, that one's parent, up to three, and the conversation root), their
+ *     links and contracts only, and only those of its own author: the nearest one (the project's own thread). Another
+ *     account's post above never counts: "Drop your projects below, mine: 0x…" above a project's reply names the
+ *     poster's coin, not the project's.
+ *  5. Otherwise the typed @handle naming that author, else the author of the post it replies to ("@author" as an
+ *     X-profile target), or that post itself when it came without its author.
+ *  6. Nothing → help ("Tag me under a project's post, or include its link or contract.").
  *
  * A post the mention replies to that is itself a tag of the bot ("@ApeCheckBot real?") is a request, not a project's
  * post: its author is the person who asked, never a target. What it named is used (its links and contracts, then
  * its @handles after the mention's own), else what it was asked under: the post above it (`opts.above`; when that
  * was not read yet the result is { kind: 'up' } and the caller reads it and resolves again). When the post above names
- * nothing either, the posts above that one decide as in rule 2.
+ * nothing either, its author's posts above it decide as in rule 4, after an @handle typed in the mention or that tag
+ * unless it names that author.
  *
  * The posts above are read by the caller (thread.ts, X's free embed reads only). Until they are (`opts.thread`
- * undefined), a result they could still change (a typed @handle, an author, help) carries `walkUp`: the id of the post
- * that named nothing, to read up from and resolve again.
+ * undefined), a result they could still change (an @handle naming the author, an author, help) carries `walkUp`: the
+ * id of the post that named nothing, to read up from and resolve again.
  *
  * Links to the bot's own posts/profile (also a quote of one of its posts, and any post id in `opts.botPostIds`) and
  * to apecheck.io are never targets.
@@ -42,11 +45,8 @@ import type { XPost } from '@apecheck/sources';
 import { mentionRe, ownText, parentOwnText, tagsBot, type BotIdentity } from './mention';
 
 export type BotTargetType = 'contract' | 'site' | 'xpost' | 'handle';
-/**
- * 'thread': a post above the one it replies to by that post's author (the project's own thread); 'above': one by
- * another account.
- */
-export type BotTargetFrom = 'mention' | 'replied' | 'thread' | 'above' | 'author';
+/** 'thread': a post above the one it replies to by that post's own author (the project's own thread) */
+export type BotTargetFrom = 'mention' | 'replied' | 'thread' | 'author';
 
 export type BotResolution =
   | { kind: 'target'; target: string; type: BotTargetType; from: BotTargetFrom; reason: string; walkUp?: string }
@@ -90,6 +90,8 @@ const isBotPost = (p: XPost, ctx: Ctx) =>
 const isStrong = (c: Candidate) => c.type !== 'handle';
 const handleOf = (p: XPost) => p.authorHandle?.replace(/^@+/, '').toLowerCase() || null;
 const sameAuthor = (a: XPost, b: XPost) => (!!a.authorId && a.authorId === b.authorId) || (!!handleOf(a) && handleOf(a) === handleOf(b));
+/** `c`, an @handle (https://x.com/<handle>), names the author of `p` */
+const namesAuthor = (c: Candidate | null | undefined, p: XPost) => !!c && !!handleOf(p) && c.target.slice(c.target.lastIndexOf('/') + 1).toLowerCase() === handleOf(p);
 
 /** Classify one URL (already expanded). Status ids of the bot's own posts go to `botIds`. */
 function fromUrl(url: string, ctx: Ctx, botIds: Set<string>): Candidate | null {
@@ -179,24 +181,18 @@ function aboveCandidate(p: XPost, ctx: Ctx): Candidate | null {
   return isBotPost(p, ctx) ? null : best(candidatesOf(p, parentOwnText(p), ctx, false));
 }
 
-interface Walked {
-  /** the nearest post above by the subject's author that names something (its own thread) */
-  same: BotResolution | null;
-  /** the nearest one by another account */
-  other: BotResolution | null;
-}
-
-/** What the posts above `subject` (the post that named nothing) name. */
-function walked(subject: XPost, ctx: Ctx, opts: ResolveOpts, where: string): Walked {
-  const out: Walked = { same: null, other: null };
+/**
+ * The nearest post above `subject` (the post that named nothing) by its own author that names a link or contract (its
+ * own thread). Other accounts' posts above never count: a KOL's "Drop your projects below, mine: 0x…" names the KOL's
+ * coin, not that of the project replying under it.
+ */
+function ownAbove(subject: XPost, ctx: Ctx, opts: ResolveOpts, where: string): BotResolution | null {
   for (const p of opts.thread ?? []) {
-    if (p.id === subject.id) continue;
+    if (p.id === subject.id || !sameAuthor(p, subject)) continue;
     const c = aboveCandidate(p, ctx);
-    if (!c) continue;
-    if (sameAuthor(p, subject)) out.same ??= target(c, 'thread', `${LABEL[c.type]} in the same author's post above ${where}`);
-    else out.other ??= target(c, 'above', `${LABEL[c.type]} in another account's post above ${where}`);
+    if (c) return target(c, 'thread', `${LABEL[c.type]} in the same author's post above ${where}`);
   }
-  return out;
+  return null;
 }
 
 /** `r`, marked `walkUp` while the posts above `subject` were not read: they could still name what to check. */
@@ -231,13 +227,16 @@ export function resolveBotTarget(mention: XPost, repliedTo: XPost | null | undef
 
   const parentText = parentOwnText(repliedTo);
   if (!tagsBot(parentText, bot)) {
-    // 2. the links and contracts of the post it replies to, else of its author's posts above it
+    // 2. the links and contracts of the post it replies to
     const theirs = best(candidatesOf(repliedTo, parentText, ctx, false));
     if (theirs) return target(theirs, 'replied', `${LABEL[theirs.type]} in the post it replies to`);
-    const up = walked(repliedTo, ctx, opts, 'the post it replies to');
-    if (up.same) return up.same;
-    // 3. a typed @handle, 4. another account's post above it, that post's author
-    const last = typedHandle() ?? up.other ?? authorOf(repliedTo, 'the post it replies to');
+    // 3. a typed @handle of another account than its author: that account, nothing above is read
+    const typed = typedHandle();
+    if (typed && !namesAuthor(myHandle, repliedTo)) return typed;
+    // 4. its author's own posts above it, 5. the typed @handle naming that author, that post's author
+    const up = ownAbove(repliedTo, ctx, opts, 'the post it replies to');
+    if (up) return up;
+    const last = typed ?? authorOf(repliedTo, 'the post it replies to');
     return orAbove(last ?? { kind: 'help', reason: 'nothing to check in the mention or the post it replies to' }, repliedTo, opts);
   }
 
@@ -259,14 +258,13 @@ export function resolveBotTarget(mention: XPost, repliedTo: XPost | null | undef
     const aboveStrong = best(candidatesOf(above, parentOwnText(above), ctx, false));
     if (aboveStrong) return target(aboveStrong, 'replied', `${LABEL[aboveStrong.type]} in ${where}`);
   }
-  // that post names nothing either: the posts above it, as in rule 2
-  const up: Walked = above ? walked(above, ctx, opts, where) : { same: null, other: null };
-  if (up.same) return up.same;
-  const typed = typedHandle();
-  if (typed) return orAbove(typed, above, opts);
+  // that post names nothing either: an @handle typed in the mention, else in that tag — before the posts above it unless
+  // it names that post's author — then that author's own posts above it, as in rules 3–5
   const tagHandle = tagCands.find(c => c.type === 'handle');
-  if (tagHandle) return orAbove(target(tagHandle, 'replied', '@handle in the tag it replies to'), above, opts);
-  if (up.other) return up.other;
-  const a = above ? authorOf(above, where) : null;
+  const handle = typedHandle() ?? (tagHandle ? target(tagHandle, 'replied', '@handle in the tag it replies to') : null);
+  if (handle && !(above && namesAuthor(myHandle ?? tagHandle, above))) return handle;
+  const up = above ? ownAbove(above, ctx, opts, where) : null;
+  if (up) return up;
+  const a = handle ?? (above ? authorOf(above, where) : null);
   return orAbove(a ?? { kind: 'help', reason: 'it replies to a tag of the bot that names nothing to check' }, above, opts);
 }

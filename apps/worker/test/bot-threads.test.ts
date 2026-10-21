@@ -264,31 +264,60 @@ describe('a tag under a post that names nothing: the posts above it in the threa
     expect(await prisma.botMention.count({ where: { status: 'FAILED' } })).toBe(0);
   });
 
-  it("another account's post above: checked when the thread has no check yet; the thread's own check wins over it", async () => {
+  it('a project\'s link-less reply under a KOL\'s "Drop your projects below, mine: 0x…": the project, never the KOL\'s coin', async () => {
     const h = harness();
-    const call = post({ text: `New gem, CA: ${CA}`, authorHandle: 'kol', authorId: '42' });
+    const reads = watchReads(h.x);
+    const call = post({ text: `Drop your projects below, mine: ${CA}`, authorHandle: 'kol', authorId: '42' });
     h.x.posts.set(call.id, call);
-    const chat = post({ text: 'we are so back', authorHandle: 'lurker', authorId: '77', replyToId: call.id, conversationId: call.id });
-    expect(await handleMention(h.deps, replyTo(chat, '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' }))).toMatchObject({
+    const reply = post({ text: 'we are building the future of payments', authorHandle: 'projectb', authorId: '702', replyToId: call.id, conversationId: call.id });
+    expect(await handleMention(h.deps, replyTo(reply, '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' }))).toMatchObject({
       action: 'check',
       reuse: null,
-      target: CA,
+      target: 'https://x.com/projectb',
     });
-
-    const parent = projectPost();
-    h.x.posts.set(parent.id, parent);
-    await handleMention(h.deps, replyTo(parent, '@ApeCheckBot real?'));
-    const site = await prisma.check.findFirstOrThrow({ where: { targetRaw: 'https://orbit.xyz/' } });
-    const shill = post({ text: `real alpha: ${CA}`, authorHandle: 'shill', authorId: '604', replyToId: parent.id, conversationId: parent.id });
-    h.x.posts.set(shill.id, shill);
-    const reply = post({ text: 'ser?', authorHandle: 'lurker', authorId: '77', replyToId: shill.id, conversationId: parent.id });
-    expect(await handleMention(h.deps, replyTo(reply, '@ApeCheckBot', { authorHandle: 'other_user', authorId: '601' }))).toMatchObject({
-      action: 'check',
-      checkId: site.id,
-      reuse: 'thread',
-      target: 'https://orbit.xyz/',
-    });
+    expect(await prisma.check.findFirstOrThrow()).toMatchObject({ targetRaw: 'https://x.com/projectb' });
+    expect(await prisma.target.count()).toBe(1); // never a check of the KOL's coin
+    expect(reads).toEqual({ free: [call.id], paid: [] });
   });
+
+  it("an @handle of another account typed in the mention: that account, and nothing above is read", async () => {
+    const h = harness();
+    const reads = watchReads(h.x);
+    const top = launch();
+    h.x.posts.set(top.id, top);
+    const m = replyTo(dexPaid(top), '@ApeCheckBot what about @kairolabs', { authorHandle: 'tagger', authorId: '605' });
+    expect(await handleMention(h.deps, m)).toMatchObject({ action: 'check', reuse: null, target: 'https://x.com/kairolabs' });
+    expect(reads).toEqual({ free: [], paid: [] });
+  });
+
+  /** X's free embed hosts answering by post id (`syndication`, `oembed`; 404 otherwise), every request recorded */
+  function embedHttp(syndication: Record<string, unknown>, oembed: Record<string, unknown> = {}) {
+    const requests: string[] = [];
+    const http: Http = {
+      async request(raw: string, req: HttpRequest = {}) {
+        const url = new URL(raw);
+        const oe = url.host === 'publish.twitter.com';
+        const id = (oe ? /\/status\/(\d+)/.exec(url.searchParams.get('url') ?? '')?.[1] : url.searchParams.get('id')) ?? '';
+        requests.push(`${req.method ?? 'GET'} ${url.host}${url.pathname}?id=${id}`);
+        const body = url.host === 'cdn.syndication.twimg.com' ? syndication[id] : oe ? oembed[id] : undefined;
+        const res: HttpResponse = {
+          status: body ? 200 : 404,
+          ok: !!body,
+          url: raw,
+          finalUrl: raw,
+          headers: { 'content-type': 'application/json' },
+          text: body ? JSON.stringify(body) : '',
+          truncated: false,
+          ms: 1,
+        };
+        return res;
+      },
+      async json<T>(u: string, req?: HttpRequest) {
+        return JSON.parse((await this.request(u, req)).text) as T;
+      },
+    };
+    return { http, requests };
+  }
 
   it('on the real X adapter: the walk reads syndication only (never api.x.com), the post above with its parent in one read', async () => {
     const LAUNCH = '1980000000000000002';
@@ -309,28 +338,7 @@ describe('a tag under a post that names nothing: the posts above it in the threa
         parent: { id_str: ROOT, text: 'Introducing Stride 🧵', display_text_range: [0, 20], entities: {}, user },
       },
     };
-    const requests: string[] = [];
-    const http: Http = {
-      async request(raw: string, req: HttpRequest = {}) {
-        const url = new URL(raw);
-        requests.push(`${req.method ?? 'GET'} ${url.host}${url.pathname}?id=${url.searchParams.get('id') ?? ''}`);
-        const body = url.host === 'cdn.syndication.twimg.com' ? syndication[url.searchParams.get('id') ?? ''] : undefined;
-        const res: HttpResponse = {
-          status: body ? 200 : 404,
-          ok: !!body,
-          url: raw,
-          finalUrl: raw,
-          headers: { 'content-type': 'application/json' },
-          text: body ? JSON.stringify(body) : '',
-          truncated: false,
-          ms: 1,
-        };
-        return res;
-      },
-      async json<T>(u: string, req?: HttpRequest) {
-        return JSON.parse((await this.request(u, req)).text) as T;
-      },
-    };
+    const { http, requests } = embedHttp(syndication);
     const h = harness();
     // every paid key set: still nothing but the free embed host is asked
     h.deps.x = createX({ ...h.env, X_BEARER_TOKEN: 'b', X_API_KEY: 'k', X_API_SECRET: 's', X_ACCESS_TOKEN: 't', X_ACCESS_SECRET: 'ts' }, http);
@@ -338,6 +346,45 @@ describe('a tag under a post that names nothing: the posts above it in the threa
     const m = replyTo(dp, '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' });
     expect(await handleMention(h.deps, m)).toMatchObject({ action: 'check', reuse: null, target: STRIDE_CA });
     expect(requests).toEqual([`GET cdn.syndication.twimg.com/tweet-result?id=${LAUNCH}`]);
+  });
+
+  it('a post above read through oEmbed (no reply id): the conversation root is still read, and its CA checked', async () => {
+    const ROOT = '1981000000000000001';
+    const MID = '1981000000000000002';
+    const user = { id_str: '1700000000000000880', screen_name: 'stridefun', name: 'Stride' };
+    // syndication has no answer for the post in the middle (404): X's oEmbed does, without what it replies to
+    const syndication: Record<string, unknown> = {
+      [ROOT]: {
+        __typename: 'Tweet',
+        id_str: ROOT,
+        text: `Stride is Live on @solana Chain. CA: ${STRIDE_CA}`,
+        display_text_range: [0, 80],
+        created_at: '2026-10-20T15:02:44.000Z',
+        entities: { urls: [], user_mentions: [{ id_str: '951329744804392960', screen_name: 'solana' }], symbols: [] },
+        user,
+      },
+    };
+    const oembed: Record<string, unknown> = {
+      [MID]: {
+        url: `https://twitter.com/stridefun/status/${MID}`,
+        author_name: 'Stride',
+        author_url: 'https://twitter.com/stridefun',
+        html: `<blockquote class="twitter-tweet" data-dnt="true"><p lang="en" dir="ltr">Chart soon 👀</p>&mdash; Stride (@stridefun) <a href="https://twitter.com/stridefun/status/${MID}?ref_src=twsrc%5Etfw">October 20, 2026</a></blockquote>\n`,
+        type: 'rich',
+        version: '1.0',
+      },
+    };
+    const { http, requests } = embedHttp(syndication, oembed);
+    const h = harness();
+    h.deps.x = createX({ ...h.env, X_BEARER_TOKEN: 'b', X_API_KEY: 'k', X_API_SECRET: 's', X_ACCESS_TOKEN: 't', X_ACCESS_SECRET: 'ts' }, http);
+    const dp = stride('Dex paid. https://t.co/pic', { id: '1981000000000000003', replyToId: MID, conversationId: ROOT, displayTextRange: [0, 9] });
+    const m = replyTo(dp, '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' });
+    expect(await handleMention(h.deps, m)).toMatchObject({ action: 'check', reuse: null, target: STRIDE_CA });
+    expect(requests).toEqual([
+      `GET cdn.syndication.twimg.com/tweet-result?id=${MID}`,
+      `GET publish.twitter.com/oembed?id=${MID}`,
+      `GET cdn.syndication.twimg.com/tweet-result?id=${ROOT}`,
+    ]);
   });
 });
 

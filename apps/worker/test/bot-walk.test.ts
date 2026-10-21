@@ -23,7 +23,10 @@ const withParent = (p: XPost, byId: Map<string, XPost>): XPost => {
   return { ...p, repliedTo: parent ? { ...parent, repliedTo: undefined } : null };
 };
 
-function reader(posts: XPost[], o: { fail?: string[]; hang?: string[]; syndication?: boolean } = {}) {
+/** What X's oEmbed fallback gives: the post without what it replies to, its conversation or its author's id. */
+const oembedShaped = (p: XPost): XPost => ({ ...p, authorId: '', conversationId: null, replyToId: null, repliedTo: undefined, inReplyToUserId: undefined, displayTextRange: undefined });
+
+function reader(posts: XPost[], o: { fail?: string[]; hang?: string[]; syndication?: boolean; oembed?: string[] } = {}) {
   const byId = new Map(posts.map(p => [p.id, p]));
   const calls: string[] = [];
   const read = async (id: string): Promise<XPost | null> => {
@@ -31,6 +34,7 @@ function reader(posts: XPost[], o: { fail?: string[]; hang?: string[]; syndicati
     if (o.hang?.includes(id)) return new Promise<XPost | null>(() => undefined);
     if (o.fail?.includes(id)) throw new Error('HTTP 503 from cdn.syndication.twimg.com');
     const p = byId.get(id);
+    if (p && o.oembed?.includes(id)) return oembedShaped(p);
     return p ? (o.syndication ? withParent(p, byId) : p) : null;
   };
   return { read, calls };
@@ -84,6 +88,22 @@ describe('readThread', () => {
     // a read that answers with another post counts as unreadable
     const wrong = await readThread(async () => t[1], t[5], { rootId: null });
     expect(wrong).toEqual([]);
+  });
+
+  it('a post read through oEmbed (no reply id) in the middle of the thread is not its top: the root is still read', async () => {
+    const t = chain(6);
+    const r = reader(t, { oembed: [t[4].id] });
+    expect(ids(await readThread(r.read, t[5], { rootId: t[0].id }))).toEqual(['5/', '1/']);
+    expect(r.calls).toEqual([t[4].id, t[0].id]);
+    // the root itself read through oEmbed: the top, nothing more is read
+    const short = chain(3);
+    const s = reader(short, { oembed: [short[0].id] });
+    expect(ids(await readThread(s.read, short[2], { rootId: short[0].id }))).toEqual(['2/', '1/']);
+    expect(s.calls).toEqual([short[1].id, short[0].id]);
+    // the root not known: nothing to read past it
+    const u = reader(t, { oembed: [t[4].id] });
+    expect(ids(await readThread(u.read, t[5], { rootId: null }))).toEqual(['5/']);
+    expect(u.calls).toEqual([t[4].id]);
   });
 
   it('a read that never answers: the time budget ends the walk with what was read, and nothing more is read', async () => {

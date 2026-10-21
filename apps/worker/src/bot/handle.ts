@@ -19,10 +19,10 @@
  *     check, that tag's target (a second tag in the thread never checks the person who tagged first); else
  *     resolveBotTarget() (resolve.ts), reading the parent post (and, when the parent is a tag that names nothing,
  *     the post above it) when X didn't include it, and, when that post names nothing ("Dex paid." under the
- *     project's own "CA: …" post), the posts above it in the thread (thread.ts: up to three and the conversation
- *     root, time-boxed). Every one of these reads goes through X's free embed endpoints, never the paid X API. When
- *     only a post's author, another account's post above it (or nothing) is found and the thread already has a
- *     check, that check. Nothing to check → the help line, at most once per thread;
+ *     project's own "CA: …" post), its author's own posts above it in the thread (thread.ts: up to three and the
+ *     conversation root, time-boxed; not when the mention names another account's @handle). Every one of these reads
+ *     goes through X's free embed endpoints, never the paid X API. When only a post's author (or nothing) is found and
+ *     the thread already has a check, that check. Nothing to check → the help line, at most once per thread;
  *  5. a target → one check: the same target in this thread (running, or done at any age), else the shared
  *     findReusableCheck (running, or a verdict younger than CACHE_HOURS), else a new check (via BOT, PRIORITY.bot).
  *     A finished check is answered at once; a running one is answered when Stage F enqueues the reply of every
@@ -354,8 +354,8 @@ export async function processMention(deps: BotDeps, row: Row, post: XPost): Prom
     const walkUp = res.kind === 'up' ? null : res.walkUp;
     const below = walkUp ? [parentPost, opts.above, parentPost?.repliedTo].find(p => p?.id === walkUp) : null;
     if (below) {
-      // that post names nothing (an image, "Dex paid."): the posts above it in the thread, its author's own first —
-      // free embed reads too, a few at most, within a time budget; whatever was read by then decides
+      // that post names nothing (an image, "Dex paid."): its author's own posts above it in the thread — free embed
+      // reads too, a few at most, within a time budget; whatever was read by then decides
       opts.thread = await readThread(id => deps.x.getPost(id), below, {
         rootId: row.conversationId,
         stop: p => endsThreadWalk(p, below, bot, botPostIds),
@@ -364,11 +364,9 @@ export async function processMention(deps: BotDeps, row: Row, post: XPost): Prom
       res = resolveBotTarget(post, parentPost, bot, opts);
     }
     const parentIsTag = !!parentPost && !isFromBot(parentPost, bot) && tagsBot(parentOwnText(parentPost), bot);
-    const weak = res.kind === 'target' && (res.from === 'author' || res.from === 'above');
-    if (row.conversationId && (weak || (res.kind !== 'target' && parentIsTag))) {
-      // only a post's author, another account's post above it (or nothing) found: when this thread already has a
-      // check, that check is what the thread is about (a tag under the project's own "2/" post, under a reply in the
-      // thread, under an unanswered tag)
+    if (row.conversationId && ((res.kind === 'target' && res.from === 'author') || (res.kind !== 'target' && parentIsTag))) {
+      // only a post's author (or nothing) found: when this thread already has a check, that check is what the thread
+      // is about (a tag under the project's own "2/" post, under a reply in the thread, under an unanswered tag)
       const thread = await threadCheck(deps, row, now);
       if (thread) {
         res = { kind: 'target', target: thread.targetRaw, type: typeOf(thread.targetRaw), from: 'replied', reason: 'the check this thread already has' };

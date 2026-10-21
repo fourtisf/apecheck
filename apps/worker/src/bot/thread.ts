@@ -7,8 +7,9 @@
  * the walk did not reach it. A syndication read carries the read post's own parent (`repliedTo`, with its reply id),
  * which then needs no read of its own: three levels and the root take two or three reads. The walk stops
  *  - at a post `stop()` says decides it (resolve.ts endsThreadWalk: nothing above it could win);
- *  - at the top of the thread (a post that replies to nothing);
- *  - at a post that can't be read (deleted, protected, both embed endpoints down): only the root is still tried;
+ *  - at the top of the thread (the conversation root);
+ *  - at a post that doesn't say what it replies to (read through oEmbed, which never carries the reply id) or that
+ *    can't be read (deleted, protected, both embed endpoints down): only the root is still tried;
  *  - when the time budget (all reads together) runs out: what was read until then is used.
  * Never throws.
  */
@@ -54,7 +55,6 @@ export async function readThread(read: (id: string) => Promise<XPost | null>, fr
   const seen = new Set([from.id]);
   let id = from.replyToId && RE_ID.test(from.replyToId) ? from.replyToId : null;
   let carried = from.repliedTo ?? null;
-  let top = !id;
   while (id && out.length < levels && !seen.has(id)) {
     seen.add(id);
     const known = carried?.id === id ? carried : null;
@@ -64,16 +64,14 @@ export async function readThread(read: (id: string) => Promise<XPost | null>, fr
     if (!p) break;
     out.push(p);
     if (opts.stop?.(p)) return out;
-    if (!p.replyToId) {
-      // the top of the thread — unless it is a carried parent whose own read failed (then the root is still tried)
-      top = p !== known || p.id === rootId;
-      break;
-    }
+    // no reply id: the top of the thread only when it is the root; else an oEmbed read (it never carries the reply
+    // id) or a carried parent whose own read failed, and the root is still tried below
+    if (!p.replyToId) break;
     carried = p.repliedTo ?? null;
     id = p.replyToId;
   }
   // the conversation root, unless the walk reached it (or it is the post the walk started from)
-  if (!top && rootId && !seen.has(rootId)) {
+  if (rootId && !seen.has(rootId)) {
     const root = carried?.id === rootId ? carried : await readInTime(rootId);
     if (root) out.push(root);
   }

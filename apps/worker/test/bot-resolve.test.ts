@@ -307,39 +307,54 @@ describe('resolveBotTarget', () => {
       });
     });
 
-    it("the author's own posts first: before a nearer post by another account, the nearest of them, its handle in any case", () => {
+    it("only the author's own posts count: past a nearer post by another account, the nearest of them, its handle in any case", () => {
       const top = stride('Stride: trade at https://t.co/s', { urls: ['https://stride.fun'] });
       const launchPost = stride(`CA: ${STRIDE_CA}`, { authorId: '', authorHandle: 'StrideFun', replyToId: top.id });
       const shill = kol(`real alpha is ${CA}`, { replyToId: launchPost.id });
       const dp = dexPaid(shill);
       const m = replyTo(dp, '@ApeCheckBot');
       expect(resolveBotTarget(m, dp, BOT, { thread: [shill, launchPost, top] })).toMatchObject({ target: STRIDE_CA, from: 'thread' });
-      // a site of the author's further up: still before the other account's contract
+      // a site of the author's further up: still, never the other account's contract
       expect(resolveBotTarget(m, dp, BOT, { thread: [shill, top] })).toMatchObject({ target: 'https://stride.fun', type: 'site', from: 'thread' });
+      // only the other account's post was read: the author
+      expect(resolveBotTarget(m, dp, BOT, { thread: [shill] })).toMatchObject({ target: 'https://x.com/stridefun', from: 'author' });
     });
 
-    it("another account's post above: after a typed @handle, before the post's author", () => {
-      const root = kol(`New gem CA: ${CA}`);
-      const reply = project('we are so back', { replyToId: root.id, conversationId: root.id });
-      expect(resolveBotTarget(replyTo(reply, '@ApeCheckBot'), reply, BOT, { thread: [root] })).toEqual({
-        kind: 'target',
-        target: CA,
-        type: 'contract',
-        from: 'above',
-        reason: "contract in another account's post above the post it replies to",
-      });
-      expect(resolveBotTarget(replyTo(reply, '@ApeCheckBot what about @kairolabs'), reply, BOT, { thread: [root] })).toMatchObject({
-        target: 'https://x.com/kairolabs',
-        from: 'mention',
-      });
+    it("another account's post above never counts: a project's link-less reply under a KOL's \"CA:\" root is the project, not the KOL's coin", () => {
+      for (const text of [`New gem CA: ${CA}`, `Drop your projects below, mine: ${CA}`]) {
+        const root = kol(text);
+        const reply = post({ text: 'we are building the future of payments', authorHandle: 'projectb', authorId: '702', replyToId: root.id, conversationId: root.id });
+        const m = replyTo(reply, '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' });
+        expect(resolve(m)).toMatchObject({ target: 'https://x.com/projectb', from: 'author', walkUp: reply.id });
+        expect(resolveBotTarget(m, reply, BOT, { thread: [root] })).toEqual({
+          kind: 'target',
+          target: 'https://x.com/projectb',
+          type: 'handle',
+          from: 'author',
+          reason: 'author of the post it replies to',
+        });
+        // a second project's link-less reply in the same thread: its own author too
+        const other = post({ text: 'gm, shipping v2 soon', authorHandle: 'projectc', authorId: '703', replyToId: root.id, conversationId: root.id });
+        expect(resolveBotTarget(replyTo(other, '@ApeCheckBot'), other, BOT, { thread: [root] })).toMatchObject({ target: 'https://x.com/projectc', from: 'author' });
+      }
     });
 
-    it("a typed @handle never beats a contract in the author's own posts above", () => {
+    it('a typed @handle of another account than the author: that account, before the posts above, which are not read', () => {
       const top = launch();
       const dp = dexPaid(top);
-      const m = replyTo(dp, '@ApeCheckBot what about @stridefun');
-      expect(resolve(m)).toMatchObject({ target: 'https://x.com/stridefun', from: 'mention', walkUp: dp.id });
+      const m = replyTo(dp, '@ApeCheckBot what about @kairolabs');
+      const want = { kind: 'target', target: 'https://x.com/kairolabs', type: 'handle', from: 'mention', reason: '@handle in the mention' };
+      expect(resolve(m)).toEqual(want); // no walkUp: nothing above is read
+      expect(resolveBotTarget(m, dp, BOT, { thread: [top] })).toEqual(want);
+    });
+
+    it("a typed @handle naming the author: the contract in the author's own posts above first, else that handle", () => {
+      const top = launch();
+      const dp = dexPaid(top);
+      const m = replyTo(dp, '@ApeCheckBot what about @StrideFun');
+      expect(resolve(m)).toMatchObject({ target: 'https://x.com/StrideFun', from: 'mention', walkUp: dp.id });
       expect(resolveBotTarget(m, dp, BOT, { thread: [top] })).toMatchObject({ target: STRIDE_CA, from: 'thread' });
+      expect(resolveBotTarget(m, dp, BOT, { thread: [] })).toEqual({ kind: 'target', target: 'https://x.com/StrideFun', type: 'handle', from: 'mention', reason: '@handle in the mention' });
     });
 
     it("@handles, cashtags and the bot's own posts above never count: the author, as before", () => {
@@ -383,11 +398,23 @@ describe('resolveBotTarget', () => {
         from: 'thread',
         reason: "contract in the same author's post above the post the tag it replies to is under",
       });
-      // the tag's own @handle still beats another account's post above, never the author's own
+      // the tag's own @handle of another account: that account, nothing above is read; naming the author of the post
+      // it is under: that author's own posts above first
       const named = replyTo(dp, '@ApeCheckBot is @stride_dev real?', { repliedTo: null, authorHandle: 'asker', authorId: '991' });
       const m2 = replyTo(named, '@ApeCheckBot', { authorHandle: 'other_user', authorId: '601' });
-      expect(resolveBotTarget(m2, named, BOT, { above: dp, thread: [kol(`CA: ${CA}`)] })).toMatchObject({ target: 'https://x.com/stride_dev', from: 'replied' });
-      expect(resolveBotTarget(m2, named, BOT, { above: dp, thread: [top] })).toMatchObject({ target: STRIDE_CA, from: 'thread' });
+      const dev = { kind: 'target', target: 'https://x.com/stride_dev', type: 'handle', from: 'replied', reason: '@handle in the tag it replies to' };
+      expect(resolveBotTarget(m2, named, BOT, { above: dp })).toEqual(dev);
+      expect(resolveBotTarget(m2, named, BOT, { above: dp, thread: [top] })).toEqual(dev);
+      const self = replyTo(dp, '@ApeCheckBot is @stridefun real?', { repliedTo: null, authorHandle: 'asker', authorId: '991' });
+      const m3 = replyTo(self, '@ApeCheckBot', { authorHandle: 'other_user', authorId: '601' });
+      expect(resolveBotTarget(m3, self, BOT, { above: dp })).toMatchObject({ target: 'https://x.com/stridefun', from: 'replied', walkUp: dp.id });
+      expect(resolveBotTarget(m3, self, BOT, { above: dp, thread: [top] })).toMatchObject({ target: STRIDE_CA, from: 'thread' });
+      // the same with the @handle typed in the mention itself
+      expect(resolveBotTarget(replyTo(named, '@ApeCheckBot @kairolabs?'), named, BOT, { above: dp })).toMatchObject({ target: 'https://x.com/kairolabs', from: 'mention' });
+      expect(resolveBotTarget(replyTo(named, '@ApeCheckBot @kairolabs?'), named, BOT, { above: dp })).not.toHaveProperty('walkUp');
+      expect(resolveBotTarget(replyTo(named, '@ApeCheckBot @stridefun?'), named, BOT, { above: dp, thread: [top] })).toMatchObject({ target: STRIDE_CA, from: 'thread' });
+      // another account's contract above the post the tag is under never counts
+      expect(resolveBotTarget(m3, self, BOT, { above: dp, thread: [kol(`CA: ${CA}`)] })).toMatchObject({ target: 'https://x.com/stridefun', from: 'replied' });
     });
 
     it('endsThreadWalk: a post by the same author that names a contract or link decides the walk', () => {
