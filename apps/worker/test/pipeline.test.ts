@@ -270,7 +270,7 @@ describe('pipeline run(checkId)', () => {
     const step = (t: string) => c.steps.find(s => s.text === t);
     expect(step('Deployer history: no earlier launches seen by ApeCheck (0xAbC…Ef01)')).toMatchObject({ status: 'WARN', source: 'ApeCheck' });
     expect(step('Bundle share: not checked')).toMatchObject({ status: 'WARN', source: null });
-    expect(step('Holder share: not checked')).toMatchObject({ status: 'WARN', source: null });
+    expect(step('Holder share: not checked, LP status not checked')).toMatchObject({ status: 'WARN', source: null });
     expect(step('Authorities: Renounced')).toMatchObject({ status: 'OK', source: 'On-chain' });
     expect(texts[texts.length - 1]).toMatch(/^Scoring \d+ claims and the coin$/);
 
@@ -395,13 +395,13 @@ describe('pipeline run(checkId)', () => {
       {
         target: EVM,
         data: { evmChains: { [EVM]: 'base' }, coinFacts: { [EVM]: empty('base', EVM, ['evm.creator: HTTP 500 from api.etherscan.io']) } } as FakeData,
-        expected: ['Deployer: not checked (Etherscan unavailable)', 'Bundle share: not checked', 'Holder share: not checked', 'Mint and freeze authorities unknown'],
+        expected: ['Deployer: not checked (Etherscan unavailable)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
       },
       // Tron: the contract's origin address, nothing else
       {
         target: TRC,
         data: { coinFacts: { [TRC.toLowerCase()]: { ...empty('trx', TRC), deployer: { address: 'TBckp5W67rgZ8kE5CArzqWgCpBHPqarGht', launched: null, dead: null, source: 'On-chain' as const } } } } as FakeData,
-        expected: ['Deployer history: no earlier launches seen by ApeCheck (TBckp…rGht)', 'Bundle share: not checked', 'Holder share: not checked', 'Mint and freeze authorities unknown'],
+        expected: ['Deployer history: no earlier launches seen by ApeCheck (TBckp…rGht)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
       },
     ];
     for (const k of cases) {

@@ -23,7 +23,7 @@
  *  - Secrets: the signing secret never leaves this function except inside the HMAC; logs name the host only (a URL can
  *    carry a token in its path or query).
  */
-import { WEBHOOK_SIGNATURE_HEADER, checkResultOf, type Env, type WebhookPayload } from '@apecheck/core';
+import { WEBHOOK_SIGNATURE_HEADER, checkResultOf, scrubRetired, type Env, type WebhookPayload } from '@apecheck/core';
 import { signWebhook } from '@apecheck/core/node';
 import type { Prisma, PrismaClient } from '@apecheck/db';
 import { SsrfError, TimeoutError, type Http } from '@apecheck/sources';
@@ -108,7 +108,7 @@ export async function buildPayload(
       // the same flat shape as the MCP tool run_check (core checkResultOf, also behind apps/api toCheckResult): target =
       // what was pasted, verdict = the narrative verdict enum ("PARTLY_REAL"; the coin's when only the coin was scored);
       // a check that couldn't finish has null scores and verdict and says why in `summary` (Check.error)
-      check: checkResultOf(c, deps.env.APP_URL),
+      check: checkResultOf({ ...c, summary: scrubRetired(c.summary) }, deps.env.APP_URL),
     };
   }
   if (d.event === EVENT_WATCH_CHANGED) {

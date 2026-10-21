@@ -152,7 +152,7 @@ export function AsksTab({ checkId, list, count, onAsked }: AsksTabProps) {
             if (msg) setMsg(null);
           }}
           maxLength={QUESTION_MAX}
-          placeholder="Ask about this check, like “who funded the deployer?”"
+          placeholder="Ask about this check, like “is the mint renounced?”"
           aria-label="Ask a follow-up"
           // read-only, not disabled, while the answer is on its way: a disabled field drops keyboard focus to <body>,
           // and the next question is typed in the same place

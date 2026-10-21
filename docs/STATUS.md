@@ -16,6 +16,8 @@ through the real queue), deploy checks. `pnpm -r typecheck` and `next build` are
 
 - **Site** (matches `design/apecheck.html`, light/dark, 1440–390 px): feed with live checks, insights and verdict list; report
   page with the live SSE log and the agent's real screenshots; coins, deployers, X bot and API pages; share card PNG.
+  The prototype's mock lines (who funded a deployer, X account age) are not on the live site: it shows only what
+  ApeCheck reads itself.
 - **Checks**: website, X post/profile, EVM (Base → Ethereum → BNB → Arbitrum → Robinhood Chain) and Solana/Tron contracts.
   Stages A–F with per-stage timeouts; a stage that fails is logged and scored `warn`; a site that never loads finishes with
   `launch = fail`. Scores come only from `packages/core/src/scoring.ts` (tested against `reference/scoring.ts`); every weight and

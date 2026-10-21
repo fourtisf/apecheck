@@ -301,7 +301,7 @@ export interface InsightsDTO {
   stats: { checked: number; today: number; larpSince: number | null };
   sinceByVerdict: { key: NarKey; name: string; n: number; avg: number }[];
   mostChecked: (CheckSummaryDTO & { checksToday: number })[];
-  /** deployer wallets whose coins ApeCheck has checked, most "real" coins first (same rows as the deployers page) */
+  /** deployer wallets with at least one coin that checked real, most "real" coins first (rows of the deployers page) */
   builders: { address: string; chain: ChainKey; checked: number; real: number }[];
 }
 

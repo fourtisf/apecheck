@@ -94,7 +94,7 @@ function Builders({ items }: { items: InsightsDTO['builders'] }) {
           ))}
         </ul>
       ) : (
-        <p className="s-empty">No deployer has a checked coin yet.</p>
+        <p className="s-empty">No deployer has a coin that checked real yet.</p>
       )}
     </div>
   );

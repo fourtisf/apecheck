@@ -17,7 +17,6 @@ const CHAIN_SEG: [ChainKey | 'all', string][] = [
   ['base', 'Base'],
   ['bnb', 'BNB'],
   ['arb', 'Arbitrum'],
-  ['rh', 'Robinhood'],
   ['trx', 'Tron'],
 ];
 const SORTS: [DeployerSort, string][] = [

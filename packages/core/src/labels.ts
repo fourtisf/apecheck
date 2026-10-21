@@ -53,6 +53,7 @@ const RETIRED_TEXT: [RegExp, string][] = [
 ];
 /** the names in free text written about old checks (AI summaries, claim evidence, answers) */
 const RETIRED_NAMES: [RegExp, string][] = [
+  [/\bFourtis data\b/gi, 'coin data'],
   [/\bDevRadar\b/gi, 'the deployer lookup'],
   [/\bBundleScan\b/gi, 'the bundle lookup'],
   [/\bWhaleFlow\b/gi, 'the holder lookup'],

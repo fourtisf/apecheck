@@ -262,6 +262,8 @@ a.tr.fresh,.gc.fresh{animation:fresh 4s ease-out}
 .foot-l{display:flex;flex-direction:column;align-items:flex-start;gap:12px;min-width:0}
 /* the header's X link: only where the bar has room for it (the footer always links to X) */
 @media (min-width:1001px) and (max-width:1240px),(max-width:760px){.top-x{display:none}}
+/* next to the price (shown above 1340px) it would squeeze the search again until the bar is wider */
+@media (min-width:1341px) and (max-width:1480px){.top-r:has(.tok) .top-x{display:none}}
 .lnk{font-size:13.5px;color:var(--mute);font-weight:600}
 .lnk:hover{color:var(--acc)}
 .rh-act{display:flex;gap:8px;flex-wrap:wrap}

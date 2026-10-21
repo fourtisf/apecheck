@@ -6,7 +6,7 @@ import { COINS_LIMIT, parseCoinFilters, type SearchParams } from '@/components/p
 
 export const metadata: Metadata = {
   title: 'Coins',
-  description: 'Every checked coin with its coin score: deployer record, bundled supply, top holders, liquidity and authorities.',
+  description: 'Every checked coin with its coin score: top holders, liquidity, authorities and the deployer wallet.',
 };
 
 // verdicts land and prices move all the time

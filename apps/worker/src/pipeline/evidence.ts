@@ -158,8 +158,9 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
     if (history) await steps.step({ status: sig.deployer, text: `Deployer history: ${deployerHistoryLine(history)}${who}`, source: 'ApeCheck' });
     else await steps.step({ status: 'warn', text: `Deployer history: not checked${who}` });
   } else {
-    // EVM: the creator lookup (Etherscan) failed; Solana deployers are not looked up
-    const etherscan = CHAINS[run.chain!].family === 'evm' && raw.errors.some(e => e.startsWith('evm.creator'));
+    // EVM: the creator lookup (Etherscan) failed, or Etherscan has no creator on record ("No data found": an answer,
+    // not an outage); Solana deployers are not looked up
+    const etherscan = CHAINS[run.chain!].family === 'evm' && raw.errors.some(e => e.startsWith('evm.creator') && !/\bno (data|records?|result)\b/i.test(e));
     await steps.step({ status: 'warn', text: `Deployer: not checked${etherscan ? ' (Etherscan unavailable)' : ''}` });
   }
 
@@ -183,7 +184,7 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
     const idx = await steps.step({ status, text, source: h.source });
     evidence.holders = { signal: sig.holders, text, stepIdx: idx >= 0 ? idx : null };
   } else {
-    const text = sig.lpText ? `Liquidity ${sig.lpText}; holder share: not checked` : unknown('holders')!;
+    const text = sig.lpText ? `Liquidity ${sig.lpText}; holder share: not checked` : `${unknown('holders')!}, ${lpPart}`;
     await steps.step({ status: sig.lpText ? worst('warn', sig.lp) : 'warn', text, source: raw.lp?.source });
   }
 

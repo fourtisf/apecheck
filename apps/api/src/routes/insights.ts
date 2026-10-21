@@ -142,7 +142,8 @@ export function registerInsightRoutes(app: FastifyInstance, deps: AppDeps) {
 
     const mostChecked = await mostCheckedToday(deps, today, request);
 
-    const builders = sortDeployers(deployers.filter(d => d.checked >= 1), 'real')
+    // builders: deployers with at least one coin that checked real
+    const builders = sortDeployers(deployers.filter(d => d.checked >= 1 && d.real >= 1), 'real')
       .slice(0, 4)
       .map(d => ({ address: d.address, chain: d.chain, checked: d.checked, real: d.real }));
 

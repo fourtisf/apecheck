@@ -461,10 +461,8 @@ describe('GET /v1/insights', () => {
       ['old0001', 0],
     ]);
     expect(r.mostChecked[0]).toMatchObject({ name: '@kairolabs', kind: 'post', checks: 50 });
-    expect(r.builders).toEqual([
-      { address: D1_ADDR, chain: 'sol', checked: 1, real: 1 },
-      { address: D2_ADDR, chain: 'base', checked: 2, real: 0 },
-    ]);
+    // a deployer with no coin that checked real is no builder
+    expect(r.builders).toEqual([{ address: D1_ADDR, chain: 'sol', checked: 1, real: 1 }]);
   });
 });
 

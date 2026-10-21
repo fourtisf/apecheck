@@ -59,7 +59,7 @@ describe('out of checks', () => {
     expect(accessSubtitle(pro, true)).toBe('Checks reset at 00:00 UTC. Max gets 200 checks a day.');
     expect(accessSubtitle(me({ tier: 'max', max: 200, tokenLive: true }), true)).toBe('Checks reset at 00:00 UTC.');
     expect(accessTitle(me({ tokenLive: true }), true)).toBe("You've used today's free checks");
-    expect(accessSubtitle(me({ tokenLive: true }), true)).toBe('Free checks reset at 00:00 UTC. Holders get more, plus deeper checks.');
+    expect(accessSubtitle(me({ tokenLive: true }), true)).toBe('Free checks reset at 00:00 UTC. Holders get more checks a day.');
     expect(accessSubtitle(null, true)).toBe('Free checks reset at 00:00 UTC.');
     expect(accessTitle(null, false)).toBe('Checks and access');
     expect(accessSubtitle(me({ credits: 3 }), false)).toBe('3 of 5 free checks left today. Free checks reset at 00:00 UTC.');
@@ -114,7 +114,7 @@ describe('deployers page', () => {
       ['recent', 'Recently checked first'],
     ]);
     const chains = [...out.slice(out.indexOf('id="dChain"')).matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map(m => m[1]).slice(0, 7);
-    expect(chains).toEqual(['All chains', 'Ethereum', 'Base', 'BNB', 'Arbitrum', 'Robinhood', 'Tron']);
+    expect(chains).toEqual(['All chains', 'Ethereum', 'Base', 'BNB', 'Arbitrum', 'Tron']);
     for (const sort of ['dead', 'launched']) expect(parseDeployerFilters(new URLSearchParams(`sort=${sort}`)).sort).toBe('checked');
     expect(parseDeployerFilters(new URLSearchParams('sort=recent')).sort).toBe('recent');
     expect(parseDeployerFilters(new URLSearchParams('sort=nope')).sort).toBe('real');

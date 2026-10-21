@@ -15,7 +15,7 @@
  * "orbit[.]xyz"). A model line in which xtext still finds anything X might link is left out of the reply. The only
  * link a reply can hold is the opt-in report link (onlyReportLink checks the final text).
  */
-import { BOT_DISCLAIMER, COIN_BANDS, COIN_LABEL, NAR_BANDS, NAR_LABEL, coinBand, narBand } from '@apecheck/core';
+import { BOT_DISCLAIMER, COIN_BANDS, COIN_LABEL, NAR_BANDS, NAR_LABEL, coinBand, narBand, scrubRetired } from '@apecheck/core';
 import { X_MAX_LENGTH, fitPart, hasLink, urlSpans, xLength } from './xtext';
 
 export const HELP_TEXT = "Tag me under a project's post, or include its link or contract.";
@@ -119,7 +119,7 @@ export function composeReply(check: ReplyCheck, opts: ComposeOpts): string {
     const coinKey = (check.coinBand && COIN_KEYS.has(check.coinBand) ? check.coinBand : coinBand(Math.max(0, coin)).key) as keyof typeof COIN_LABEL;
     head += ` · Coin: ${COIN_LABEL[coinKey]} (${coin})`;
   }
-  let summary = check.summary ? sanitizeModelText(check.summary) : '';
+  let summary = check.summary ? sanitizeModelText(scrubRetired(check.summary)) : '';
   // last guard: a summary in which anything could still be a link is left out (the verdict stands without it)
   if (summary && hasLink(summary)) summary = '';
   const link = opts.includeLink ? reportLink(opts.appUrl, check.shortId) : null;

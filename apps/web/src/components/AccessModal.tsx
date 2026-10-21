@@ -31,7 +31,7 @@ export function accessSubtitle(me: MeDTO | null, out: boolean, creditsKnown = tr
   const reset = free ? 'Free checks reset at 00:00 UTC.' : 'Checks reset at 00:00 UTC.';
   if (out) {
     if (!live) return reset;
-    if (free) return `${reset} Holders get more, plus deeper checks.`;
+    if (free) return `${reset} Holders get more checks a day.`;
     if (me?.tier === 'pro') return `${reset} Max gets ${me.maxChecksPerDay} checks a day.`;
     return reset;
   }

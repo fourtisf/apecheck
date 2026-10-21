@@ -55,7 +55,7 @@ const COINS_MAX = 50;
 export const MCP_TOOLS = ['run_check', 'get_check', 'ask_followup', 'deployer_history'] as const;
 
 const INSTRUCTIONS = [
-  'ApeCheck checks whether a crypto project is real: an agent opens the site, tests what it claims, reads the X account,',
+  'ApeCheck checks whether a crypto project is real: an agent opens the site, tests what it claims, reads the X post,',
   'the contract, the holders and the other coins ApeCheck has checked from the same deployer, and scores the narrative',
   'and the coin (0-100). run_check starts a check (one of your daily checks; a recent check of the same project is',
   'returned free) and waits up to 150 seconds. If it is still running, call get_check with its id a minute later.',

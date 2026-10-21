@@ -66,7 +66,8 @@ describe('free text and stub lists stored about old checks', () => {
     expect(scrubRetired('Holders per WhaleFlow look concentrated. BundleScan saw 7 wallets.')).toBe(
       'Holders per the holder lookup look concentrated. The bundle lookup saw 7 wallets.',
     );
-    expect(scrubRetired('fourtis data missing')).toBe('The coin data lookup data missing');
+    expect(scrubRetired('fourtis data missing')).toBe('Coin data missing');
+    expect(scrubRetired('Per Fourtis, 3 wallets.')).toBe('Per the coin data lookup, 3 wallets.');
     expect(scrubRetired('The app loads.')).toBe('The app loads.');
     expect(scrubRetired(null)).toBeNull();
     expect(scrubRetired('')).toBe('');

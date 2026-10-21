@@ -228,7 +228,7 @@ export function BotView({ handle, stats, recent, example }: BotViewProps) {
             </li>
           </ol>
           <p className="rules">
-            Holders can reply to the bot to ask follow-ups like &quot;who funded the deployer?&quot;. The account carries X&apos;s automated label and only
+            Holders can reply to the bot to ask follow-ups like &quot;is the mint renounced?&quot;. The account carries X&apos;s automated label and only
             answers when someone tags it, so it never shows up uninvited.
           </p>
         </div>
