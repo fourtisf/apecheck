@@ -154,10 +154,19 @@ export class CheckRun {
   claims: ExtractedClaim[] = [];
 
   /* Stage D */
-  /** `unknown`: why the code is unknown when `signal` is null (null too when Stage D didn't get to it) */
-  git: { facts: GitFacts | null; signal: SignalEvidence | null; plain: string | null; found: boolean; unknown?: 'unavailable' | 'nothing-to-look-up' | null } = {
-    facts: null, signal: null, plain: null, found: false, unknown: null,
-  };
+  /**
+   * `unknown`: why the code is unknown when `signal` is null (null too when Stage D didn't get to it). `asked`: the
+   * GitHub lookup that answered: the repo links found (`links`, how many), else a search by the project's name
+   * (`search`, the name searched); "Not enough to check" names only that one.
+   */
+  git: {
+    facts: GitFacts | null;
+    signal: SignalEvidence | null;
+    plain: string | null;
+    found: boolean;
+    unknown?: 'unavailable' | 'nothing-to-look-up' | null;
+    asked?: { links: number; search: string | null } | null;
+  } = { facts: null, signal: null, plain: null, found: false, unknown: null, asked: null };
   acct: { signal: SignalEvidence | null; plain: string | null; renamed?: number | null } = { signal: null, plain: null };
   coin: { raw: CoinRawFacts; signals: CoinSignals; evidence: { deployer?: SignalEvidence; bundle?: SignalEvidence; holders?: SignalEvidence } } | null = null;
   /** the coinFacts request for chain/ca (started once, shared by Stage D and the after-timeout path) */

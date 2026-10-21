@@ -10,8 +10,8 @@
  * with a URL at a much higher rate.
  *
  * A check that could test nothing about the project has no verdict: its reply is the check's own reason, never "try
- * again" ("Not enough to check: no website, GitHub repo or contract on a supported chain was found for stridefun.").
- * Any other failed check gets FAILED_TEXT.
+ * again" ("Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for stridefun. Tag me
+ * under a post with its link or contract."). Any other failed check gets FAILED_TEXT.
  *
  * Model-written text (the judge's summary, a follow-up answer) is built from untrusted page, docs and post content,
  * so it is made safe before it is posted (sanitizeModelText, HANDOFF §11): it never mentions anyone (its @handles
@@ -24,8 +24,11 @@ import { X_MAX_LENGTH, fitPart, hasLink, urlSpans, xLength } from './xtext';
 
 export const HELP_TEXT = "Tag me under a project's post, or include its link or contract.";
 export const FAILED_TEXT = "Couldn't finish this check. Try again in a few minutes.";
-/** A "Not enough to check" reason that can't be posted as it is (it would still hold a link): the general one. */
-export const NOT_ENOUGH_TEXT = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found.';
+/**
+ * A "Not enough to check" reason that can't be posted as it is (it would still hold a link): the general one, which
+ * names no lookup (the reason it stands for may name only some of them).
+ */
+export const NOT_ENOUGH_TEXT = 'Not enough to check: nothing about this project could be tested.';
 export const PRO_POINTER_TEXT = 'Follow-up answers here are for Pro holders. The full report is on the ApeCheck site.';
 export const NO_ANSWER_TEXT = 'This check has no answer for that.';
 

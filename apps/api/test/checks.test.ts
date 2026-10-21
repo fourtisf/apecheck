@@ -152,7 +152,7 @@ describe('POST /v1/checks', () => {
   });
 
   it('serves a recent "Not enough to check" like a cached verdict (status failed, no credit); an outage, an old one or recheck:true runs again', async () => {
-    const NONE = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found for @stridefun.';
+    const NONE = "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.";
     const t = await seedTarget(h.prisma, { kind: 'POST', handle: 'stridefun', key: 'x:stridefun', name: '@stridefun', domain: null });
     await seedCheck(h.prisma, { targetId: t.id, shortId: 'none001', status: 'FAILED', error: NONE, isLatest: false, finishedAt: new Date(Date.now() - 2 * 3600_000) });
     const c = new Client(h.app);

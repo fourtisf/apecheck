@@ -388,7 +388,12 @@ describe('pipeline run(checkId)', () => {
       expect(res.status).toBe('failed');
       const c = await stored(check.id);
       expect(c).toMatchObject({ status: 'FAILED', narScore: null, coinScore: null, isLatest: false });
+      // the chain from DexScreener's listing, its token info, and the GitHub search by its ticker: what ran, nothing else
+      expect(c.error).toBe(
+        "Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, its token info lists no website, and no GitHub repo was found for it.",
+      );
       expect(isNotEnough(c.error)).toBe(true);
+      expect((d.sources as FakeSources).calls).toContain('github.search ESCO');
       const texts = c.steps.map(s => s.text);
       expect(texts.slice(0, 2)).toEqual([ON_SONIC, 'No website in the token metadata']);
       expect(texts).toContain('No website found to open');
@@ -483,18 +488,23 @@ describe('pipeline run(checkId)', () => {
           },
         } as FakeData,
         expected: ['Deployer: not checked', 'Bundle share: not checked', 'Top 10 holders own 31%, LP status not checked', 'Mint and freeze authorities unknown (Solana RPC unavailable)'],
+        // its holder share was read: the coin is scored
+        scored: true,
       },
       // EVM: the Etherscan creator lookup failed
       {
         target: EVM,
         data: { evmChains: { [EVM]: 'base' }, coinFacts: { [EVM]: empty('base', EVM, ['evm.creator: HTTP 500 from api.etherscan.io']) } } as FakeData,
         expected: ['Deployer: not checked (Etherscan unavailable)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
+        // none of the facts the coin score is made of (the deployer wallet never is one): "Not enough to check"
+        scored: false,
       },
       // EVM: no Etherscan key, Blockscout down; then both down
       {
         target: EVM,
         data: { evmChains: { [EVM]: 'base' }, coinFacts: { [EVM]: empty('base', EVM, ['evm.creator.blockscout: HTTP 503 from base.blockscout.com']) } } as FakeData,
         expected: ['Deployer: not checked (Blockscout unavailable)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
+        scored: false,
       },
       {
         target: EVM,
@@ -503,18 +513,21 @@ describe('pipeline run(checkId)', () => {
           coinFacts: { [EVM]: empty('base', EVM, ['evm.creator: Free API access is not supported for this chain', 'evm.creator.blockscout: HTTP 503 from base.blockscout.com']) },
         } as FakeData,
         expected: ['Deployer: not checked (Etherscan and Blockscout unavailable)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
+        scored: false,
       },
       // Tron: the contract's origin address, nothing else
       {
         target: TRC,
         data: { coinFacts: { [TRC.toLowerCase()]: { ...empty('trx', TRC), deployer: { address: 'TBckp5W67rgZ8kE5CArzqWgCpBHPqarGht', launched: null, dead: null, source: 'On-chain' as const } } } } as FakeData,
         expected: ['Deployer history: no earlier launches seen by ApeCheck (TBckp…rGht)', 'Bundle share: not checked', 'Holder share: not checked, LP status not checked', 'Mint and freeze authorities unknown'],
+        scored: false,
       },
     ];
     for (const k of cases) {
       const check = await createCheck(k.target);
-      expect((await runCheck(check.id, deps(k.data))).status).toBe('done');
+      expect([k.target, (await runCheck(check.id, deps(k.data))).status]).toEqual([k.target, k.scored ? 'done' : 'failed']);
       const c = await stored(check.id);
+      if (!k.scored) expect([k.target, c.error]).toEqual([k.target, expect.stringMatching(/^Not enough to check: none of the coin facts ApeCheck scores were found for /)]);
       const texts = c.steps.map(s => s.text);
       for (const line of k.expected) expect([k.target, texts]).toEqual([k.target, expect.arrayContaining([line])]);
       const all = JSON.stringify({ steps: c.steps, summary: c.summary, coinSummary: c.coinSummary, evidence: c.evidence, claims: c.claims });
@@ -523,6 +536,7 @@ describe('pipeline run(checkId)', () => {
       // "unavailable" only for a source that really failed (an RPC, Etherscan or Blockscout, a market source not configured here)
       const unavailable = texts.filter(t => /unavailable/.test(t) && !/\((Solana RPC|Etherscan|Blockscout|Etherscan and Blockscout) unavailable\)$/.test(t) && !/^(DexScreener|X) unavailable/.test(t));
       expect([k.target, unavailable]).toEqual([k.target, []]);
+      if (!k.scored) continue;
       expect(c.coinFacts?.sigBundle).toBe('WARN');
       expect(c.coinFacts?.sigLp).toBe('WARN');
     }
@@ -615,7 +629,7 @@ describe('pipeline run(checkId)', () => {
     expect((await runCheck(check.id, deps())).status).toBe('failed');
     const none = await stored(check.id);
     expect(none).toMatchObject({ status: 'FAILED', narScore: null, narBand: null, isLatest: false });
-    expect(none.error).toBe('Not enough to check: cf-challenge.test blocks automated browsers, and no GitHub repo or contract on a supported chain was found for it.');
+    expect(none.error).toBe('Not enough to check: cf-challenge.test blocks automated browsers, and no GitHub repo was found for it.');
     expect(none.steps.at(-1)).toMatchObject({ status: 'WARN', text: none.error });
 
     await resetDb();
@@ -676,22 +690,15 @@ describe('pipeline run(checkId)', () => {
     expect(c.narScore).toBe(recomputed(c).narrative.score);
   });
 
-  it('a site that never loads: "Not enough to check" with nothing else to test; scored with launch = fail once a repo is found', async () => {
+  it('a site that never loads still finishes, with launch = fail: a dead project site is tested, never "Not enough to check"', async () => {
     const check = await createCheck(`http://${neverHost}/`);
-    expect((await runCheck(check.id, deps())).status).toBe('failed');
-    const none = await stored(check.id);
-    expect(none).toMatchObject({ status: 'FAILED', narScore: null, sigLaunch: null, isLatest: false });
-    expect(none.error).toBe('Not enough to check: never-loads.test didn\'t load, and no GitHub repo or contract on a supported chain was found for it.');
-    expect(none.steps.some(s => s.status === 'FAIL' && /didn't load/.test(s.text))).toBe(true);
-
-    await resetDb();
-    const scored = await createCheck(`http://${neverHost}/`);
-    expect((await runCheck(scored.id, deps({ search: [repoFacts({ fullName: 'never-loads/app' })] }))).status).toBe('done');
-    const c = await stored(scored.id);
-    expect(c.status).toBe('DONE');
-    expect(c.sigLaunch).toBe('FAIL');
+    expect((await runCheck(check.id, deps())).status).toBe('done');
+    const c = await stored(check.id);
+    expect(c).toMatchObject({ status: 'DONE', error: null, sigLaunch: 'FAIL', isLatest: true });
     expect(c.steps.some(s => s.status === 'FAIL' && /didn't load/.test(s.text))).toBe(true);
     expect(c.summary).toMatch(/^The site doesn't load/);
+    // nothing else was found: its verdict is the red flag of a site that doesn't load
+    expect(['larp', 'llarp']).toContain(c.narBand);
   });
 
   it('a bot-triggered check enqueues the reply of every mention still waiting on it', async () => {
@@ -800,8 +807,7 @@ describe('our own browser failing is not a verdict', () => {
     const check = await createCheck(`https://${neverHost}/`);
     const asked = vi.spyOn(host, 'guardProblem');
     try {
-      // a repo was found, so the check is scored (with only the dead site it would be "Not enough to check")
-      expect((await runCheck(check.id, deps({ search: [repoFacts({ fullName: 'never-loads/app' })] }))).status).toBe('done');
+      expect((await runCheck(check.id, deps())).status).toBe('done');
       // the failure was at the proxy, so the guard was asked, and it answered: the site's failure, not ours
       expect(asked).toHaveBeenCalledTimes(1);
       await expect(asked.mock.results[0].value).resolves.toBeNull();

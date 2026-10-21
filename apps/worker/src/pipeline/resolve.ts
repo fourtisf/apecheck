@@ -438,9 +438,14 @@ async function resolveContract(run: CheckRun, kind: 'evm' | 'sol' | 'tron', addr
       return;
     }
     const d = detection ?? { chain: null, asked: [], failed: [] };
-    // on none of the chains that answered; a chain whose RPC didn't answer (or none to ask) leaves it unknown
+    // on none of the chains that answered. A chain whose RPC didn't answer (or none to ask) leaves it unknown, and so
+    // does DexScreener not answering: it is what would list the contract on a chain no RPC was asked about
+    const down = [
+      ...(d.failed.length ? [d.failed.length === d.asked.length ? 'the chain RPCs' : `the ${listOf(d.failed.map(chainName), 'and')} RPC`] : []),
+      ...(dexDown || elsewhere?.down ? ['DexScreener'] : []),
+    ];
     if (!d.asked.length) run.unconfirmedCoin = { address, why: 'no EVM RPC configured' };
-    else if (d.failed.length) run.unconfirmedCoin = { address, why: `${d.failed.length === d.asked.length ? 'the chain RPCs' : `the ${listOf(d.failed.map(chainName), 'and')} RPC`} unavailable` };
+    else if (down.length) run.unconfirmedCoin = { address, why: `${listOf(down, 'and')} unavailable` };
     else run.missingCoin = { address, chains: d.asked };
     await steps.step({ status: 'warn', text: chainNotFoundText(address, d), source: 'On-chain' });
     if (dexDown || elsewhere?.down) await steps.step({ status: 'warn', text: 'DexScreener unavailable, no market data', source: 'DexScreener' });

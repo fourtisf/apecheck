@@ -22,7 +22,7 @@ function PriceCard({ r }: { r: CheckReportDTO }) {
         <h3>Price since check</h3>
         <p className="sub" style={{ margin: 0 }}>
           {notEnough(r)
-            ? 'No contract on a supported chain was found, so there is no price to track.'
+            ? 'This check had no coin it could test, so there is no price to track.'
             : 'The check stopped before a verdict, so there is no price to track.'}
         </p>
       </div>

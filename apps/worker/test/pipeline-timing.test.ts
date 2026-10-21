@@ -101,7 +101,8 @@ describe('a coin whose Stage D ran short', () => {
 
   it('is scored as unknown (deployer mixed, every section warn), never as "no coin"', async () => {
     const check = await createCheck(COIN);
-    const d = deps(coinData());
+    // a repo found by name is tested (with nothing tested at all it would be an outage: not-enough.test.ts)
+    const d = deps({ ...coinData(), search: [repoFacts({ fullName: 'orbit/orbit' })] });
     d.sources.coinFacts = vi.fn(() => new Promise<never>(() => undefined));
     d.limits = { evidence: 2000 };
     expect((await runCheck(check.id, d)).status).toBe('done');

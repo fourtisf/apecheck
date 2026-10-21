@@ -398,7 +398,8 @@ describe('checks', () => {
   });
 
   describe('a check that could test nothing about the project ("Not enough to check")', () => {
-    const STRIDE = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found for @stridefun.';
+    const STRIDE =
+      "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.";
     const ESCO = '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc';
     const notEnough = (checkId: string, error = STRIDE, finishedAt = new Date()) =>
       prisma.check.update({ where: { id: checkId }, data: { status: 'FAILED', finishedAt, error } });
@@ -415,7 +416,7 @@ describe('checks', () => {
         await notEnough(check.id);
         const [id] = await stageFReplies(check.id);
         expect(await processReply(deps, id)).toBe('replied');
-        const reason = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found for stridefun.';
+        const reason = "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for stridefun. Tag me under a post with its link or contract.";
         expect(x.replies[0]).toMatchObject({ text: links === 'true' ? `${reason}\napecheck.io/c/${check.shortId}` : reason, media: null });
         expect(x.replies[0].text).not.toMatch(/try again|PARTLY REAL|\/100|@/i);
       }
@@ -455,7 +456,7 @@ describe('checks', () => {
     it('a recent one is reused like a cached verdict (no new check); an old one, or an outage, runs again', async () => {
       const { deps, checks, replies } = harness();
       const recent = await createCheck(ESCO);
-      await notEnough(recent.id, `Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB Chain or Arbitrum, and no website or GitHub repo was found for it.`);
+      await notEnough(recent.id, "Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, and its token info lists no website.");
       const m = post({ text: `@ApeCheckBot ${ESCO}` });
       expect(await handleMention(deps, m)).toMatchObject({ action: 'check', checkId: recent.id, reuse: 'cached', replyNow: true });
       expect(checks).toEqual([]);

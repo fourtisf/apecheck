@@ -85,7 +85,8 @@ describe('a check that stopped before a verdict', () => {
 });
 
 describe('a check that could test nothing about the project ("Not enough to check")', () => {
-  const STRIDE = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found for @stridefun.';
+  const STRIDE =
+    "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.";
   const none = report({
     id: 'none001',
     kind: 'post',
@@ -109,7 +110,7 @@ describe('a check that could test nothing about the project ("Not enough to chec
   it('the verdict panel names what was looked for, with no score and no "try again"', () => {
     const out = html(<Verdict report={none} just={false} />);
     expect(out).toContain('Not enough to check');
-    expect(out).toContain('No website, GitHub repo or contract on a supported chain was found for @stridefun.');
+    expect(out).toContain('ApeCheck doesn&#x27;t read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.');
     expect(out).toContain('There was nothing about the project to test, so there is no score.');
     expect(out).toContain('—');
     expect(out).not.toMatch(/try again|stopped before|No verdict|Partly real|\/100/i);
@@ -125,9 +126,11 @@ describe('a check that could test nothing about the project ("Not enough to chec
     const claims = html(<ClaimsTab report={none} />);
     expect(claims).toContain('No claims were tested: there was nothing about the project to test them against.');
     const coin = html(<CoinTab report={none} />);
-    expect(coin).toContain('No contract on a supported chain was found, so there is no coin score.');
+    expect(coin).toContain('This check had no coin it could test, so there is no coin score.');
     const price = html(<Side report={none} />);
-    expect(price).toContain('No contract on a supported chain was found, so there is no price to track.');
+    expect(price).toContain('This check had no coin it could test, so there is no price to track.');
     for (const out of [claims, coin, price]) expect(out).not.toMatch(/try again|stopped before/i);
+    // no lookup that never ran is claimed (an X profile's check looks for no contract)
+    for (const out of [coin, price]) expect(out).not.toMatch(/contract|was found/i);
   });
 });

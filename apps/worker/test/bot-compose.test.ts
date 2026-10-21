@@ -180,14 +180,17 @@ describe('composeReply', () => {
   it('a check that could test nothing about the project: its reason, never "try again" or a score', () => {
     const failed = (error: string) => check({ status: 'FAILED', narScore: null, narBand: null, coinScore: null, coinBand: null, summary: null, error });
     // the incidents: an X profile with no links, and a contract on a chain ApeCheck doesn't support
-    const stride = failed('Not enough to check: no website, GitHub repo or contract on a supported chain was found for @stridefun.');
-    expect(composeReply(stride, OFF)).toBe('Not enough to check: no website, GitHub repo or contract on a supported chain was found for stridefun.');
-    expect(composeReply(stride, ON)).toBe('Not enough to check: no website, GitHub repo or contract on a supported chain was found for stridefun.\napecheck.io/c/k3x9a2q');
-    const esco = failed('Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB Chain or Arbitrum, and no website or GitHub repo was found for it.');
+    const stride = failed(
+      "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.",
+    );
+    const strideText = "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for stridefun. Tag me under a post with its link or contract.";
+    expect(composeReply(stride, OFF)).toBe(strideText);
+    expect(composeReply(stride, ON)).toBe(`${strideText}\napecheck.io/c/k3x9a2q`);
+    const esco = failed("Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, and its token info lists no website.");
     expect(composeReply(esco, OFF)).toBe(esco.error);
     // a site the reason names is not a link in the reply (nobody is mentioned, nothing but the report link is linked)
-    const site = composeReply(failed("Not enough to check: orbitswap.xyz didn't load, and no GitHub repo or contract on a supported chain was found for it."), ON);
-    expect(site).toBe("Not enough to check: orbitswap[.]xyz didn't load, and no GitHub repo or contract on a supported chain was found for it.\napecheck.io/c/k3x9a2q");
+    const site = composeReply(failed('Not enough to check: orbitswap.xyz blocks automated browsers, and no GitHub repo was found for it.'), ON);
+    expect(site).toBe('Not enough to check: orbitswap[.]xyz blocks automated browsers, and no GitHub repo was found for it.\napecheck.io/c/k3x9a2q');
     expect(onlyReportLink(site, 'apecheck.io/c/k3x9a2q')).toBe(true);
     for (const t of [composeReply(stride, ON), composeReply(esco, ON), site]) {
       expect(t).not.toMatch(/try again|\/100|PARTLY|@/i);

@@ -539,7 +539,7 @@ describe('GET /v1/checks/:id', () => {
   });
 
   it('a check that could test nothing: failed, no verdict or card, and the whole "Not enough to check" reason as its error', async () => {
-    const NONE = 'Not enough to check: 0x17c…d1fc is not on Base, Ethereum, BNB Chain or Arbitrum, and no website or GitHub repo was found for it.';
+    const NONE = "Not enough to check: 0x17c…d1fc trades on Sonic, which ApeCheck can't read yet, and its token info lists no website.";
     const t = await seedTarget(h.prisma, { kind: 'COIN', ca: '0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc', key: 'ca:evm:0x17c63a297a76bed7e96a96bcf5f566de1efdd1fc', name: '0x17c…d1fc', domain: null });
     const c = await seedCheck(h.prisma, { targetId: t.id, shortId: 'none001', status: 'FAILED', error: NONE, isLatest: false });
     await h.prisma.checkStep.create({ data: { checkId: c.id, idx: 0, tMs: 900, status: 'WARN', text: NONE } });

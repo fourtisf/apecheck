@@ -698,7 +698,7 @@ describe('texts', () => {
     expect(recheckedText('$ORBIT', { status: 'DONE', narScore: 12, narBand: 'larp' }, null)).toBe('Re-checked $ORBIT: LARP 12');
     expect(recheckedText('$ORBIT', { status: 'FAILED', narScore: null, narBand: null }, null)).toBe("The re-check of $ORBIT couldn't finish; the last verdict stands");
     // a re-check that could test nothing about the project finished its work: not "couldn't finish"
-    const none = { status: 'FAILED', narScore: null, narBand: null, error: "Not enough to check: orbitswap.xyz didn't load, and no GitHub repo or contract on a supported chain was found for it." };
+    const none = { status: 'FAILED', narScore: null, narBand: null, error: 'Not enough to check: orbitswap.xyz blocks automated browsers, and no GitHub repo was found for it.' };
     expect(recheckedText('orbitswap.xyz', none, { narScore: 72, narBand: 'likely' })).toBe('The re-check of orbitswap.xyz found nothing to test; the last verdict stands');
   });
 });

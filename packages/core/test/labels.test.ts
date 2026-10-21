@@ -80,7 +80,8 @@ describe('free text and stub lists stored about old checks', () => {
 });
 
 describe('"Not enough to check": a check that could test nothing about the project', () => {
-  const STRIDE = 'Not enough to check: no website, GitHub repo or contract on a supported chain was found for @stridefun.';
+  const STRIDE =
+    "Not enough to check: ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.";
   it('isNotEnough tells it from an outage or any other failure by its prefix', () => {
     expect(isNotEnough(STRIDE)).toBe(true);
     expect(STRIDE.startsWith(NOT_ENOUGH_PREFIX)).toBe(true);
@@ -89,7 +90,7 @@ describe('"Not enough to check": a check that could test nothing about the proje
     }
   });
   it('notEnoughReason is the reason as a sentence of its own', () => {
-    expect(notEnoughReason(STRIDE)).toBe('No website, GitHub repo or contract on a supported chain was found for @stridefun.');
+    expect(notEnoughReason(STRIDE)).toBe("ApeCheck doesn't read X profiles, and no GitHub repo was found for @stridefun. Tag me under a post with its link or contract.");
     expect(NOT_ENOUGH_LABEL).toBe('Not enough to check');
   });
 });

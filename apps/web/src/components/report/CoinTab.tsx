@@ -167,10 +167,11 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
 /** tabCoin(): coin score, who holds the supply, and the on-chain facts with their sources. */
 export function CoinTab({ report: r }: { report: CheckReportDTO }) {
   if (!r.hasCoin && notEnough(r)) {
-    // nothing to test, the coin included: "Not enough to check" means no contract on a supported chain was found
+    // nothing to test, the coin included. Never "no contract was found": an X profile's check looks for none (the
+    // reason in the verdict panel names only the lookups that ran)
     return (
       <div className="empty">
-        <p>No contract on a supported chain was found, so there is no coin score. The Agent run tab shows what was looked for.</p>
+        <p>This check had no coin it could test, so there is no coin score. The Agent run tab shows what was looked up.</p>
       </div>
     );
   }
