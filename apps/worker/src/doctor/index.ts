@@ -74,7 +74,7 @@ export function buildProbes(d: DoctorDeps): Probe[] {
   }
   probes.push(
     { name: `RPC ${CHAINS.rh.name}`, remedy: EVM_REMEDY.rh, run: () => probeRobinhood(d) },
-    { name: 'Etherscan V2', timeoutMs: 40_000, remedy: ETHERSCAN_REMEDY, run: () => probeEtherscan({ env, evm: sources.evm }) },
+    { name: 'Deployer lookup (EVM)', timeoutMs: 70_000, remedy: ETHERSCAN_REMEDY, run: () => probeEtherscan({ env, evm: sources.evm }) },
     { name: 'RPC Solana', timeoutMs: 30_000, remedy: SOLANA_REMEDY, run: () => probeSolana({ env, sol: sources.sol }) },
     { name: 'TronGrid', timeoutMs: 30_000, remedy: TRON_REMEDY, run: () => probeTron({ env, http, tron: sources.tron }) },
     { name: 'DexScreener', remedy: DEXSCREENER_REMEDY, run: () => probeDexScreener({ env, dex: sources.dex }) },

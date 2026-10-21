@@ -34,7 +34,7 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
 |---|---|---|---|
 | DexScreener | `adapters/dexscreener.ts` | `DEXSCREENER_BASE` (default `https://api.dexscreener.com`) | Public API, never stubbed. |
 | EVM RPC | `adapters/evm.ts` | `RPC_BASE`, `RPC_ETH`, `RPC_BSC`, `RPC_ARB`, `RPC_ROBINHOOD` | Public fallbacks: Base `https://mainnet.base.org`, Ethereum `https://ethereum-rpc.publicnode.com`, BNB `https://bsc-dataseed.binance.org`, Arbitrum `https://arb1.arbitrum.io/rpc`. Robinhood Chain only from env; without it `rh` is skipped and listed as `rpc-rh`. |
-| Etherscan V2 | `adapters/evm.ts` (`creator()`) | `ETHERSCAN_API_KEY` | Without a key `creator()` is `null`, listed as `etherscan`. |
+| Etherscan V2, Blockscout | `adapters/evm.ts` (`creator()`) | `ETHERSCAN_API_KEY` | Etherscan first when keyed; when it has no key or no answer (its free plan leaves out Base and BNB Chain), Blockscout's free API on Ethereum, Base and Arbitrum. BNB Chain has no Blockscout: there the creator needs a keyed plan that covers it. Without a key, listed as `etherscan`. |
 | Solana RPC | `adapters/solana.ts` | `RPC_SOLANA`, `HELIUS_API_KEY` | `RPC_SOLANA`, else `https://mainnet.helius-rpc.com/?api-key=…`, else the public `https://api.mainnet-beta.solana.com` (rate limited, warned once). |
 | TronGrid | `adapters/tron.ts` | `TRONGRID_API_KEY` (header `TRON-PRO-API-KEY`) | Works without a key at a low rate. |
 | GitHub | `adapters/github.ts` | `GITHUB_TOKEN` | Works unauthenticated at 60 requests/hour (warned once). Rate limits (403 with `x-ratelimit-remaining: 0`, or 429) → `[]` + `lastError`. |
@@ -73,7 +73,8 @@ const facts = await sources.coinFacts('sol', mint); // never throws; facts.error
   `extensions`: each extension with the settings only an authority changes — transfer fee rate and authorities,
   transfer hook program, permanent delegate, pause, default account state, close authority… — never withheld fees
   or other counters), `largestHolders`
-  (`getTokenLargestAccounts` + `getTokenSupply` + `getMultipleAccounts` for owners, % of supply),
+  (`getTokenLargestAccounts` + `getTokenSupply` + `getMultipleAccounts` for owners, % of supply; a busy node's
+  quick refusal of `getTokenLargestAccounts` is asked once more, then the public mainnet-beta node),
   `simulate` (`simulateTransaction`, base64, `sigVerify: false`, `replaceRecentBlockhash: true`).
   **Never `sendTransaction`.**
 
@@ -214,7 +215,7 @@ and the worker logs it as "not checked".
 
 | Section | Source |
 |---|---|
-| deployer | EVM: the Etherscan contract creator; Tron: the contract's `origin_address` (TronGrid `getcontract`); Solana: none (`null`). Only the wallet: `launched` / `dead` are always `null`. Its history (the other coins ApeCheck has checked from it) is read by the worker and the API from ApeCheck's own checks (`@apecheck/db` `coinsByDeployer`). |
+| deployer | EVM: the contract creator (Etherscan, else Blockscout); Tron: the contract's `origin_address` (TronGrid `getcontract`); Solana: none (`null`). Only the wallet: `launched` / `dead` are always `null`. Its history (the other coins ApeCheck has checked from it) is read by the worker and the API from ApeCheck's own checks (`@apecheck/db` `coinsByDeployer`). |
 | bundle | none (`null`) |
 | holders | Solana: top-10 % from the largest accounts, leaving out the DexScreener pair and known AMM vault authorities (Raydium AMM v4 / CPMM / LaunchLab, Meteora DAMM v2) and the incinerator; EVM, Tron: none (`null`). The holder count has no source (`count: null`). |
 | lp | none (`null`) |

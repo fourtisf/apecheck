@@ -1,11 +1,12 @@
 /**
- * Chain probes: the four EVM RPCs (and Robinhood Chain when RPC_ROBINHOOD is set), Etherscan V2, Solana and TronGrid.
+ * Chain probes: the four EVM RPCs (and Robinhood Chain when RPC_ROBINHOOD is set), the EVM deployer lookup (Etherscan V2,
+ * Blockscout), Solana and TronGrid.
  * Each one goes through the adapter the check pipeline uses (createSources(env), errors read with captureErrors) on
  * one well-known mainnet token, so a PASS here means a coin check on that chain gets its on-chain facts.
  */
 import { CHAINS, type ChainKey, type Env } from '@apecheck/core';
 import {
-  COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, EVM_READ_METHODS, TRONGRID_BASE, captureErrors, jsonRpc, resolveEvmRpc, solanaRpcUrl,
+  BLOCKSCOUT_API, COIN_CALL_TIMEOUT_MS, COIN_SECTION_BUDGET_MS, EVM_READ_METHODS, TRONGRID_BASE, captureErrors, jsonRpc, resolveEvmRpc, solanaRpcUrl,
   type EvmSource, type Http, type SolanaSource, type TronSource,
 } from '@apecheck/sources';
 import { hostOf } from './redact';
@@ -18,8 +19,8 @@ import { errorText, fail, networkRemedy, outcome, type ProbeOutcome } from './re
 export const coinCallBudgetMs = (rounds: number) => Math.max(COIN_CALL_TIMEOUT_MS, Math.min(COIN_CALL_TIMEOUT_MS * rounds, COIN_SECTION_BUDGET_MS));
 /** evm.tokenBasics: code + calls, proxy slots, a beacon's implementation(), the implementation's code */
 const TOKEN_BASICS_BUDGET_MS = coinCallBudgetMs(4);
-/** solana.largestHolders: largest accounts + supply, then their owners */
-const HOLDERS_BUDGET_MS = coinCallBudgetMs(2);
+/** solana.largestHolders: largest accounts + supply (a busy node: once more, then the public node), then their owners */
+const HOLDERS_BUDGET_MS = coinCallBudgetMs(3);
 /** tron.tokenInfo: the contract, then its calls */
 const TRON_INFO_BUDGET_MS = coinCallBudgetMs(2);
 const RPC_TIMEOUT_MS = 8_000;
@@ -165,37 +166,43 @@ export async function probeRobinhood(deps: { env: Env; http: Http }): Promise<Pr
 }
 
 export const ETHERSCAN_REMEDY =
-  'set ETHERSCAN_API_KEY (etherscan.io/myapikey; one V2 key covers every chain id; the free plan is rate limited and may not cover every chain)';
+  'set ETHERSCAN_API_KEY (etherscan.io/myapikey; one V2 key covers every chain id; the free plan is rate limited and has no Base or BNB Chain)';
 
-/** Etherscan V2 contract creator on each EVM chain with a chain id, one call at a time (the free plan allows a few per second). */
+/**
+ * The contract creator on each EVM chain with a chain id, as checks look it up: Etherscan V2 with a key, Blockscout
+ * (free) on Ethereum, Base and Arbitrum when Etherscan can't answer. One call at a time (the free plans allow a few
+ * per second).
+ */
 export async function probeEtherscan(deps: { env: Env; evm: Pick<EvmSource, 'creator'> }): Promise<ProbeOutcome> {
-  if (!deps.env.ETHERSCAN_API_KEY) {
-    return outcome(
-      { ok: null, configured: false, importance: 'optional' },
-      'not configured: EVM deployer wallets are not looked up (no deployer address and no deployer history for EVM coins)',
-      ETHERSCAN_REMEDY,
-    );
-  }
-  const rows: { chain: EvmProbeChain; ok: boolean; error: string | null }[] = [];
+  const keyed = !!deps.env.ETHERSCAN_API_KEY;
+  const rows: { chain: EvmProbeChain; via: 'etherscan' | 'blockscout' | null; error: string | null }[] = [];
   for (const chain of ['eth', 'base', 'bnb', 'arb'] as const) {
+    if (!keyed && !BLOCKSCOUT_API[chain]) {
+      rows.push({ chain, via: null, error: 'needs ETHERSCAN_API_KEY (no Blockscout explorer)' });
+      continue;
+    }
     const { value, errors } = await captureErrors(() => deps.evm.creator(chain, EVM_PROBE_TOKENS[chain].address));
-    rows.push({ chain, ok: !!value?.creator, error: value ? null : errors[0] ?? 'no creator returned' });
+    rows.push(value?.creator ? { chain, via: value.via ?? 'etherscan', error: null } : { chain, via: null, error: errors.join('; ') || 'no creator returned' });
   }
-  const [eth] = rows;
-  if (!eth.ok) {
-    const msg = eth.error ?? 'no creator returned';
-    const remedy = /invalid api key|missing\/invalid/i.test(msg)
-      ? 'ETHERSCAN_API_KEY is rejected: create a new key at etherscan.io/myapikey'
-      : networkRemedy(msg, 'api.etherscan.io') ?? 'Etherscan answered with an error: check the key and its plan at etherscan.io/myapikey';
-    return fail(`api.etherscan.io: ${msg}`, remedy);
+  const errs = rows.flatMap(r => (r.error ? [r.error] : []));
+  const rejected = keyed && errs.some(e => /invalid api key|missing\/invalid/i.test(e));
+  const by = (via: string) => rows.filter(r => r.via === via).map(r => r.chain);
+  const found = [
+    ...(by('etherscan').length ? [`Etherscan ${by('etherscan').join(', ')}`] : []),
+    ...(by('blockscout').length ? [`Blockscout ${by('blockscout').join(', ')}`] : []),
+  ];
+  const bad = rows.filter(r => !r.via);
+  const detail = `creator found via ${found.length ? found.join('; ') : 'none'}${bad.length ? `; not on ${bad.map(r => `${r.chain} (${r.error})`).join(', ')}` : ''}`;
+  if (rejected) return fail(detail, 'ETHERSCAN_API_KEY is rejected: create a new key at etherscan.io/myapikey');
+  if (!found.length) {
+    return fail(detail, networkRemedy(errs[0] ?? '', 'api.etherscan.io') ?? 'neither Etherscan nor Blockscout answered: check the server\'s outbound HTTPS');
   }
-  const good = rows.filter(r => r.ok).map(r => r.chain);
-  const bad = rows.filter(r => !r.ok);
-  const detail = `api.etherscan.io: creator found on ${good.join(', ')}${bad.length ? `; not on ${bad.map(r => `${r.chain} (${r.error})`).join(', ')}` : ''}`;
   return outcome(
-    { ok: true, configured: true, importance: 'optional', degraded: bad.length > 0 },
+    { ok: true, configured: keyed, importance: 'optional', degraded: bad.length > 0 },
     detail,
-    'your Etherscan plan does not cover those chains: their deployer address stays empty (upgrade the plan, or accept it)',
+    keyed
+      ? 'those chains\' deployer address stays empty: BNB Chain needs an Etherscan plan that covers it (the free plan does not); Ethereum, Base and Arbitrum fall back to Blockscout'
+      : ETHERSCAN_REMEDY,
   );
 }
 
@@ -248,7 +255,9 @@ export async function probeSolana(deps: { env: Env; sol: Pick<SolanaSource, 'min
   return outcome(
     { ...f, ok: true, degraded: notes.length > 0 },
     detail,
-    rpc.configured ? `${rpc.source} is slow or refuses getTokenLargestAccounts: holders read "unknown" in checks; use a plan that serves it` : SOLANA_REMEDY,
+    rpc.configured
+      ? `${rpc.source} is slow or refuses getTokenLargestAccounts, and so did the public node it falls back to: holders may read "not checked" (a busy index usually answers on the next check; if this stays, use a plan that serves it)`
+      : SOLANA_REMEDY,
   );
 }
 

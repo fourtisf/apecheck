@@ -1,5 +1,5 @@
 /**
- * EVM chains over JSON-RPC (read-only) + Etherscan V2 for the contract creator.
+ * EVM chains over JSON-RPC (read-only) + Etherscan V2 for the contract creator (Blockscout where Etherscan can't answer).
  * Transactions captured from a site's wallet request are only ever simulated (eth_call + eth_estimateGas).
  */
 import { z } from 'zod';
@@ -57,6 +57,16 @@ export const PUBLIC_EVM_RPC: Partial<Record<ChainKey, string>> = {
 export const ALCHEMY_NETWORKS: Partial<Record<ChainKey, string>> = { eth: 'eth-mainnet', base: 'base-mainnet', arb: 'arb-mainnet' };
 
 export const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
+/**
+ * Blockscout's Etherscan-compatible API (free, no key) on the chains it runs an explorer for: the contract creator
+ * when Etherscan has no key, its plan leaves the chain out (the free plan has no Base or BNB Chain) or it fails.
+ * BNB Chain has no Blockscout explorer, so its creator needs an Etherscan plan that covers it.
+ */
+export const BLOCKSCOUT_API: Partial<Record<ChainKey, string>> = {
+  eth: 'https://eth.blockscout.com/api',
+  base: 'https://base.blockscout.com/api',
+  arb: 'https://arbitrum.blockscout.com/api',
+};
 
 type EvmEnv = Pick<Env, 'RPC_BASE' | 'RPC_ETH' | 'RPC_BSC' | 'RPC_ARB' | 'RPC_ROBINHOOD' | 'ALCHEMY_API_KEY' | 'ETHERSCAN_API_KEY'>;
 
@@ -151,7 +161,7 @@ export class EvmAdapter implements EvmWalletSource {
       warnOnce('rpc-rh', 'Robinhood Chain RPC not configured (RPC_ROBINHOOD empty): Robinhood Chain contracts are skipped');
     }
     if (!env.ETHERSCAN_API_KEY) {
-      warnOnce('etherscan', 'Etherscan not configured (ETHERSCAN_API_KEY empty): EVM contract creator lookups are skipped');
+      warnOnce('etherscan', 'Etherscan not configured (ETHERSCAN_API_KEY empty): EVM contract creators come from Blockscout (Ethereum, Base, Arbitrum); BNB Chain is skipped');
     }
   }
 
@@ -371,17 +381,30 @@ export class EvmAdapter implements EvmWalletSource {
     }
   }
 
-  async creator(chain: ChainKey, address: string): Promise<{ creator: string; txHash: string | null; createdAt: string | null } | null> {
+  /** The contract's creator: Etherscan V2 when it has a key, else (or when it has no answer) Blockscout on its chains. */
+  async creator(chain: ChainKey, address: string): Promise<{ creator: string; txHash: string | null; createdAt: string | null; via: 'etherscan' | 'blockscout' } | null> {
+    if (!RE_EVM_ADDRESS.test(address)) return null;
     const key = this.env.ETHERSCAN_API_KEY;
     const chainId = CHAINS[chain].chainId;
-    if (!key || !chainId || !RE_EVM_ADDRESS.test(address)) return null;
-    const url =
-      `${ETHERSCAN_V2}?chainid=${chainId}&module=contract&action=getcontractcreation` +
-      `&contractaddresses=${address}&apikey=${encodeURIComponent(key)}`;
+    if (key && chainId) {
+      const url =
+        `${ETHERSCAN_V2}?chainid=${chainId}&module=contract&action=getcontractcreation` +
+        `&contractaddresses=${address}&apikey=${encodeURIComponent(key)}`;
+      const found = await this.creation('creator', url);
+      if (found) return { ...found, via: 'etherscan' };
+    }
+    const blockscout = BLOCKSCOUT_API[chain];
+    if (!blockscout) return null;
+    const found = await this.creation('creator.blockscout', `${blockscout}?module=contract&action=getcontractcreation&contractaddresses=${address}`);
+    return found ? { ...found, via: 'blockscout' } : null;
+  }
+
+  /** One getcontractcreation request (Etherscan and Blockscout answer alike); failures are recorded under `op`. */
+  private async creation(op: string, url: string): Promise<{ creator: string; txHash: string | null; createdAt: string | null } | null> {
     try {
       const parsed = CreationZ.parse(await this.http.json(url, { timeoutMs: TIMEOUT_MS }));
       if (!Array.isArray(parsed.result) || !parsed.result.length) {
-        if (parsed.status !== '1') this.errors.fail('creator', new Error(typeof parsed.result === 'string' ? parsed.result : parsed.message ?? 'no result'));
+        if (parsed.status !== '1') this.errors.fail(op, new Error(typeof parsed.result === 'string' ? parsed.result : parsed.message ?? 'no result'));
         return null;
       }
       const r = parsed.result[0];
@@ -391,7 +414,7 @@ export class EvmAdapter implements EvmWalletSource {
         createdAt: r.timestamp != null ? isoFromSeconds(r.timestamp) : null,
       };
     } catch (e) {
-      this.errors.fail('creator', e);
+      this.errors.fail(op, e);
       return null;
     }
   }

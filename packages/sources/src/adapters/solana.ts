@@ -10,6 +10,12 @@ import { jsonRpc } from '../rpc';
 import { ErrorState, RE_SOL_ADDRESS, errMsg, toUnits } from '../util';
 
 const TIMEOUT_MS = 8_000;
+/**
+ * A busy node's quick refusal ("account index service overloaded, please try again", a 429, a 5xx): the next request
+ * usually goes through. Timeouts are not retried (the check's budget is spent already).
+ */
+const BUSY = /overloaded|try again|too many requests|rate limit|HTTP (429|50[0234])\b/i;
+const BUSY_PAUSE_MS = 400;
 
 export const SPL_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 export const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
@@ -146,8 +152,28 @@ export class SolanaAdapter implements SolanaWalletSource {
     return this.errors.lastError;
   }
 
-  private rpc(method: string, params: unknown[]): Promise<unknown> {
-    return jsonRpc(this.http, this.url, method, params, SOL_READ_METHODS, { timeoutMs: TIMEOUT_MS });
+  private rpc(method: string, params: unknown[], url = this.url): Promise<unknown> {
+    return jsonRpc(this.http, url, method, params, SOL_READ_METHODS, { timeoutMs: TIMEOUT_MS });
+  }
+
+  /**
+   * getTokenLargestAccounts leans on the node's token index, which a busy provider refuses at times: one more try
+   * after a short pause, then the public mainnet-beta node (it serves the call for a coin's size of holder list).
+   */
+  private async largestAccounts(mint: string): Promise<unknown> {
+    const params = [mint, { commitment: 'confirmed' }];
+    try {
+      return await this.rpc('getTokenLargestAccounts', params);
+    } catch (e) {
+      if (!BUSY.test(errMsg(e))) throw e;
+    }
+    await new Promise(r => setTimeout(r, BUSY_PAUSE_MS));
+    try {
+      return await this.rpc('getTokenLargestAccounts', params);
+    } catch (e) {
+      if (this.url === PUBLIC_SOLANA_RPC || !BUSY.test(errMsg(e))) throw e;
+    }
+    return this.rpc('getTokenLargestAccounts', params, PUBLIC_SOLANA_RPC);
   }
 
   async mintInfo(mint: string): Promise<SolMintInfo | null> {
@@ -178,7 +204,7 @@ export class SolanaAdapter implements SolanaWalletSource {
     if (!RE_SOL_ADDRESS.test(mint)) return [];
     try {
       const [largestRaw, supplyRaw] = await Promise.all([
-        this.rpc('getTokenLargestAccounts', [mint, { commitment: 'confirmed' }]),
+        this.largestAccounts(mint),
         this.rpc('getTokenSupply', [mint, { commitment: 'confirmed' }]),
       ]);
       const accounts = LargestZ.parse(largestRaw).value;

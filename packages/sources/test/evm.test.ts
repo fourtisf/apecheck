@@ -476,11 +476,33 @@ describe('EVM adapter: simulate (never broadcast)', () => {
   });
 });
 
-describe('EVM adapter: creator (Etherscan V2)', () => {
-  it('stub without ETHERSCAN_API_KEY: null and no request', async () => {
-    const http = fakeHttp();
-    expect(await createEvm(testEnv(), http).creator('base', TOKEN)).toBeNull();
+describe('EVM adapter: creator (Etherscan V2, Blockscout)', () => {
+  const blockscoutAnswer = { status: '1', message: 'OK', result: [{ contractAddress: TOKEN, contractCreator: '0xC0FFEE0000000000000000000000000000000002', txHash: '0xbeef' }] };
+
+  it('without ETHERSCAN_API_KEY: Blockscout (no key sent) on its chains; BNB Chain null and no request', async () => {
+    const http = fakeHttp(url => (url.host === 'base.blockscout.com' ? { json: blockscoutAnswer } : undefined));
+    const evm = createEvm(testEnv(), http);
+    expect(await evm.creator('bnb', TOKEN)).toBeNull();
     expect(http.calls).toHaveLength(0);
+    expect(await evm.creator('base', TOKEN)).toEqual({ creator: '0xc0ffee0000000000000000000000000000000002', txHash: '0xbeef', createdAt: null, via: 'blockscout' });
+    const u = new URL(http.calls[0].url);
+    expect(u.origin + u.pathname).toBe('https://base.blockscout.com/api');
+    expect(Object.fromEntries(u.searchParams)).toEqual({ module: 'contract', action: 'getcontractcreation', contractaddresses: TOKEN });
+  });
+
+  it('Etherscan refusing the chain (free plan) → Blockscout answers; both errors are kept only when both fail', async () => {
+    const refused = { json: { status: '0', message: 'NOTOK', result: 'Free API access is not supported for this chain' } };
+    const http = fakeHttp(url => (url.host === 'api.etherscan.io' ? refused : url.host === 'base.blockscout.com' ? { json: blockscoutAnswer } : undefined));
+    const evm = createEvm(testEnv({ ETHERSCAN_API_KEY: 'k' }), http);
+    const { value, errors } = await captureErrors(() => evm.creator('base', TOKEN));
+    expect(value).toMatchObject({ creator: '0xc0ffee0000000000000000000000000000000002', via: 'blockscout' });
+    expect(errors).toEqual(['evm.creator: Free API access is not supported for this chain']);
+    expect(http.calls.map(c => new URL(c.url).host)).toEqual(['api.etherscan.io', 'base.blockscout.com']);
+
+    const down = fakeHttp(url => (url.host === 'api.etherscan.io' ? refused : { status: 503, text: 'busy' }));
+    const both = await captureErrors(() => createEvm(testEnv({ ETHERSCAN_API_KEY: 'k' }), down).creator('arb', TOKEN));
+    expect(both.value).toBeNull();
+    expect(both.errors).toEqual(['evm.creator: Free API access is not supported for this chain', 'evm.creator.blockscout: HTTP 503 from arbitrum.blockscout.com']);
   });
 
   it('calls getcontractcreation with the chain id and maps the result', async () => {
@@ -496,7 +518,8 @@ describe('EVM adapter: creator (Etherscan V2)', () => {
         : undefined,
     );
     const c = await createEvm(testEnv({ ETHERSCAN_API_KEY: 'sekret key' }), http).creator('base', TOKEN);
-    expect(c).toEqual({ creator: '0xabcdef0000000000000000000000000000000001', txHash: '0xfeed', createdAt: '2025-10-10T00:00:00.000Z' });
+    expect(c).toEqual({ creator: '0xabcdef0000000000000000000000000000000001', txHash: '0xfeed', createdAt: '2025-10-10T00:00:00.000Z', via: 'etherscan' });
+    expect(http.calls).toHaveLength(1);
     const u = new URL(http.calls[0].url);
     expect(u.origin + u.pathname).toBe('https://api.etherscan.io/v2/api');
     expect(Object.fromEntries(u.searchParams)).toEqual({
@@ -507,7 +530,8 @@ describe('EVM adapter: creator (Etherscan V2)', () => {
   it('Etherscan error answers → null with lastError (the key never appears in it)', async () => {
     const http = fakeHttp(() => ({ json: { status: '0', message: 'NOTOK', result: 'Invalid API Key' } }));
     const evm = createEvm(testEnv({ ETHERSCAN_API_KEY: 'sekret' }), http);
-    expect(await evm.creator('eth', TOKEN)).toBeNull();
+    // BNB Chain: no Blockscout to fall back to
+    expect(await evm.creator('bnb', TOKEN)).toBeNull();
     expect(evm.lastError).toBe('evm.creator: Invalid API Key');
   });
 

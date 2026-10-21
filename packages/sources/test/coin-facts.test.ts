@@ -319,9 +319,16 @@ describe('createSources', () => {
     expect(f.token).toEqual({ name: 'Kairo', symbol: 'KAIRO', decimals: 6, supply: '999987654321000' });
   });
 
-  it('coinFacts end to end for an EVM coin', async () => {
+  /** Base's Blockscout: the creator lookup without an Etherscan key */
+  const BLOCKSCOUT_BASE = (url: URL) =>
+    url.host === 'base.blockscout.com'
+      ? { json: { status: '1', message: 'OK', result: [{ contractAddress: EVM_TOKEN, contractCreator: '0xC0FFEE0000000000000000000000000000000002', txHash: '0xbeef' }] } }
+      : undefined;
+
+  it('coinFacts end to end for an EVM coin (deployer from Blockscout without an Etherscan key)', async () => {
     const http = fakeHttp(
       url => (url.host === 'api.dexscreener.com' ? { json: [] } : undefined),
+      BLOCKSCOUT_BASE,
       rpcHandler('mainnet.base.org', {
         eth_getCode: () => '0x6080604052' + '6306fdde03' + '00',
         eth_getStorageAt: () => '0x' + '0'.repeat(64),
@@ -337,7 +344,7 @@ describe('createSources', () => {
     const f = await createSources(testEnv(), { http }).coinFacts('base', EVM_TOKEN);
     expect(f.token).toMatchObject({ name: 'Thing', decimals: 18 });
     expect(f.authorities).toMatchObject({ mintRenounced: true, text: 'Renounced', owner: '0x0000000000000000000000000000000000000000' });
-    expect(f.deployer).toBeNull();
+    expect(f.deployer).toEqual({ address: '0xc0ffee0000000000000000000000000000000002', launched: null, dead: null, source: 'On-chain' });
     expect(f.stubbed).toEqual(['etherscan']);
     expect(f.errors).toEqual([]);
   });
@@ -350,6 +357,7 @@ describe('createSources', () => {
     const node = (slots: Record<string, string>) =>
       fakeHttp(
         url => (url.host === 'api.dexscreener.com' ? { json: [] } : undefined),
+        BLOCKSCOUT_BASE,
         rpcHandler('mainnet.base.org', {
           eth_getCode: p => ((p[0] as string).toLowerCase() === IMPL ? '0x6080604052' + '6318160ddd' + '63a9059cbb' + '6340c10f19' + '638da5cb5b' + '00' : proxyCode),
           eth_getStorageAt: p => slots[p[1] as string] ?? '0x' + '0'.repeat(64),
@@ -379,6 +387,7 @@ describe('createSources', () => {
     // PUSH4 mint(address,uint256), hasRole, grantRole; owner() and getOwner() revert
     const http = fakeHttp(
       url => (url.host === 'api.dexscreener.com' ? { json: [] } : undefined),
+      BLOCKSCOUT_BASE,
       rpcHandler('mainnet.base.org', {
         eth_getCode: () => '0x6080604052' + '6340c10f19' + '6391d14854' + '632f2ff15d' + '00',
         eth_getStorageAt: () => '0x' + '0'.repeat(64),

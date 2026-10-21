@@ -158,8 +158,8 @@ export interface EvmSource {
   tokenBasics(chain: ChainKey, address: string): Promise<EvmTokenBasics | null>;
   /** eth_call + eth_estimateGas, never eth_sendTransaction */
   simulate(chain: ChainKey, tx: EvmTxRequest): Promise<SimResult>;
-  /** contract creator (Etherscan V2 getcontractcreation); null when unavailable */
-  creator(chain: ChainKey, address: string): Promise<{ creator: string; txHash: string | null; createdAt: string | null } | null>;
+  /** contract creator (Etherscan V2 getcontractcreation, else Blockscout's on the chains it covers); null when unavailable */
+  creator(chain: ChainKey, address: string): Promise<{ creator: string; txHash: string | null; createdAt: string | null; via?: 'etherscan' | 'blockscout' } | null>;
   /**
    * M3 (tiers): ERC-20 balance of `owner` in whole tokens (`balanceOf(owner)` / 10^`decimals()`, both via eth_call).
    * null when it couldn't be read (no RPC, transport error, no ERC-20 at `token`, no decimals()); the reason is in

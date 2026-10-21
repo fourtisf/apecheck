@@ -302,22 +302,37 @@ describe('EVM probes', () => {
     expect(r).toMatchObject({ status: 'PASS' });
     expect(r.detail).toContain('chainId 0xabc');
   });
-  it('Etherscan: SKIP without a key (nothing sent); WARN listing the chains the plan does not cover', async () => {
-    const creator = vi.fn(async () => null);
-    expect((await probeEtherscan({ env: prodEnv(), evm: { creator } })).status).toBe('SKIP');
-    expect(creator).not.toHaveBeenCalled();
+  it('EVM deployer lookup: without a key Blockscout covers eth, base, arb (WARN, BNB needs the key, never asked)', async () => {
+    const creator = vi.fn(async (chain: string) => ({ creator: '0xabc', txHash: null, createdAt: null, via: 'blockscout' as const, chain }));
+    const r = await probeEtherscan({ env: prodEnv(), evm: { creator } });
+    expect(r.status).toBe('WARN');
+    expect(r.detail).toBe('creator found via Blockscout eth, base, arb; not on bnb (needs ETHERSCAN_API_KEY (no Blockscout explorer))');
+    expect(r.remedy).toMatch(/ETHERSCAN_API_KEY/);
+    expect(creator.mock.calls.map(c => c[0])).toEqual(['eth', 'base', 'arb']);
+  });
+  it('EVM deployer lookup: with a key, the chains the free plan leaves out fall back to Blockscout; BNB stays WARN', async () => {
     const partial = {
       creator: vi.fn(async (chain: string) => {
-        if (chain === 'base') {
-          reportError('evm.creator: Free API access is not supported for this chain');
-          return null;
-        }
-        return { creator: '0xabc', txHash: null, createdAt: null };
+        if (chain === 'base' || chain === 'bnb') reportError('evm.creator: Free API access is not supported for this chain');
+        if (chain === 'bnb') return null;
+        return { creator: '0xabc', txHash: null, createdAt: null, via: chain === 'base' ? ('blockscout' as const) : ('etherscan' as const) };
       }),
     };
     const r = await probeEtherscan({ env: prodEnv({ ETHERSCAN_API_KEY: 'K'.repeat(20) }), evm: partial });
     expect(r.status).toBe('WARN');
-    expect(r.detail).toBe('api.etherscan.io: creator found on eth, bnb, arb; not on base (evm.creator: Free API access is not supported for this chain)');
+    expect(r.detail).toBe('creator found via Etherscan eth, arb; Blockscout base; not on bnb (evm.creator: Free API access is not supported for this chain)');
+    expect(r.remedy).toMatch(/BNB Chain needs an Etherscan plan/);
+    const all = { creator: vi.fn(async () => ({ creator: '0xabc', txHash: null, createdAt: null, via: 'etherscan' as const })) };
+    expect((await probeEtherscan({ env: prodEnv({ ETHERSCAN_API_KEY: 'K'.repeat(20) }), evm: all })).status).toBe('PASS');
+  });
+  it('EVM deployer lookup: a rejected key is FAIL even when Blockscout answers', async () => {
+    const creator = vi.fn(async (chain: string) => {
+      reportError('evm.creator: Invalid API Key');
+      return chain === 'bnb' ? null : { creator: '0xabc', txHash: null, createdAt: null, via: 'blockscout' as const };
+    });
+    const r = await probeEtherscan({ env: prodEnv({ ETHERSCAN_API_KEY: 'K'.repeat(20) }), evm: { creator } });
+    expect(r.status).toBe('FAIL');
+    expect(r.remedy).toMatch(/rejected/);
   });
 });
 
@@ -401,7 +416,7 @@ describe('API probes', () => {
     const env = prodEnv({ FOURTIS_API_URL: 'https://f.example/api/', FOURTIS_API_KEY: 'f'.repeat(16) });
     expect(Object.keys(env).filter(k => k.startsWith('FOURTIS'))).toEqual([]);
     const probes = buildProbes({ env, http: fakeHttp(() => ({ status: 404 })), sources: {} as never } as never).map(p => p.name);
-    expect(probes).toContain('Etherscan V2');
+    expect(probes).toContain('Deployer lookup (EVM)');
     expect(probes.filter(n => /fourtis/i.test(n))).toEqual([]);
   });
   it('DexScreener: WARN when only the chain-less lookup fails', async () => {

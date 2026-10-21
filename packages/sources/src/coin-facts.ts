@@ -119,11 +119,12 @@ export async function coinFacts(deps: CoinFactsDeps, chain: ChainKey, address: s
     const [market, solMint, solTop, evmBasics, evmCreator, tronInfo] = await Promise.all([
       run('dexscreener.token', () => deps.dex.token(chain, address)),
       family === 'sol' ? run<SolMintInfo | null>('solana.mintInfo', () => deps.sol.mintInfo(address)) : skip,
-      // rounds: largest accounts + supply, then their owners
-      family === 'sol' ? run('solana.largestHolders', () => deps.sol.largestHolders(address), 2) : skip,
+      // rounds: largest accounts + supply (a busy node's refusal: once more, then the public node), then their owners
+      family === 'sol' ? run('solana.largestHolders', () => deps.sol.largestHolders(address), 3) : skip,
       // rounds: code + calls, proxy slots, the beacon's implementation(), the implementation's code
       family === 'evm' ? run<EvmTokenBasics | null>('evm.tokenBasics', () => deps.evm.tokenBasics(chain, address), 4) : skip,
-      family === 'evm' ? run('evm.creator', () => deps.evm.creator(chain, address)) : skip,
+      // rounds: Etherscan, then Blockscout when Etherscan has no answer
+      family === 'evm' ? run('evm.creator', () => deps.evm.creator(chain, address), 2) : skip,
       // rounds: the contract, then its calls
       family === 'trx' ? run('tron.tokenInfo', () => deps.tron.tokenInfo(address), 2) : skip,
     ]);

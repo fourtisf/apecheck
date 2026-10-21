@@ -130,6 +130,40 @@ describe('Solana adapter: largestHolders', () => {
     expect(sol.lastError).toMatch(/largestHolders owners: Too many requests/);
     const failing = fakeHttp(rpcHandler(HOST, { getTokenLargestAccounts: () => ({ error: { code: -32010, message: 'excluded from account secondary indexes' } }), getTokenSupply: () => ({ value: { amount: '1' } }) }));
     expect(await createSolana(testEnv(), failing).largestHolders(MINT)).toEqual([]);
+    // not a busy node: asked once, no retry
+    expect(failing.calls.filter(c => (c.body as { method: string }).method === 'getTokenLargestAccounts')).toHaveLength(1);
+  });
+
+  it('a busy node ("overloaded, please try again"): once more, then the public node; the owners stay on the configured RPC', async () => {
+    const HELIUS = 'mainnet.helius-rpc.com';
+    const busy = () => ({ error: { code: -32603, message: 'account index service overloaded, please try again.' } });
+    const answer = () => ({ value: [{ address: ACCOUNTS[0], amount: '10' }] });
+    const node = (largest: () => unknown) =>
+      rpcHandler(HELIUS, {
+        getTokenLargestAccounts: largest,
+        getTokenSupply: () => ({ value: { amount: '100' } }),
+        getMultipleAccounts: () => ({ value: [{ data: { parsed: { info: { owner: OWNERS[0], mint: MINT }, type: 'account' }, program: 'spl-token' }, owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }] }),
+      });
+    const largestHosts = (h: ReturnType<typeof fakeHttp>) =>
+      h.calls.filter(c => (c.body as { method: string }).method === 'getTokenLargestAccounts').map(c => new URL(c.url).host);
+
+    let n = 0;
+    const second = fakeHttp(node(() => (n++ === 0 ? busy() : answer())));
+    expect(await createSolana(testEnv({ HELIUS_API_KEY: 'k' }), second).largestHolders(MINT)).toEqual([{ owner: OWNERS[0], account: ACCOUNTS[0], amount: '10', pct: 10 }]);
+    expect(largestHosts(second)).toEqual([HELIUS, HELIUS]);
+
+    const fallback = fakeHttp(node(busy), rpcHandler(HOST, { getTokenLargestAccounts: answer }));
+    expect(await createSolana(testEnv({ HELIUS_API_KEY: 'k' }), fallback).largestHolders(MINT)).toEqual([{ owner: OWNERS[0], account: ACCOUNTS[0], amount: '10', pct: 10 }]);
+    expect(largestHosts(fallback)).toEqual([HELIUS, HELIUS, HOST]);
+    const owners = fallback.calls.find(c => (c.body as { method: string }).method === 'getMultipleAccounts');
+    expect(new URL(owners!.url).host).toBe(HELIUS);
+
+    // already on the public node: no third request
+    const pub = fakeHttp(rpcHandler(HOST, { getTokenLargestAccounts: busy, getTokenSupply: () => ({ value: { amount: '1' } }) }));
+    const sol = createSolana(testEnv(), pub);
+    expect(await sol.largestHolders(MINT)).toEqual([]);
+    expect(largestHosts(pub)).toEqual([HOST, HOST]);
+    expect(sol.lastError).toMatch(/largestHolders: account index service overloaded/);
   });
 });
 

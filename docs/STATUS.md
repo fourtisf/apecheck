@@ -42,7 +42,7 @@ through the real queue), deploy checks. `pnpm -r typecheck` and `next build` are
   `E2E=1 E2E_TARGET=<a real project site> pnpm e2e`.
 - **Coin facts without an ApeCheck source**: bundle share, LP status, holder count and EVM/Tron holder share are "not
   checked" (scored `warn`, said so in the log). Deployer history counts only coins ApeCheck has checked from the same
-  wallet (EVM: Etherscan creator, Tron: contract origin address; Solana deployers are not looked up) and never lifts the
+  wallet (EVM: Etherscan creator, else Blockscout's on Ethereum, Base and Arbitrum; Tron: contract origin address; Solana deployers are not looked up) and never lifts the
   deployer signal above `warn`.
 - **X handle-rename history**: needs a third-party source; always "unknown".
 - **Token**: `TOKEN_ADDRESS` is empty, so everyone is Free and the site says "Pro and Max open at token launch". Team wallets can

@@ -89,7 +89,7 @@ Coin (Stage D) — only the core helpers: `deployerRecord`/`deployerSignal`, `ba
 `warn` with a log line saying so, untagged: "Bundle share: not checked", "Holder share: not checked" (+ " (Solana RPC
 unavailable)" when that RPC failed), "LP status not checked" inside the holders line, "Deployer: not checked" (+ "
 (Etherscan unavailable)" when the EVM creator lookup failed). "Unavailable" only ever names a source that failed. The
-deployer wallet (EVM: Etherscan creator; Tron: the contract's origin address) is kept in `CoinFacts.deployerAddress`
+deployer wallet (EVM: Etherscan creator, else Blockscout's; Tron: the contract's origin address) is kept in `CoinFacts.deployerAddress`
 (`deployerKey`: EVM lowercased). Its history is read from ApeCheck's own checks and never scored: the step "Deployer
 history: no earlier launches seen by ApeCheck (0xAbC…Ef02)" or "Deployer history: 2 other coins from this wallet checked
 by ApeCheck, $FOO and $BAR (0xAbC…Ef02)", status `warn`, source `ApeCheck`; the deployer signal stays unknown (`mixed`,
