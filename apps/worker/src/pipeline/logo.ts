@@ -61,11 +61,12 @@ async function exists(p: string): Promise<boolean> {
 }
 
 /**
- * After Stage A (the Target row is final): store the coin's logo unless the Target already has one on disk.
+ * After Stage A (the Target row is final): store the coin's logo unless the Target already has one on disk. A site or
+ * post check that found a coin stores it too (the coins and deployers pages show that coin with its Target's logo).
  * Resolves to the stored path, or null (no image, refused, failed: logged, never thrown).
  */
 export async function saveLogo(run: CheckRun): Promise<string | null> {
-  if (run.kind !== 'coin' || !run.hasCoin()) return null;
+  if (!run.hasCoin()) return null;
   const url = run.tokenLinks?.image?.url ?? imageUrlOf(run.market?.imageUrl);
   if (!url) return null;
   const { prisma } = run.deps;

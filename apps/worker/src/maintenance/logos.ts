@@ -1,8 +1,9 @@
 /**
  * Logos for coins checked before ApeCheck stored them (or whose logo download failed): every LOGOS_EVERY_MS, a few
- * coin targets without a logo get the same image a check would pick (DexScreener's token info > the token's own
- * metadata > GeckoTerminal), downloaded and vetted by fetchLogo and stored by storeLogo (pipeline/logo.ts). A target
- * with no usable image is asked again after LOGOS_RETRY_MS (kept in memory: a restart asks again).
+ * targets with a coin (a coin, or a site or post whose check found one) and no logo get the image a check would pick
+ * (DexScreener's token info > the token's own metadata > GeckoTerminal), downloaded and vetted by fetchLogo and stored
+ * by storeLogo (pipeline/logo.ts). A target with no usable image is asked again after LOGOS_RETRY_MS (kept in memory:
+ * a restart asks again).
  */
 import { chainFromDb, type ChainKey } from '@apecheck/core';
 import type { PrismaClient } from '@apecheck/db';
@@ -37,7 +38,7 @@ export async function backfillLogos(opts: {
   const now = opts.now ?? Date.now;
   for (const [id, at] of tried) if (now() - at > LOGOS_RETRY_MS) tried.delete(id);
   const rows = await prisma.target.findMany({
-    where: { kind: 'COIN', logo: null, ca: { not: null }, chain: { not: null }, ...(tried.size ? { id: { notIn: [...tried.keys()] } } : {}) },
+    where: { logo: null, ca: { not: null }, chain: { not: null }, ...(tried.size ? { id: { notIn: [...tried.keys()] } } : {}) },
     orderBy: [{ lastCheckedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
     take: LOGOS_BATCH,
     select: { id: true, chain: true, ca: true },

@@ -207,7 +207,9 @@ describe('logo backfill (coins checked before logos were stored)', () => {
     const zap = await coin(ZAP, 'BASE');
     const bare = await coin(ZAP_MINT, 'SOL');
     const has = await coin('HasLogo11111111111111111111111111111111111', 'SOL', 'logos/' + 'a'.repeat(64) + '.png');
+    // a site without a coin is left alone; a site whose check found ZAP gets ZAP's logo (the coins page shows it)
     await prisma.target.create({ data: { kind: 'SITE', domain: 'kairo.app', name: 'kairo.app', key: 'site:kairo.app' } });
+    const zapSite = await prisma.target.create({ data: { kind: 'SITE', domain: 'zap.app', name: 'zap.app', key: 'site:zap.app', chain: 'BASE', ca: ZAP, lastCheckedAt: new Date(Date.now() - 60_000) } });
 
     // KIMCHI: no DexScreener info, its pump.fun metadata has the image; ZAP: DexScreener's image; the third has none
     const sources = fakeSources(env, { dexTokens: { [ZAP.toLowerCase()]: dexInfo({ chain: 'base', address: ZAP, imageUrl: 'https://dd.dexscreener.com/ds-data/tokens/base/zap.png' }) } });
@@ -228,15 +230,16 @@ describe('logo backfill (coins checked before logos were stored)', () => {
     let now = Date.now();
     const run = () => backfillLogos({ prisma, sources, screenshotDir: env.SCREENSHOT_DIR, log: memoryLogger(), tried, now: () => now });
 
-    expect(await run()).toEqual({ stored: 2, missing: 1 });
+    expect(await run()).toEqual({ stored: 3, missing: 1 });
     const logo = async (id: string) => (await prisma.target.findUniqueOrThrow({ where: { id } })).logo;
     expect(await logo(kimchi.id)).toMatch(LOGO_PATH_RE);
     expect(await logo(zap.id)).toMatch(LOGO_PATH_RE);
+    expect(await logo(zapSite.id)).toBe(await logo(zap.id));
     expect(await logo(bare.id)).toBeNull();
     expect(await logo(has.id)).toBe('logos/' + 'a'.repeat(64) + '.png');
     // ZAP never needed the metadata: DexScreener had the image
     expect(asked.sort()).toEqual([KIMCHI, ZAP_MINT].sort());
-    expect(http.reqs).toHaveLength(2);
+    expect(http.reqs).toHaveLength(3);
 
     // the coin without an image waits a day
     asked.length = 0;
