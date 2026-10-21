@@ -452,6 +452,17 @@ describe('AI probes', () => {
   });
 });
 
+describe('a masked key copied from a dashboard ("sk-ant-a•••")', () => {
+  it('is refused before any call, saying what happened, and the worker uses the heuristic', async () => {
+    const env = prodEnv({ ANTHROPIC_API_KEY: 'sk-ant-a\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022AAAA' });
+    const ai = { extractClaims: vi.fn(), answer: vi.fn() };
+    const r = await probeAi('fast', { env, ai });
+    expect(r).toMatchObject({ status: 'FAIL', detail: expect.stringContaining('masked key') });
+    expect(ai.extractClaims).not.toHaveBeenCalled();
+    expect(createAi(env).mode).toBe('heuristic');
+  });
+});
+
 describe('a key with a line break', () => {
   // fetch's Headers throws `Headers.append: "<the whole key>" is an invalid header value.`
   const key = `sk-ant-api03-${'A1b2C3d4'.repeat(8)}\n${'Z9y8X7w6'.repeat(4)}`;

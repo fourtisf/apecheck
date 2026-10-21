@@ -54,11 +54,14 @@ export class AiOutputError extends Error {
 }
 
 /**
- * A key with a line break or another control character (a wrapped paste, a quoted value with \n) cannot go into an
- * HTTP header: fetch's Headers throws with the whole key in its message, which would end up in logs.
+ * An API key is plain ASCII without spaces. Anything else is a bad paste: a line break or control character (a wrapped
+ * paste, a quoted value with \n), or the "•" dots of a key copied from a dashboard's masked list. None of it can go
+ * into an HTTP header: fetch throws with the whole key in its message (it would end up in logs), or "Cannot convert
+ * argument to a ByteString" for the dots.
  */
-export const keyUnusable = (key: string) => /[\x00-\x08\x0a-\x1f\x7f]/.test(key);
-export const KEY_UNUSABLE_TEXT = 'ANTHROPIC_API_KEY contains a line break or another control character: fix its quoting in .env (one line)';
+export const keyUnusable = (key: string) => /[^\x21-\x7e]/.test(key);
+export const KEY_UNUSABLE_TEXT =
+  'ANTHROPIC_API_KEY is not a pasted key: it contains a line break, a space or a "•" (the masked key a dashboard lists); create a new key and paste it whole, on one line';
 
 export function describeAiError(e: unknown): string {
   if (e instanceof Anthropic.RateLimitError) return 'rate limited';
