@@ -78,6 +78,23 @@ describe('parseSyndication', () => {
     expect(post.repliedTo?.repliedTo).toBeUndefined();
   });
 
+  it("a reply in its author's own thread: the parent keeps its own reply id, so the bot can walk further up", () => {
+    // @stridefun's "Dex paid." (an image) under its "Stride is Live … CA: …" post, itself the thread's second post
+    const post = parseSyndication(fixture('x-syndication-thread.json'))!;
+    expect(post).toMatchObject({ id: '1980000000000000003', authorHandle: 'stridefun', replyToId: '1980000000000000002', urls: [] });
+    expect(post.text.slice(...post.displayTextRange!)).toBe('Dex paid.');
+    expect(post.repliedTo).toMatchObject({
+      id: '1980000000000000002',
+      authorId: '1700000000000000880',
+      authorHandle: 'stridefun',
+      replyToId: '1980000000000000001',
+      inReplyToUserId: '1700000000000000880',
+      mentions: ['solana'],
+      displayTextRange: [0, 80],
+    });
+    expect(post.repliedTo!.text).toContain('CA: 7NgwJMbrvxdestgmfLaiGf8XCoUD98GqKe2Yw3kpump');
+  });
+
   it('a long post carries its full text when the payload has it', () => {
     const raw = { ...fixture<Record<string, unknown>>('x-syndication.json'), note_tweet: { note_tweet_results: { result: { text: 'Kairo v2 is live on mainnet. The rest of a long post' } } } };
     expect(parseSyndication(raw)?.text).toBe('Kairo v2 is live on mainnet. The rest of a long post');

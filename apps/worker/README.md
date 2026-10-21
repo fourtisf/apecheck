@@ -163,13 +163,19 @@ adapter looks the id up and the bot recognises itself by `X_BOT_HANDLE`).
   4. **target** (`bot/resolve.ts`, `resolveBotTarget()`, pure): a contract or link (project site, X post, chart/explorer
      link with a contract) written in the mention (a quoted post counts as a link; links to and quotes of the bot's own
      posts and apecheck.io don't), else the links and contracts of the post it replies to (never its @handles: "Audited
-     by @CertiK" names an auditor; cashtags never count), else an @handle typed in the mention (it never beats the
-     parent's link: people tag friends next to the bot), else that post's author's profile; contract > site > X post >
-     @handle when several appear in one post. A post it replies to that is itself a tag of the bot is a request, not a
+     by @CertiK" names an auditor; cashtags never count). When that post names nothing ("Dex paid." under the project's
+     own "Stride is Live … CA: …" post), the posts above it in the thread decide (`bot/thread.ts` `readThread()`: its
+     parent, that one's parent, up to three, then the conversation root; each read is `getPost`, X's free embed
+     endpoints, never the paid X API, and a syndication read carries the read post's own parent, so it takes three reads
+     at most; 10 s for the whole walk; a post that can't be read ends it): the nearest post **by the same author** with a
+     contract or link first (its own thread), else an @handle typed in the mention (it never beats the parent's link or
+     its author's own posts above it: people tag friends next to the bot), else the nearest link or contract in another
+     account's post above it, else that post's author's profile; contract > site > X post > @handle when several
+     appear in one post. A post it replies to that is itself a tag of the bot is a request, not a
      project post: its author (who asked) is never checked; the target is the earlier tag's check when it got one (so a
      second tag in the thread joins it), else what that tag named, else what it was under (the post above it, read with
-     `getPost`). When only a post's author (or nothing) is found and the thread already has a public check, that check
-     (a tag under the project's own "2/" post). Nothing → the help line "Tag me under a project's post, or include its
+     `getPost`, and the posts above that one the same way). When only a post's author, another account's post above it
+     (or nothing) is found and the thread already has a public check, that check (a tag under a reply in the thread). Nothing → the help line "Tag me under a project's post, or include its
      link or contract." (`kind: 'help'`), at most once per thread (`help_already_sent`);
   5. **one check per target**: the same target already checked in this thread (running, or done at any age), else the
      shared `findReusableCheck()` of `@apecheck/db` (same rules as `POST /v1/checks`: the same target running, or a verdict

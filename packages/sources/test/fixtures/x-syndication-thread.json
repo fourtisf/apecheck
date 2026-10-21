@@ -1,0 +1,61 @@
+{
+  "__typename": "Tweet",
+  "lang": "en",
+  "favorite_count": 31,
+  "possibly_sensitive": false,
+  "created_at": "2026-10-20T16:41:07.000Z",
+  "display_text_range": [0, 9],
+  "entities": {
+    "hashtags": [],
+    "urls": [],
+    "user_mentions": [],
+    "symbols": [],
+    "media": [
+      { "display_url": "pic.x.com/dexpic", "expanded_url": "https://x.com/stridefun/status/1980000000000000003/photo/1", "indices": [10, 29], "url": "https://t.co/dexpic" }
+    ]
+  },
+  "id_str": "1980000000000000003",
+  "text": "Dex paid. https://t.co/dexpic",
+  "user": { "id_str": "1700000000000000880", "name": "Stride", "screen_name": "stridefun", "verified": false, "is_blue_verified": true },
+  "in_reply_to_screen_name": "stridefun",
+  "in_reply_to_status_id_str": "1980000000000000002",
+  "in_reply_to_user_id_str": "1700000000000000880",
+  "mediaDetails": [
+    {
+      "display_url": "pic.x.com/dexpic",
+      "expanded_url": "https://x.com/stridefun/status/1980000000000000003/photo/1",
+      "media_url_https": "https://pbs.twimg.com/media/Gx9dexpaid.jpg",
+      "type": "photo",
+      "url": "https://t.co/dexpic",
+      "original_info": { "height": 900, "width": 1600 }
+    }
+  ],
+  "photos": [{ "backgroundColor": { "red": 0, "green": 0, "blue": 0 }, "cropCandidates": [], "expandedUrl": "https://x.com/stridefun/status/1980000000000000003/photo/1", "url": "https://pbs.twimg.com/media/Gx9dexpaid.jpg", "width": 1600, "height": 900 }],
+  "parent": {
+    "in_reply_to_screen_name": "stridefun",
+    "in_reply_to_status_id_str": "1980000000000000001",
+    "in_reply_to_user_id_str": "1700000000000000880",
+    "lang": "en",
+    "reply_count": 4,
+    "retweet_count": 12,
+    "favorite_count": 58,
+    "created_at": "2026-10-20T15:02:44.000Z",
+    "display_text_range": [0, 80],
+    "entities": {
+      "hashtags": [],
+      "urls": [],
+      "user_mentions": [{ "id_str": "951329744804392960", "indices": [18, 25], "name": "Solana", "screen_name": "solana" }],
+      "symbols": []
+    },
+    "id_str": "1980000000000000002",
+    "text": "Stride is Live on @solana Chain. CA: 7NgwJMbrvxdestgmfLaiGf8XCoUD98GqKe2Yw3kpump",
+    "user": { "id_str": "1700000000000000880", "name": "Stride", "screen_name": "stridefun", "verified": false, "is_blue_verified": true },
+    "edit_control": { "edit_tweet_ids": ["1980000000000000002"], "editable_until_msecs": "1792473764000", "is_edit_eligible": true, "edits_remaining": "5" },
+    "isEdited": false,
+    "isStaleEdit": false
+  },
+  "conversation_count": 4,
+  "news_action_type": "conversation",
+  "isEdited": false,
+  "isStaleEdit": false
+}

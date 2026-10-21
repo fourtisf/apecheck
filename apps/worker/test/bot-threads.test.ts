@@ -171,6 +171,176 @@ describe('a second tag in the same thread', () => {
   });
 });
 
+describe('a tag under a post that names nothing: the posts above it in the thread', () => {
+  // the production incident: "@ApeCheckBot" alone under @stridefun's "Dex paid." (an image), whose post above in its
+  // own thread says "Stride is Live on @solana Chain. CA: …": the bot checked the profile @stridefun instead
+  const STRIDE_CA = '7NgwJMbrvxdestgmfLaiGf8XCoUD98GqKe2Yw3kpump';
+  const CA = '0x1111111111111111111111111111111111111111';
+  const stride = (text: string, p: Partial<XPost> = {}) => post({ text, authorHandle: 'stridefun', authorId: '880', ...p });
+  const launch = () => stride(`Stride is Live on @solana Chain. CA: ${STRIDE_CA}`);
+  // as X includes it with the mention: the image's t.co after the typed range, without the post above it
+  const dexPaid = (above: XPost) =>
+    stride('Dex paid. https://t.co/pic', { replyToId: above.id, conversationId: above.conversationId, displayTextRange: [0, 9] });
+
+  /** every X read the bot makes: the free embed reads (getPost) and the paid account reads */
+  function watchReads(x: FakeX) {
+    const free: string[] = [];
+    const paid: string[] = [];
+    const getPost = x.getPost.bind(x);
+    x.getPost = async (id: string) => {
+      free.push(id);
+      return getPost(id);
+    };
+    x.getUser = async (handle: string) => {
+      paid.push(`getUser ${handle}`);
+      return null;
+    };
+    x.getUserById = async (id: string) => {
+      paid.push(`getUserById ${id}`);
+      return null;
+    };
+    return { free, paid };
+  }
+
+  it('"@ApeCheckBot" under "Dex paid." checks the Solana CA of the same author\'s post above it, with one free read', async () => {
+    const h = harness();
+    const reads = watchReads(h.x);
+    const top = launch();
+    h.x.posts.set(top.id, top);
+    const m = replyTo(dexPaid(top), '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' });
+    expect(await handleMention(h.deps, m)).toMatchObject({ action: 'check', reuse: null, target: STRIDE_CA });
+    const check = await prisma.check.findFirstOrThrow({ include: { target: true } });
+    expect(check).toMatchObject({ via: 'BOT', targetRaw: STRIDE_CA, requesterHandle: 'tagger' });
+    expect(check.target.key).toBe(`ca:sol:${STRIDE_CA}`);
+    expect(await prisma.target.count()).toBe(1); // never a check of the profile @stridefun
+    expect(await mentionRow(m.id)).toMatchObject({ kind: 'check', status: 'QUEUED', targetKey: `ca:sol:${STRIDE_CA}` });
+    expect(reads).toEqual({ free: [top.id], paid: [] });
+    expect(h.log.lines.some(l => l.includes("contract in the same author's post above the post it replies to"))).toBe(true);
+  });
+
+  it('a second tag under a tag that asked under "Dex paid.": the same CA, never a tagger', async () => {
+    const h = harness();
+    const reads = watchReads(h.x);
+    const top = launch();
+    const dp = dexPaid(top);
+    h.x.posts.set(top.id, top);
+    h.x.posts.set(dp.id, dp);
+    // the first tag was never stored (before the bot ran): the post it is under decides, then the posts above that
+    const first = replyTo(dp, '@ApeCheckBot real?', { repliedTo: null, authorHandle: 'asker', authorId: '991' });
+    const m = replyTo(first, '@ApeCheckBot', { authorHandle: 'other_user', authorId: '601' });
+    expect(await handleMention(h.deps, m)).toMatchObject({ action: 'check', reuse: null, target: STRIDE_CA });
+    expect(reads).toEqual({ free: [dp.id, top.id], paid: [] });
+  });
+
+  it('nothing above names anything: the author, as before; a bare tag with nothing anywhere: the help line', async () => {
+    const h = harness();
+    const reads = watchReads(h.x);
+    const top = stride('Something big this week, follow @stride_dev $STRIDE');
+    h.x.posts.set(top.id, top);
+    const m = replyTo(dexPaid(top), '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' });
+    expect(await handleMention(h.deps, m)).toMatchObject({ action: 'check', target: 'https://x.com/stridefun' });
+    expect(reads.free).toEqual([top.id]);
+    // a bare tag that replies to nothing: nothing to read, the help line
+    expect(await handleMention(h.deps, post({ text: '@ApeCheckBot', authorHandle: 'lonely', authorId: '606' }))).toEqual({ action: 'help' });
+    // under a deleted post (X left it out, the free read finds nothing): the help line too
+    const orphan = post({ text: '@ApeCheckBot', authorHandle: 'lost', authorId: '607', replyToId: '1849999999999999998', repliedTo: null });
+    expect(await handleMention(h.deps, orphan)).toEqual({ action: 'help' });
+    expect(reads).toEqual({ free: [top.id, '1849999999999999998'], paid: [] });
+  });
+
+  it('reads that never answer or fail: the walk gives up within its budget and falls back to the author', async () => {
+    const h = harness();
+    h.deps.threadBudgetMs = 100;
+    h.x.getPost = () => new Promise<XPost | null>(() => undefined);
+    const started = Date.now();
+    const hung = replyTo(dexPaid(launch()), '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' });
+    expect(await handleMention(h.deps, hung)).toMatchObject({ action: 'check', target: 'https://x.com/stridefun' });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    h.x.getPost = async () => {
+      throw new Error('syndication: HTTP 503; oEmbed: HTTP 503');
+    };
+    const failed = replyTo(dexPaid(launch()), '@ApeCheckBot', { authorHandle: 'tagger2', authorId: '608' });
+    expect(await handleMention(h.deps, failed)).toMatchObject({ action: 'check', target: 'https://x.com/stridefun' });
+    expect(await prisma.botMention.count({ where: { status: 'FAILED' } })).toBe(0);
+  });
+
+  it("another account's post above: checked when the thread has no check yet; the thread's own check wins over it", async () => {
+    const h = harness();
+    const call = post({ text: `New gem, CA: ${CA}`, authorHandle: 'kol', authorId: '42' });
+    h.x.posts.set(call.id, call);
+    const chat = post({ text: 'we are so back', authorHandle: 'lurker', authorId: '77', replyToId: call.id, conversationId: call.id });
+    expect(await handleMention(h.deps, replyTo(chat, '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' }))).toMatchObject({
+      action: 'check',
+      reuse: null,
+      target: CA,
+    });
+
+    const parent = projectPost();
+    h.x.posts.set(parent.id, parent);
+    await handleMention(h.deps, replyTo(parent, '@ApeCheckBot real?'));
+    const site = await prisma.check.findFirstOrThrow({ where: { targetRaw: 'https://orbit.xyz/' } });
+    const shill = post({ text: `real alpha: ${CA}`, authorHandle: 'shill', authorId: '604', replyToId: parent.id, conversationId: parent.id });
+    h.x.posts.set(shill.id, shill);
+    const reply = post({ text: 'ser?', authorHandle: 'lurker', authorId: '77', replyToId: shill.id, conversationId: parent.id });
+    expect(await handleMention(h.deps, replyTo(reply, '@ApeCheckBot', { authorHandle: 'other_user', authorId: '601' }))).toMatchObject({
+      action: 'check',
+      checkId: site.id,
+      reuse: 'thread',
+      target: 'https://orbit.xyz/',
+    });
+  });
+
+  it('on the real X adapter: the walk reads syndication only (never api.x.com), the post above with its parent in one read', async () => {
+    const LAUNCH = '1980000000000000002';
+    const ROOT = '1980000000000000001';
+    const user = { id_str: '1700000000000000880', screen_name: 'stridefun', name: 'Stride' };
+    // cdn.syndication.twimg.com/tweet-result for the launch post: its own reply id, the thread's first post as parent
+    const syndication: Record<string, unknown> = {
+      [LAUNCH]: {
+        __typename: 'Tweet',
+        id_str: LAUNCH,
+        text: `Stride is Live on @solana Chain. CA: ${STRIDE_CA}`,
+        display_text_range: [0, 80],
+        created_at: '2026-10-20T15:02:44.000Z',
+        entities: { urls: [], user_mentions: [{ id_str: '951329744804392960', screen_name: 'solana' }], symbols: [] },
+        user,
+        in_reply_to_status_id_str: ROOT,
+        in_reply_to_user_id_str: user.id_str,
+        parent: { id_str: ROOT, text: 'Introducing Stride 🧵', display_text_range: [0, 20], entities: {}, user },
+      },
+    };
+    const requests: string[] = [];
+    const http: Http = {
+      async request(raw: string, req: HttpRequest = {}) {
+        const url = new URL(raw);
+        requests.push(`${req.method ?? 'GET'} ${url.host}${url.pathname}?id=${url.searchParams.get('id') ?? ''}`);
+        const body = url.host === 'cdn.syndication.twimg.com' ? syndication[url.searchParams.get('id') ?? ''] : undefined;
+        const res: HttpResponse = {
+          status: body ? 200 : 404,
+          ok: !!body,
+          url: raw,
+          finalUrl: raw,
+          headers: { 'content-type': 'application/json' },
+          text: body ? JSON.stringify(body) : '',
+          truncated: false,
+          ms: 1,
+        };
+        return res;
+      },
+      async json<T>(u: string, req?: HttpRequest) {
+        return JSON.parse((await this.request(u, req)).text) as T;
+      },
+    };
+    const h = harness();
+    // every paid key set: still nothing but the free embed host is asked
+    h.deps.x = createX({ ...h.env, X_BEARER_TOKEN: 'b', X_API_KEY: 'k', X_API_SECRET: 's', X_ACCESS_TOKEN: 't', X_ACCESS_SECRET: 'ts' }, http);
+    const dp = stride('Dex paid. https://t.co/pic', { id: '1980000000000000003', replyToId: LAUNCH, conversationId: ROOT, displayTextRange: [0, 9] });
+    const m = replyTo(dp, '@ApeCheckBot', { authorHandle: 'tagger', authorId: '605' });
+    expect(await handleMention(h.deps, m)).toMatchObject({ action: 'check', reuse: null, target: STRIDE_CA });
+    expect(requests).toEqual([`GET cdn.syndication.twimg.com/tweet-result?id=${LAUNCH}`]);
+  });
+});
+
 describe("under the bot's own posts", () => {
   it('"@ApeCheckBot try again" under "Couldn\'t finish this check" runs the check again', async () => {
     const { h, verdict } = await verdictThread(harness(), 'FAILED');

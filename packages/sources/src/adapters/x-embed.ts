@@ -1,7 +1,8 @@
 /**
  * Free X post reads for checks (no key, no X API credits): the two endpoints X's own embed widget uses.
  *  - Syndication (cdn.syndication.twimg.com/tweet-result, as the embed widget and Vercel's react-tweet read it): text,
- *    author, created_at, the parent of a reply and entities.urls with expanded_url (t.co resolved), so the project's
+ *    author, created_at, the parent of a reply (with the parent's own in_reply_to_status_id_str, so the bot walks up a
+ *    thread with one read per two posts) and entities.urls with expanded_url (t.co resolved), so the project's
  *    website is found. Tried first.
  *  - oEmbed (publish.twitter.com/oembed, documented by X): author_name, author_url and the post as HTML; links are only
  *    t.co there, so their visible text (the shortened address, "kairo.ai/app…") stands in for them. The fallback.
