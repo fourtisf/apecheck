@@ -1,0 +1,40 @@
+{
+  "__typename": "Tweet",
+  "lang": "en",
+  "favorite_count": 0,
+  "created_at": "2026-10-19T08:30:00.000Z",
+  "display_text_range": [11, 37],
+  "entities": {
+    "hashtags": [],
+    "urls": [],
+    "user_mentions": [
+      { "id_str": "1500000000000000001", "indices": [0, 10], "name": "Kairo Labs", "screen_name": "kairolabs" },
+      { "id_str": "1800000000000000000", "indices": [11, 23], "name": "ApeCheck", "screen_name": "ApeCheckBot" }
+    ],
+    "symbols": []
+  },
+  "id_str": "1846700000000000009",
+  "text": "@kairolabs @ApeCheckBot real or larp? 🦍",
+  "user": { "id_str": "1600000000000000501", "name": "rina", "screen_name": "degen_rina", "verified": false, "is_blue_verified": false },
+  "in_reply_to_screen_name": "kairolabs",
+  "in_reply_to_status_id_str": "1846629381234567890",
+  "in_reply_to_user_id_str": "1500000000000000001",
+  "parent": {
+    "lang": "en",
+    "created_at": "2026-10-18T14:02:11.000Z",
+    "display_text_range": [0, 58],
+    "entities": {
+      "urls": [{ "display_url": "kairo.xyz", "expanded_url": "https://kairo.xyz", "indices": [35, 58], "url": "https://t.co/k41r0" }],
+      "user_mentions": [],
+      "symbols": [{ "indices": [59, 63], "text": "KAI" }]
+    },
+    "id_str": "1846629381234567890",
+    "text": "Kairo v2 is live on mainnet. Site: https://t.co/k41r0 $KAI",
+    "user": { "id_str": "1500000000000000001", "name": "Kairo Labs", "screen_name": "kairolabs", "verified": false, "is_blue_verified": true },
+    "in_reply_to_status_id_str": null
+  },
+  "note_tweet": { "id": "Tm90ZVR3ZWV0OjE4NDY3MDAwMDAwMDAwMDAwMDk=" },
+  "conversation_count": 0,
+  "isEdited": false,
+  "isStaleEdit": false
+}

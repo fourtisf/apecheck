@@ -1,0 +1,55 @@
+{
+  "__typename": "Tweet",
+  "lang": "en",
+  "favorite_count": 412,
+  "possibly_sensitive": false,
+  "created_at": "2026-10-18T14:02:11.000Z",
+  "display_text_range": [0, 76],
+  "entities": {
+    "hashtags": [],
+    "urls": [
+      { "display_url": "app.kairo.xyz/trade", "expanded_url": "https://app.kairo.xyz/trade", "indices": [39, 62], "url": "https://t.co/abc123" },
+      { "display_url": "docs.kairo.xyz", "expanded_url": "https://docs.kairo.xyz", "indices": [99, 122], "url": "https://t.co/docs77" },
+      { "display_url": "pic.x.com/pic999", "expanded_url": "https://x.com/kairolabs/status/1846629381234567890/photo/1", "indices": [77, 100], "url": "https://t.co/pic999" }
+    ],
+    "user_mentions": [{ "id_str": "951329744804392960", "indices": [72, 79], "name": "Solana", "screen_name": "solana" }],
+    "symbols": [{ "indices": [63, 69], "text": "kairo" }],
+    "media": [
+      { "display_url": "pic.x.com/pic999", "expanded_url": "https://x.com/kairolabs/status/1846629381234567890/photo/1", "indices": [77, 100], "url": "https://t.co/pic999" }
+    ]
+  },
+  "id_str": "1846629381234567890",
+  "text": "Kairo v2 is live on mainnet. Trade now https://t.co/abc123 $kairo cc @solana https://t.co/pic999",
+  "user": {
+    "id_str": "1500000000000000001",
+    "name": "Kairo Labs",
+    "profile_image_url_https": "https://pbs.twimg.com/profile_images/1500000000000000001/kairo_normal.jpg",
+    "screen_name": "kairolabs",
+    "verified": false,
+    "is_blue_verified": true,
+    "profile_image_shape": "Circle"
+  },
+  "edit_control": { "edit_tweet_ids": ["1846629381234567890"], "editable_until_msecs": "1792284331000", "is_edit_eligible": true, "edits_remaining": "5" },
+  "mediaDetails": [
+    {
+      "display_url": "pic.x.com/pic999",
+      "expanded_url": "https://x.com/kairolabs/status/1846629381234567890/photo/1",
+      "media_url_https": "https://pbs.twimg.com/media/Gk2abc.jpg",
+      "type": "photo",
+      "url": "https://t.co/pic999",
+      "original_info": { "height": 675, "width": 1200 }
+    }
+  ],
+  "photos": [{ "backgroundColor": { "red": 0, "green": 0, "blue": 0 }, "cropCandidates": [], "expandedUrl": "https://x.com/kairolabs/status/1846629381234567890/photo/1", "url": "https://pbs.twimg.com/media/Gk2abc.jpg", "width": 1200, "height": 675 }],
+  "quoted_tweet": {
+    "lang": "en",
+    "created_at": "2026-10-01T09:00:00.000Z",
+    "id_str": "1846000000000000000",
+    "text": "Kairo v2 is coming",
+    "user": { "id_str": "1500000000000000001", "name": "Kairo Labs", "screen_name": "kairolabs", "verified": false, "is_blue_verified": true }
+  },
+  "conversation_count": 12,
+  "news_action_type": "conversation",
+  "isEdited": false,
+  "isStaleEdit": false
+}

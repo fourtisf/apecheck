@@ -80,7 +80,7 @@ export function buildProbes(d: DoctorDeps): Probe[] {
     { name: 'DexScreener', remedy: DEXSCREENER_REMEDY, run: () => probeDexScreener({ env, dex: sources.dex }) },
     { name: 'GeckoTerminal', remedy: GECKOTERMINAL_REMEDY, run: () => probeGeckoTerminal(sources as Parameters<typeof probeGeckoTerminal>[0]) },
     { name: 'GitHub', timeoutMs: 30_000, remedy: GITHUB_REMEDY, run: () => probeGitHub({ env, http, github: sources.github }) },
-    { name: 'X reads (Bearer)', timeoutMs: 30_000, remedy: X_READ_REMEDY, run: () => probeXRead({ env, http, x: sources.x }) },
+    { name: 'X posts (free embed)', timeoutMs: 30_000, remedy: X_READ_REMEDY, run: () => probeXRead({ http }) },
     { name: 'X bot (OAuth 1.0a)', remedy: X_BOT_REMEDY, run: () => probeXBot({ env, http }) },
   );
   return probes;

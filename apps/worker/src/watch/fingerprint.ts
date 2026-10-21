@@ -8,7 +8,8 @@
  *            and its code: EIP-1167 target, EIP-1967 slot or beacon, so an upgrade to new logic is a change); Solana:
  *            sha256(mint authority + freeze authority + token program + the Token-2022 extension settings an authority
  *            changes: transfer fee, transfer hook, permanent delegate, pause…); Tron: owner + mint function;
- *  - X post / profile → the profile's name, bio and link (only when the X API is configured; skipped otherwise).
+ *  - X post / profile → not watched for changes: a profile can only be read through the paid X API, which only the
+ *    bot may use, and a post's text does not change. (Earlier "profile:v3:" values stay stored, never compared.)
  *
  * A fingerprint is only ever produced from a read that worked: any error (HTTP status, SSRF refusal, timeout, a bot
  * challenge page, an RPC failure, an account X can't find) is `{ ok: false }` and never compared. On chain that means
@@ -26,6 +27,7 @@ import { detectBotWall } from '../browser/page';
 import { errText } from '../log';
 import { siteFingerprintText } from './normalise';
 
+/** 'profile' is no longer produced (X profiles are not read); kept for alerts and values stored earlier */
 export type FingerprintKind = 'site' | 'contract' | 'mint' | 'profile';
 export const FINGERPRINT_VERSION = 'v3';
 
@@ -66,7 +68,7 @@ export function fingerprintKind(t: Pick<WatchedTarget, 'kind' | 'chain' | 'ca' |
     if (!chain || !t.ca) return null;
     return chain === 'sol' ? 'mint' : 'contract';
   }
-  if (t.kind === 'POST') return t.handle ? 'profile' : null;
+  // X posts / profiles: not watched (see the header)
   return null;
 }
 
@@ -159,23 +161,12 @@ export async function tronFingerprint(sources: Pick<Sources, 'tron'>, ca: string
   return { ok: true, kind: 'contract', value: stamp('contract', parts.join('|')) };
 }
 
-/** X profile: display name, bio and profile link (only with the X API configured). */
-export async function profileFingerprint(sources: Pick<Sources, 'x'>, handle: string): Promise<Fingerprint> {
-  if (!sources.x.configured) return failed('profile', 'X API not configured', false);
-  const { value: user, errors } = await captureErrors(() => sources.x.getUser(handle));
-  if (errors.length) return failed('profile', errors[0]);
-  if (!user) return failed('profile', 'account could not be read');
-  const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
-  const parts = [`name:${norm(user.name)}`, `bio:${norm(user.description)}`, `url:${norm(user.url)}`];
-  return { ok: true, kind: 'profile', value: stamp('profile', parts.join('|')) };
-}
-
 /** The target's fingerprint now. `targetRaw` (the latest check's input) gives a site's scheme and port. */
 export async function fingerprintTarget(sources: Sources, t: WatchedTarget, targetRaw: string | null): Promise<Fingerprint> {
   const kind = fingerprintKind(t);
   if (!kind) return failed(null, 'not watched for changes', false);
   if (kind === 'site') return siteFingerprint(sources, siteUrl(t.domain!, targetRaw));
-  if (kind === 'profile') return profileFingerprint(sources, t.handle!);
+  if (kind === 'profile') return failed('profile', 'X profiles are not watched', false);
   const chain = chainFromDb(t.chain)!;
   if (kind === 'mint') return solFingerprint(sources, t.ca!);
   if (chain === 'trx') return tronFingerprint(sources, t.ca!);

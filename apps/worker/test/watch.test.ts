@@ -18,11 +18,11 @@ import { PRIORITY } from '@apecheck/core';
 import { HttpError, createEvm, createTron, type EvmTokenBasics, type Http } from '@apecheck/sources';
 import { memoryLogger } from '../src/log';
 import { siteFingerprintText, stripVolatile } from '../src/watch/normalise';
-import { evmFingerprint, fingerprintScheme, siteUrl, tronFingerprint } from '../src/watch/fingerprint';
+import { evmFingerprint, fingerprintKind, fingerprintScheme, siteUrl, tronFingerprint } from '../src/watch/fingerprint';
 import { autoRechecksToday, processRecheck, reserveAutoRecheck, scanWatched, retryKey, RECHECK_CHECK_JOB, type RecheckDeps } from '../src/watch/recheck';
 import { completeAutoRechecks, recheckedText } from '../src/watch/notify';
 import { closedPort, serveHandler, type FixtureSite } from './fixture-server';
-import { fakeSources, type FakeData } from './fakes';
+import { fakeSources, type FakeData, type FakeSources } from './fakes';
 import { prisma, resetDb, testEnv } from './helpers';
 
 const HOUR = 3600_000;
@@ -670,7 +670,7 @@ describe('automatic re-checks under concurrency', () => {
 });
 
 describe('the scan', () => {
-  it('picks due targets with a Pro or Max watcher, oldest fingerprint first; X profiles only with X configured', async () => {
+  it('picks due targets with a Pro or Max watcher, oldest fingerprint first; never X posts / profiles (no paid X reads)', async () => {
     const h = harness();
     const mk = (key: string, data: object) => prisma.target.create({ data: { key, name: key, ...data } as never });
     const due = await mk('site:due.xyz', { kind: 'SITE', domain: 'due.xyz', fingerprintAt: new Date(Date.now() - 7 * HOUR) });
@@ -684,8 +684,11 @@ describe('the scan', () => {
     for (const t of [due, never, fresh, unknownChain, profile]) await prisma.watch.create({ data: { userId: pro.id, targetId: t.id } });
     await prisma.watch.create({ data: { userId: free.id, targetId: freeOnly.id } });
     expect(await scanWatched(h.deps)).toEqual([never.id, due.id]);
+    // not even with X_BEARER_TOKEN set: a profile would need the paid X API, which only the bot uses
     const withX = harness({ data: { xConfigured: true } });
-    expect(await scanWatched(withX.deps)).toEqual(expect.arrayContaining([never.id, due.id, profile.id]));
+    expect(await scanWatched(withX.deps)).toEqual([never.id, due.id]);
+    expect(fingerprintKind({ kind: 'POST', chain: null, ca: null, domain: 'kairo.xyz', handle: 'kairolabs' })).toBeNull();
+    expect((withX.deps.sources as FakeSources).calls.filter(c => c.startsWith('x.'))).toEqual([]);
   });
 });
 

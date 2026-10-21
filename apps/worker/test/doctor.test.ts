@@ -351,28 +351,30 @@ describe('Solana probe', () => {
 });
 
 describe('API probes', () => {
-  it('X reads: WARN without a Bearer token and nothing is sent', async () => {
-    const http = fakeHttp(() => ({ status: 500 }));
-    const r = await probeXRead({ env: prodEnv(), http, x: { configured: false, getUser: async () => null } });
-    expect(r.status).toBe('WARN');
-    expect(r.detail).toMatch(/X_BEARER_TOKEN empty/);
-    expect(http.calls).toHaveLength(0);
+  const jackPost = { __typename: 'Tweet', id_str: '20', text: 'just setting up my twttr', created_at: '2006-03-21T20:50:14.000Z', user: { id_str: '12', screen_name: 'jack', name: 'jack' } };
+  const jackOembed = { author_name: 'jack', author_url: 'https://twitter.com/jack', html: '<blockquote class="twitter-tweet"><p lang="en" dir="ltr">just setting up my twttr</p>&mdash; jack (@jack) <a href="https://twitter.com/jack/status/20">March 21, 2006</a></blockquote>' };
+  const host = (u: string) => new URL(u).host;
+  it('X posts (free embed): PASS from the syndication endpoint, with no key and never api.x.com', async () => {
+    const http = fakeHttp(url => (host(url) === 'cdn.syndication.twimg.com' ? { body: jackPost } : { status: 500 }));
+    const r = await probeXRead({ http });
+    expect(r).toEqual({ status: 'PASS', detail: 'cdn.syndication.twimg.com: post 20 by @jack read (free embed read, no X API credits)' });
+    expect(http.calls.map(c => host(c.url))).toEqual(['cdn.syndication.twimg.com']);
+    expect(http.calls[0].req.headers?.authorization).toBeUndefined();
   });
-  it("X reads: when the adapter reads nothing, X's own reason is shown (never the client id)", async () => {
-    const http = fakeHttp(() => ({
-      status: 403,
-      body: { client_id: '987654', title: 'Client Forbidden', reason: 'client-not-enrolled', detail: 'attach your App to a Project' },
-      headers: { 'x-rate-limit-remaining': '299' },
-    }));
-    const getUser = async () => {
-      reportError('x.getUser: HTTP 403 from api.x.com');
-      return null;
-    };
-    const r = await probeXRead({ env: prodEnv({ X_BEARER_TOKEN: 'B'.repeat(30) }), http, x: { configured: true, getUser } });
-    expect(r.status).toBe('FAIL');
-    expect(r.detail).toBe('api.x.com: HTTP 403 Client Forbidden: client-not-enrolled: attach your App to a Project, rate limit 299 left');
-    expect(r.remedy).toMatch(/attach it to a Project/);
-    expect(http.calls[0].req.headers?.authorization).toBe(`Bearer ${'B'.repeat(30)}`);
+  it('X posts (free embed): WARN when only the oEmbed fallback works, WARN with both reasons when neither does', async () => {
+    const half = fakeHttp(url => (host(url) === 'publish.twitter.com' ? { body: jackOembed } : { status: 403, body: 'blocked' }));
+    const r = await probeXRead({ http: half });
+    expect(r.status).toBe('WARN');
+    expect(r.detail).toBe('cdn.syndication.twimg.com: HTTP 403 from cdn.syndication.twimg.com; the oEmbed fallback (publish.twitter.com) works: posts are read, their links only as the shortened text');
+    expect(r.remedy).toMatch(/x-embed\.ts/);
+
+    const down = fakeHttp(url => (host(url) === 'publish.twitter.com' ? new Error('getaddrinfo ENOTFOUND publish.twitter.com') : { status: 503 }));
+    const d = await probeXRead({ http: down });
+    expect(d.status).toBe('WARN');
+    expect(d.detail).toContain('cdn.syndication.twimg.com: HTTP 503 from cdn.syndication.twimg.com; publish.twitter.com: ');
+    expect(d.detail).toContain("(X post checks can't read posts)");
+    expect(d.remedy).toBeTruthy();
+    expect([...half.calls, ...down.calls].some(c => host(c.url) === 'api.x.com')).toBe(false);
   });
   it('X bot: SKIP without keys, FAIL when partly set, a signed users/me that never follows redirects', async () => {
     const none = fakeHttp(() => ({ status: 500 }));

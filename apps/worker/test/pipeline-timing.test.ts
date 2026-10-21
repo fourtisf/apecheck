@@ -11,6 +11,7 @@ import { BrowserHost } from '../src/browser/browser';
 import { memoryLogger } from '../src/log';
 import { recoverStaleChecks, runCheck, type PipelineDeps } from '../src/pipeline';
 import { finalJudgement } from '../src/pipeline/judge';
+import { scoredSignals } from '../src/pipeline/signals';
 import { BrowserPool, checkBrowserAtStartup } from '../src/worker';
 import { serveFixture, testLookup, type FixtureSite } from './fixture-server';
 import { dexInfo, fakeSources, repoFacts, xUser, type FakeData } from './fakes';
@@ -108,7 +109,7 @@ describe('a coin whose Stage D ran short', () => {
     expect([c.coinFacts!.sigDeployer, c.coinFacts!.sigBundle, c.coinFacts!.sigHolders, c.coinFacts!.sigLp, c.coinFacts!.sigAuthorities]).toEqual(['WARN', 'WARN', 'WARN', 'WARN', 'WARN']);
     expect(c.coinScore).toBe(scoreCoin({ deployer: 'mixed', bundle: 'warn', holders: 'warn', lp: 'warn', authorities: 'warn' }).score);
     const r = scoreCheck(
-      { launch: sig(c.sigLaunch), flow: sig(c.sigFlow), docs: sig(c.sigDocs), acct: sig(c.sigAcct), git: sig(c.sigGit), claims: c.claims.map(x => claimStatusFromDb(x.status)) },
+      { ...scoredSignals({ launch: sig(c.sigLaunch), flow: sig(c.sigFlow), docs: sig(c.sigDocs), acct: sigFromDb(c.sigAcct), git: sig(c.sigGit) }), claims: c.claims.map(x => claimStatusFromDb(x.status)) },
       { deployer: 'mixed', bundle: 'warn', holders: 'warn', lp: 'warn', authorities: 'warn' },
     );
     // the coin is averaged into the total, not left out
@@ -275,27 +276,27 @@ describe('checks that would never finish', () => {
 });
 
 describe('unknown people signals', () => {
-  it('the judge can only lower an unknown acct / git signal, never make it ok', () => {
+  it('an unchecked X account is null (left out of the score) whatever the judge says; git can only be lowered, never made ok', () => {
     const { run } = standaloneRun({ env, sources: fakeSources(env), browser: null });
     const judged = (acct: Signal, git: Signal): Judged => ({ claims: [], acct, git, summary: 'x', coinSummary: null });
-    // X account linked but unreadable, GitHub down: warn whatever the model says
+    // X account linked (never read), GitHub down: acct not checked, git warn whatever the model says
     run.handle = 'orbit';
     run.git.unknown = 'unavailable';
     run.judged = judged('ok', 'ok');
-    expect(finalJudgement(run)).toMatchObject({ acct: 'warn', git: 'warn' });
+    expect(finalJudgement(run)).toMatchObject({ acct: null, git: 'warn' });
     run.judged = judged('fail', 'fail');
-    expect(finalJudgement(run)).toMatchObject({ acct: 'warn', git: 'warn' });
+    expect(finalJudgement(run)).toMatchObject({ acct: null, git: 'warn' });
     // Stage D never got to GitHub (timed out): unknown → warn
     run.git.unknown = null;
     run.judged = judged('ok', 'ok');
     expect(finalJudgement(run).git).toBe('warn');
-    // nothing to look up (no X account, no repo link or name): the judge may say fail, never ok
+    // nothing to look up (no X account, no repo link or name): the judge may say fail for git, never ok
     run.handle = null;
     run.git.unknown = 'nothing-to-look-up';
     run.judged = judged('ok', 'ok');
-    expect(finalJudgement(run)).toMatchObject({ acct: 'warn', git: 'warn' });
+    expect(finalJudgement(run)).toMatchObject({ acct: null, git: 'warn' });
     run.judged = judged('fail', 'fail');
-    expect(finalJudgement(run)).toMatchObject({ acct: 'fail', git: 'fail' });
+    expect(finalJudgement(run)).toMatchObject({ acct: null, git: 'fail' });
     // a deterministic signal always wins
     run.acct.signal = { signal: 'ok', text: '@orbit: 2y old', stepIdx: 3 };
     run.git.signal = { signal: 'warn', text: 'GitHub: thin', stepIdx: 4 };

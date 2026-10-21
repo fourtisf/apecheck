@@ -12,7 +12,7 @@ import type { XPost } from '@apecheck/sources';
 import { memoryLogger } from '../src/log';
 import { enqueueBotReply } from '../src/pipeline/save';
 import type { PipelineDeps } from '../src/pipeline/context';
-import { SINCE_KEY, currentSinceId, pollOnce, startBotWorker } from '../src/bot/index';
+import { LOCK_KEY, SINCE_KEY, currentSinceId, pollOnce, startBotWorker } from '../src/bot/index';
 import { handleMention, type BotDeps } from '../src/bot/handle';
 import { RetryReplyError, isRetryable, processReply, replyBackoff } from '../src/bot/reply';
 import { FAILED_TEXT, HELP_TEXT, PRO_POINTER_TEXT } from '../src/bot/compose';
@@ -643,6 +643,25 @@ describe('polling, since_id and the lock', () => {
     } finally {
       await a.close();
       await b.close();
+    }
+  });
+
+  it('polls every BOT_POLL_SECONDS, 60 s by default (one owned mentions read a minute), with links off by default', async () => {
+    const env = testEnv({ X_BOT_USER_ID: '1000' });
+    expect(env.BOT_POLL_SECONDS).toBe(60);
+    expect(env.BOT_INCLUDE_LINK).toBe(false);
+    await redis.del(LOCK_KEY);
+    const log = memoryLogger();
+    const x = new FakeX();
+    const w = await startBotWorker({ env, x, log, autoPoll: false, ai: heuristicAi() });
+    try {
+      await w.tick();
+      expect(w.state).toBe('active');
+      expect(log.lines).toContain("info active: polling @ApeCheckBot's mentions every 60s (AI: heuristic, links off)");
+      // one mentions read per poll
+      expect(x.mentionCalls).toHaveLength(1);
+    } finally {
+      await w.close();
     }
   });
 });

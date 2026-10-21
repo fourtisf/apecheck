@@ -62,7 +62,8 @@ export const EnvZ = z.object({
   X_BOT_HANDLE: str('ApeCheckBot'),
   X_OAUTH2_CLIENT_ID: optStr(),
   X_OAUTH2_CLIENT_SECRET: optStr(),
-  BOT_POLL_SECONDS: int(20),
+  /** one owned X API read per poll: 60 s = 60 requests an hour (DEPLOY.md §14) */
+  BOT_POLL_SECONDS: int(60),
   BOT_USER_HOURLY: int(3),
   BOT_PRO_USER_HOURLY: int(20),
   BOT_HOURLY_CAP: int(200),

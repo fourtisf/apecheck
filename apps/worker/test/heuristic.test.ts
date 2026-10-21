@@ -159,8 +159,8 @@ describe('heuristic judge', () => {
     expect(unchecked.git).toBe('warn');
     // the team claim cites why the account is unknown, never "no X account" when there is one
     expect(unchecked.claims[3]).toMatchObject({ status: 'not_seen', evidence: 'No X account to check' });
-    const xDown = heuristicJudge(input({ ...base, people: { acct: null, git: null }, evidence: { acct: '@orbit: account could not be read' } }));
-    expect(xDown.claims[3]).toMatchObject({ status: 'not_seen', evidence: '@orbit: account could not be read' });
+    const xDown = heuristicJudge(input({ ...base, people: { acct: null, git: null }, evidence: { acct: '@orbit: account age and followers not checked' } }));
+    expect(xDown.claims[3]).toMatchObject({ status: 'not_seen', evidence: '@orbit: account age and followers not checked' });
     const searched = heuristicJudge(input({ ...base, people: { acct: null, git: sig('warn', 'GitHub: no repository found') } }));
     expect(searched.summary).toBe("The app loads but the main flow stops at 'Coming soon'; no public code was found.");
   });

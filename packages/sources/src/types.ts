@@ -296,7 +296,7 @@ export interface TokenLinksSource {
   gecko(chain: ChainKey, address: string): Promise<TokenLinks | null>;
 }
 
-/* ---------------- X (API v2, bearer for reads; OAuth 1.0a user context for the bot in M2) ---------------- */
+/* ---------------- X (free embed reads for checks; API v2 for the bot in M2) ---------------- */
 
 export interface XUser {
   id: string;
@@ -337,29 +337,35 @@ export interface XPost {
   quotedId: string | null;
   author?: XUser | null;
   /**
-   * mentions() only: [start, end) of the part the author typed, as JS string indices into `text`. For a reply,
+   * mentions() and the syndication read of getPost(): [start, end) of the part the author typed, as JS string indices into `text`. For a reply,
    * X puts the auto-added @mentions of the thread before `start`; a mention the author typed is at or after it.
    * null when X sent no range.
    */
   displayTextRange?: [number, number] | null;
-  /** mentions() only: the author of the post this one replies to (in_reply_to_user_id) */
+  /** mentions() and the syndication read of getPost(): the author of the post this one replies to (in_reply_to_user_id) */
   inReplyToUserId?: string | null;
   /**
    * mentions() only: the post this one replies to, taken from the same response (includes.tweets, with its
    * author). null when it is not a reply, or X didn't include the parent (deleted, protected, no access):
-   * then use `replyToId` + getPost().
+   * then use `replyToId` + getPost(). getPost() fills it too when the embed payload carries the parent.
    */
   repliedTo?: XPost | null;
 }
 export interface XSource {
-  /** reads need X_BEARER_TOKEN */
+  /** X_BEARER_TOKEN is set (paid app-only reads: the bot's fallbacks only; checks never need it) */
   configured: boolean;
   /** last non-fatal error (also reported to the current captureErrors() scope) */
   readonly lastError?: string | null;
   /** posting/media need the OAuth 1.0a user keys (bot, M2) */
   canPost: boolean;
-  getPost(id: string): Promise<XPost | null>;
+  /**
+   * A post through X's free embed endpoints (syndication, then oEmbed): no key and no X API credits, so checks can
+   * call it. No account data (`author` has handle and name only). `handle` only helps the oEmbed fallback.
+   */
+  getPost(id: string, handle?: string | null): Promise<XPost | null>;
+  /** Paid X API account read (Bearer). The bot only (its own id, a mention author's age); checks never call it. */
   getUser(handle: string): Promise<XUser | null>;
+  /** Paid X API account read (Bearer). The bot only; checks never call it. */
   getUserById(id: string): Promise<XUser | null>;
   /** Handle-rename history needs a third-party source: stub, always null for now (HANDOFF §4 Stage D). */
   renameCount(handle: string): Promise<number | null>;
