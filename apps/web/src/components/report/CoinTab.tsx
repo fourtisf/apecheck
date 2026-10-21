@@ -122,15 +122,15 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
           <span className="mono" title={addr}>
             {short(addr)}
           </span>
-          <small>Launch history unavailable</small>
+          <small>Launch history not checked</small>
         </>
       ) : (
         <Unknown />
       ),
-      d ? 'DevRadar' : addr ? 'On-chain' : 'DevRadar',
+      d || addr ? 'On-chain' : '',
     ],
-    ['Earlier launches', f.deployerText ? cap(f.deployerText) : <Unknown />, 'DevRadar'],
-    ['Bundled at launch', bundled, 'BundleScan'],
+    ['Earlier launches', f.deployerText ? cap(f.deployerText) : <Unknown />, f.deployerText ? 'On-chain' : ''],
+    ['Bundled at launch', bundled, f.bundlePct != null ? 'On-chain' : ''],
     [
       'Top 10 holders',
       f.top10Pct != null ? (
@@ -141,7 +141,7 @@ function factRows(r: CheckReportDTO, f: CoinFactsDTO): FactRow[] {
       ) : (
         <Unknown />
       ),
-      'WhaleFlow',
+      f.top10Pct != null ? 'On-chain' : '',
     ],
     [
       'Liquidity',
@@ -214,7 +214,7 @@ export function Clusters({ items }: { items: HolderCluster[] }) {
                 ) : null}
               </small>
             </dd>
-            <dd className="src">WhaleFlow</dd>
+            <dd className="src">On-chain</dd>
           </Fragment>
         ))}
       </dl>

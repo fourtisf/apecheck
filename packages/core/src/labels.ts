@@ -38,6 +38,23 @@ export const CLAIM_KINDS: ClaimKind[] = ['live_product', 'mainnet', 'ai_agent', 
 export type StepSource = 'X' | 'GitHub' | 'DexScreener' | 'DevRadar' | 'BundleScan' | 'WhaleFlow' | 'On-chain';
 export const STEP_SOURCES: StepSource[] = ['X', 'GitHub', 'DexScreener', 'DevRadar', 'BundleScan', 'WhaleFlow', 'On-chain'];
 
+/** Third-party coin sources ApeCheck no longer uses: steps stored before then still name them. */
+const RETIRED_SOURCES = new Set(['DevRadar', 'BundleScan', 'WhaleFlow']);
+const RETIRED_TEXT: [RegExp, string][] = [
+  [/^DevRadar unavailable, deployer history unknown/, 'Deployer history not checked'],
+  [/^BundleScan unavailable, bundle share unknown/, 'Bundle share not checked'],
+  [/^WhaleFlow unavailable, holder share unknown/, 'Holder share not checked'],
+  [/holder share unknown \(WhaleFlow unavailable\)/, 'holder share not checked'],
+];
+
+/** A stored step as ApeCheck shows it today: no retired third-party source tag, its "unavailable" lines as "not checked". */
+export function displayStep<T extends { text: string; source?: string | null }>(s: T): T {
+  if (!s.source || !RETIRED_SOURCES.has(s.source)) return s;
+  let text = s.text;
+  for (const [re, to] of RETIRED_TEXT) text = text.replace(re, to);
+  return { ...s, text, source: null };
+}
+
 /** Deployer history line used in the log, the Coin tab ("Earlier launches") and asks. Same wording as the prototype. */
 export function deployerLine(d: { record: DeployerRecord; launched: number; dead: number; fundedFrom?: string | null }): string {
   if (d.record === 'builder') {

@@ -4,6 +4,7 @@
  */
 import path from 'node:path';
 import {
+  displayStep,
   CLAIM_LABEL,
   CLAIM_SIGNAL,
   CLAIM_SOURCE_LABEL,
@@ -382,12 +383,14 @@ function toCoinFacts(f: NonNullable<CheckSummaryRow['coinFacts']>): CoinFactsDTO
 }
 
 export function toStep(s: CheckReportRow['steps'][number], env: Env): StepDTO {
+  // steps stored before the third-party coin sources were dropped read as ApeCheck's own
+  const shown = displayStep({ text: s.text, source: s.source });
   return {
     idx: s.idx,
     t: s.tMs,
     status: stepStatusFromDb(s.status),
-    text: s.text,
-    source: s.source,
+    text: shown.text,
+    source: shown.source,
     url: s.url,
     caption: s.caption,
     screenshot: shotUrl(s.screenshot, env.SCREENSHOT_DIR),

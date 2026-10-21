@@ -160,7 +160,7 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
     evidence.deployer = { signal: sig.deployer, text, stepIdx: idx >= 0 ? idx : null };
   } else {
     const who = d ? ` (${short(d.address)})` : '';
-    await steps.step({ status: 'warn', text: `${unknown('deployer')}${who}`, source: 'DevRadar' });
+    await steps.step({ status: 'warn', text: `${unknown('deployer')}${who}` });
   }
 
   // bundle
@@ -170,7 +170,7 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
     const idx = await steps.step({ status: sig.bundle, text, source: raw.bundle.source });
     evidence.bundle = { signal: sig.bundle, text, stepIdx: idx >= 0 ? idx : null };
   } else {
-    await steps.step({ status: 'warn', text: unknown('bundle')!, source: 'BundleScan' });
+    await steps.step({ status: 'warn', text: unknown('bundle')! });
   }
 
   // holders + liquidity
@@ -183,8 +183,8 @@ async function applyCoinFacts(run: CheckRun, raw: CoinRawFacts, steps: StepSink,
     const idx = await steps.step({ status, text, source: h.source });
     evidence.holders = { signal: sig.holders, text, stepIdx: idx >= 0 ? idx : null };
   } else {
-    const text = sig.lpText ? `Liquidity ${sig.lpText}; holder share unknown (WhaleFlow unavailable)` : unknown('holders')!;
-    await steps.step({ status: sig.lpText ? worst('warn', sig.lp) : 'warn', text, source: raw.lp?.source ?? 'WhaleFlow' });
+    const text = sig.lpText ? `Liquidity ${sig.lpText}; holder share not checked` : unknown('holders')!;
+    await steps.step({ status: sig.lpText ? worst('warn', sig.lp) : 'warn', text, source: raw.lp?.source });
   }
 
   // authorities

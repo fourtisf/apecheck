@@ -315,7 +315,7 @@ describe('pipeline run(checkId)', () => {
     expect(c.coinFacts?.deployerAddress).toBe('0xabcd00000000000000000000000000000000ef02');
     expect(c.coinFacts?.sigDeployer).toBe('WARN');
     expect(await prisma.deployer.count()).toBe(0);
-    expect(c.steps.some(s => s.text === 'DevRadar unavailable, deployer history unknown (0xAbC…Ef02)')).toBe(true);
+    expect(c.steps.some(s => s.text === 'Deployer history not checked (0xAbC…Ef02)')).toBe(true);
   });
 
   it("a Max user's private coin check never creates or refreshes a Deployer row; it links one the public already knows", async () => {

@@ -199,7 +199,7 @@ export function DeployersView({ initial, initialFilters }: { initial: DeployersR
         <div>
           <h1 className="h-pg">Deployers</h1>
           <p>
-            Every wallet that launched a checked coin, with its full launch history from DevRadar. Builders ship more than once; serial launchers leave a
+            Every wallet that launched a checked coin, with every coin from it that ApeCheck has checked. Builders ship more than once; serial launchers leave a
             trail of dead tokens.
           </p>
         </div>

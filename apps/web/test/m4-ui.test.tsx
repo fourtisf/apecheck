@@ -208,7 +208,7 @@ describe('Coin tab: wallet clusters', () => {
     );
     const block = out.slice(out.indexOf('<div class="clusters">'));
     expect(block).toContain('<h4 class="h4">Wallet clusters <span class="lock">Pro</span></h4>');
-    expect(block).toContain('<dt>Launch snipers</dt><dd>12.4% of supply<small>14 wallets, funded from <span class="mono" title="0x9a1f00000000000000000000000000000000c0de">0x9a1…c0de</span></small></dd><dd class="src">WhaleFlow</dd>');
+    expect(block).toContain('<dt>Launch snipers</dt><dd>12.4% of supply<small>14 wallets, funded from <span class="mono" title="0x9a1f00000000000000000000000000000000c0de">0x9a1…c0de</span></small></dd><dd class="src">On-chain</dd>');
     expect(block).toContain('<dt>Team wallets</dt><dd>6.3% of supply<small>1 wallet, funded from Binance hot wallet</small></dd>');
     expect(block).toContain('<dt>Unknown funder</dt><dd>2% of supply<small>3 wallets</small></dd>');
   });

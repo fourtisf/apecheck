@@ -466,7 +466,7 @@ describe('Coin tab: wallet clusters', () => {
     expect(rows).toEqual(['Launch snipers', 'Team wallets']);
     const values = await page.$$eval('.clusters .facts dd:not(.src)', els => els.map(e => e.textContent));
     expect(values).toEqual(['12.4% of supply14 wallets, funded from 0x9a1…c0de', '6.3% of supply3 wallets, funded from Binance hot wallet']);
-    expect(await page.$$eval('.clusters .facts dd.src', els => els.map(e => e.textContent))).toEqual(['WhaleFlow', 'WhaleFlow']);
+    expect(await page.$$eval('.clusters .facts dd.src', els => els.map(e => e.textContent))).toEqual(['On-chain', 'On-chain']);
     const dir = path.join(inject('e2eLogDir'), 'm4-shots');
     fs.mkdirSync(dir, { recursive: true });
     await page.locator('#tp').screenshot({ path: path.join(dir, 'coin-clusters-1440-light.png') });

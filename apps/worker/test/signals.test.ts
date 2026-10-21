@@ -79,9 +79,9 @@ describe('coin signals (core helpers only)', () => {
     const s = coinSignals(emptyCoinFacts('base', '0x1'));
     expect(s).toMatchObject({ record: 'mixed', historyKnown: false, deployer: 'warn', bundle: 'warn', holders: 'warn', lp: 'warn', authorities: 'warn' });
     expect(s.unknown.map(u => u.line)).toEqual([
-      'DevRadar unavailable, deployer history unknown',
-      'BundleScan unavailable, bundle share unknown',
-      'WhaleFlow unavailable, holder share unknown',
+      'Deployer history not checked',
+      'Bundle share not checked',
+      'Holder share not checked',
       'LP status unknown, liquidity lock not checked',
       'Mint and freeze authorities unknown',
     ]);

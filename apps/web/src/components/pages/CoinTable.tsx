@@ -71,7 +71,7 @@ export function CoinRow({ item: it }: { item: CoinRowDTO }) {
             <span className="mono" style={{ fontSize: 13 }}>
               {short(f.deployerAddress)}
             </span>
-            <small style={{ fontSize: 12, lineHeight: 1.3, color: 'var(--mute)' }}>Launch history unavailable</small>
+            <small style={{ fontSize: 12, lineHeight: 1.3, color: 'var(--mute)' }}>Launch history not checked</small>
           </span>
         ) : (
           nil

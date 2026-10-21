@@ -320,17 +320,17 @@ export function coinSignals(f: CoinRawFacts): CoinSignals {
   const d = f.deployer;
   const historyKnown = !!d && d.launched != null && d.dead != null;
   const record: DeployerRecord = historyKnown ? deployerRecord(d!.launched!, d!.dead!) : 'mixed';
-  if (!historyKnown) unknown.push({ section: 'deployer', line: 'DevRadar unavailable, deployer history unknown' });
+  if (!historyKnown) unknown.push({ section: 'deployer', line: 'Deployer history not checked' });
 
   let bundle: Signal = 'warn';
   if (f.bundle && Number.isFinite(f.bundle.pct)) bundle = bandSignal(f.bundle.pct, CONFIG.bundlePct);
-  else unknown.push({ section: 'bundle', line: 'BundleScan unavailable, bundle share unknown' });
+  else unknown.push({ section: 'bundle', line: 'Bundle share not checked' });
 
   let holders: Signal = 'warn';
   const h = f.holders;
   if (h && h.top10Pct != null && h.devHoldPct != null) holders = holdersSignal(h.top10Pct, h.devHoldPct);
   else if (h && h.top10Pct != null) holders = bandSignal(h.top10Pct, CONFIG.top10Pct);
-  else unknown.push({ section: 'holders', line: 'WhaleFlow unavailable, holder share unknown' });
+  else unknown.push({ section: 'holders', line: 'Holder share not checked' });
 
   let lp: Signal = 'warn';
   let lpStatus: string | null = null;

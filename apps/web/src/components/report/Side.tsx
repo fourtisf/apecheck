@@ -131,7 +131,7 @@ function DeployerAddressCard({ address }: { address: string }) {
         </span>
       </p>
       <p className="sub" style={{ margin: 0 }}>
-        Launch history unavailable.
+        Launch history not checked.
       </p>
     </div>
   );
