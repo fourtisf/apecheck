@@ -22,4 +22,7 @@ export const APP_HOST = (() => {
 /** ApeCheck's X account (header and footer links); NEXT_PUBLIC_X_URL overrides it at build time. */
 export const X_URL = process.env.NEXT_PUBLIC_X_URL || 'https://x.com/ApeCheckBot';
 
+/** ApeCheck's Telegram (header and footer links); NEXT_PUBLIC_TELEGRAM_URL overrides it at build time. */
+export const TELEGRAM_URL = process.env.NEXT_PUBLIC_TELEGRAM_URL || 'https://t.me/APECHECK';
+
 export const reportPath = (id: string) => `/c/${encodeURIComponent(id)}`;

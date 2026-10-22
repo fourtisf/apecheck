@@ -42,6 +42,17 @@ export function Logo(p: P) {
 }
 
 /** The X (Twitter) logo. */
+export function TelegramIcon(p: P) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" {...p}>
+      <path
+        fill="currentColor"
+        d="M21.43 3.32a1.3 1.3 0 0 0-1.33-.2L2.9 9.88c-.86.34-.84 1.57.03 1.88l4.36 1.53 1.67 5.4c.2.66 1.03.87 1.52.38l2.45-2.43 4.42 3.27c.6.44 1.45.11 1.6-.62l3-14.6a1.3 1.3 0 0 0-.52-1.37zM9.9 14.06l-.53 3.3-1.2-3.9 9.6-6.2-7.87 6.8z"
+      />
+    </svg>
+  );
+}
+
 export function XLogoIcon(p: P) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" {...p}>

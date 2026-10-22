@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { FOOTER_DISCLAIMER } from '@apecheck/core';
-import { X_URL } from '@/lib/env';
+import { TELEGRAM_URL, X_URL } from '@/lib/env';
 import { TokenCA } from './TokenCA';
 
 export function Footer() {
@@ -19,6 +19,9 @@ export function Footer() {
           <Link href="/deployers">Deployers</Link>
           <a href={X_URL} target="_blank" rel="noopener noreferrer">
             X
+          </a>
+          <a href={TELEGRAM_URL} target="_blank" rel="noopener noreferrer">
+            Telegram
           </a>
         </nav>
       </div>

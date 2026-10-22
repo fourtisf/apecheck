@@ -262,12 +262,17 @@ describe('layout', () => {
     await page.close();
   });
 
-  it('links to ApeCheck on X from the header where it fits and from the footer everywhere', async () => {
+  it('links to ApeCheck on X and Telegram from the header where they fit and from the footer everywhere', async () => {
     const shown = async (width: number) => {
       const page = await open('/', width);
-      const x = page.locator('header .top-x');
+      const x = page.locator('header a[aria-label="ApeCheck on X"]');
+      const tg = page.locator('header .top-tg');
       const r = { header: await x.isVisible(), footer: await page.locator('footer a[href="https://x.com/ApeCheckBot"]').count() };
       if (r.header) expect(await x.getAttribute('href')).toBe('https://x.com/ApeCheckBot');
+      // Telegram sits next to X and shows where it does
+      expect(await tg.isVisible()).toBe(r.header);
+      if (r.header) expect(await tg.getAttribute('href')).toBe('https://t.me/APECHECK');
+      expect(await page.locator('footer a[href="https://t.me/APECHECK"]').count()).toBe(1);
       await page.close();
       return r;
     };

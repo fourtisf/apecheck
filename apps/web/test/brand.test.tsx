@@ -52,9 +52,10 @@ describe('CA pill', () => {
 });
 
 describe('footer', () => {
-  it('links to ApeCheck on X in a new tab and carries the CA pill', () => {
+  it('links to ApeCheck on X and Telegram in a new tab and carries the CA pill', () => {
     const out = html(<Footer />, me());
     expect(out).toContain('href="https://x.com/ApeCheckBot" target="_blank" rel="noopener noreferrer"');
+    expect(out).toContain('href="https://t.me/APECHECK" target="_blank" rel="noopener noreferrer"');
     expect(out).toContain('class="ca-pill"');
   });
 });
