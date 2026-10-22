@@ -38,6 +38,15 @@ describe('detect (same rules as the prototype)', () => {
     expect(detect(`https://pump.fun/coin/${SOL}`)).toMatchObject({ kind: 'sol', address: SOL });
     expect(detect(`https://dexscreener.com/base/${EVM}`)).toMatchObject({ kind: 'evm', address: EVM.toLowerCase() });
     expect(detect('https://dexscreener.com/')).toMatchObject({ kind: 'site', domain: 'dexscreener.com' });
+    // a transaction link names a tx hash (64 hex), never a contract: its first 40 hex chars are no address
+    const TX = '0xedd61eb6c2f0a3b4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192aa897';
+    expect(detect(`https://robinhood.etherscan.io/tx/${TX}`)).toMatchObject({ kind: 'site', domain: 'robinhood.etherscan.io' });
+    expect(detect(`https://robinhoodchain.blockscout.com/tx/${TX}`)).toMatchObject({ kind: 'site', domain: 'robinhoodchain.blockscout.com' });
+    expect(detect(`https://tronscan.org/#/transaction/${TX.slice(2)}`)).toMatchObject({ kind: 'site' });
+    expect(detect(`https://basescan.org/address/${TX}`)).toMatchObject({ kind: 'site' });
+    // a token page still names its contract
+    expect(detect(`https://robinhoodchain.blockscout.com/token/${EVM}?tab=holders`)).toMatchObject({ kind: 'evm', address: EVM.toLowerCase() });
+    expect(detect(`https://robinhood.etherscan.io/token/${EVM}#balances`)).toMatchObject({ kind: 'evm', address: EVM.toLowerCase() });
   });
   it('garbage is bad (chip shows Unknown)', () => {
     for (const v of ['hello', '@kairolabs', '$ORBIT', '0x123', 'localhost', '127.0.0.1', 'http://', 'not a url at all']) {

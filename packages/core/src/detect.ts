@@ -34,10 +34,13 @@ export const X_RESERVED = new Set([
 export const NON_PROJECT_HOSTS = [
   'x.com', 'twitter.com', 't.co', 't.me', 'telegram.me', 'discord.gg', 'discord.com', 'youtube.com', 'youtu.be',
   'medium.com', 'linktr.ee', 'github.com', 'gitbook.io', 'dexscreener.com', 'dextools.io', 'birdeye.so',
-  'pump.fun', 'solscan.io', 'etherscan.io', 'basescan.org', 'bscscan.com', 'arbiscan.io', 'tronscan.org',
+  'pump.fun', 'solscan.io', 'etherscan.io', 'basescan.org', 'bscscan.com', 'arbiscan.io', 'tronscan.org', 'blockscout.com',
   'coingecko.com', 'coinmarketcap.com', 'geckoterminal.com', 'jup.ag', 'raydium.io', 'uniswap.org',
   'instagram.com', 'tiktok.com', 'facebook.com', 'reddit.com', 'apecheck.io',
 ];
+
+/** A block-explorer transaction page (…/tx/0x…, Tronscan's #/transaction/…): it names a transaction, not a coin. */
+const RE_TX_PATH = /\/(?:tx|txs|transaction|transactions)\/[^/?#]/i;
 
 export function isNonProjectHost(domain: string): boolean {
   const d = domain.toLowerCase();
@@ -71,9 +74,10 @@ export function detect(raw: string): Detected | null {
     const domain = m[1].toLowerCase().replace(/^www\./, '');
     const url = /^https?:\/\//i.test(v) ? v : 'https://' + v;
     // explorer / launchpad / chart links (pump.fun/coin/<mint>, dexscreener.com/base/0x…): check the coin, not the aggregator
-    if (isNonProjectHost(domain)) {
+    // (never from a transaction link: its 64-hex hash starts with 40 hex chars that are no address)
+    if (isNonProjectHost(domain) && !RE_TX_PATH.test(v)) {
       const path = v.slice(v.indexOf(m[1]) + m[1].length);
-      const evm = path.match(/0x[a-fA-F0-9]{40}/);
+      const evm = path.match(/(?<![0-9a-fA-F])0x[a-fA-F0-9]{40}(?![0-9a-fA-F])/);
       if (evm) return { kind: 'evm', label: 'EVM CA', address: evm[0].toLowerCase() };
       const tron = path.match(new RegExp(`T[${B58}]{33}(?![${B58}])`));
       if (tron) return { kind: 'tron', label: 'Tron CA', address: tron[0] };
